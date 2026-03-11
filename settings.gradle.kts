@@ -6,7 +6,7 @@ pluginManagement {
     }
 }
 
-dependencyResolution {
+dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
@@ -14,4 +14,4 @@ dependencyResolution {
 }
 
 rootProject.name = "ClaudeTokenMonitor"
-include(":app")
+include(":composeApp")
