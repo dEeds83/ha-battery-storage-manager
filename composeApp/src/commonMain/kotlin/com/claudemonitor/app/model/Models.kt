@@ -139,6 +139,11 @@ data class SettingsState(
     val warningThreshold: Int = 70,
     val criticalThreshold: Int = 90,
     val dataMode: DataMode = DataMode.AUTO,
+    /** Custom path to .claude/ directory (for Android local mode, e.g. Termux) */
+    val claudePath: String = "",
+    /** Whether the Desktop app serves data via embedded HTTP server for Android clients */
+    val embeddedServerEnabled: Boolean = false,
+    val embeddedServerPort: Int = 5123,
 )
 
 /**

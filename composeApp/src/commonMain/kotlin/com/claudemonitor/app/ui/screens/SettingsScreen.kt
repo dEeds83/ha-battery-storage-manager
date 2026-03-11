@@ -29,6 +29,10 @@ fun SettingsScreen(
     var intervalInput by remember(settings.refreshInterval) {
         mutableStateOf(settings.refreshInterval.toString())
     }
+    var claudePathInput by remember(settings.claudePath) { mutableStateOf(settings.claudePath) }
+    var embeddedPortInput by remember(settings.embeddedServerPort) {
+        mutableStateOf(settings.embeddedServerPort.toString())
+    }
     var currentSettings by remember(settings) { mutableStateOf(settings) }
 
     Scaffold(
@@ -54,43 +58,43 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            // Data Mode Selection (Desktop shows local option)
-            if (isDesktop) {
-                Text(
-                    "Data Source",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
+            // Data Mode Selection (shown on both Desktop and Android)
+            Text(
+                "Data Source",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
 
-                val modes = listOf(
-                    DataMode.LOCAL to "Local Files",
-                    DataMode.REMOTE to "Remote Server"
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    modes.forEach { (mode, label) ->
-                        FilterChip(
-                            selected = currentSettings.dataMode == mode,
-                            onClick = {
-                                currentSettings = currentSettings.copy(dataMode = mode)
-                                onUpdateSettings(currentSettings)
-                            },
-                            label = { Text(label) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+            val modes = listOf(
+                DataMode.LOCAL to "Local Files",
+                DataMode.REMOTE to "Remote Server"
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                modes.forEach { (mode, label) ->
+                    FilterChip(
+                        selected = currentSettings.dataMode == mode,
+                        onClick = {
+                            currentSettings = currentSettings.copy(dataMode = mode)
+                            onUpdateSettings(currentSettings)
+                        },
+                        label = { Text(label) },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
+            }
 
-                if (currentSettings.dataMode == DataMode.LOCAL) {
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
+            if (currentSettings.dataMode == DataMode.LOCAL) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        if (isDesktop) {
                             Text(
                                 "Reading directly from ~/.claude/",
                                 style = MaterialTheme.typography.bodySmall,
@@ -101,15 +105,51 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        } else {
+                            Text(
+                                "Reading .claude/ files directly from this device.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "Works with Termux or synced .claude/ folders.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
 
-                HorizontalDivider()
+                // Show path configuration for Android local mode
+                if (!isDesktop) {
+                    OutlinedTextField(
+                        value = claudePathInput,
+                        onValueChange = { claudePathInput = it },
+                        label = { Text("Claude Data Path (optional)") },
+                        placeholder = { Text("/data/data/com.termux/files/home/.claude") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text("Leave empty for auto-detection (Termux, shared storage)")
+                        }
+                    )
+
+                    Button(
+                        onClick = {
+                            currentSettings = currentSettings.copy(claudePath = claudePathInput)
+                            onUpdateSettings(currentSettings)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Save Path")
+                    }
+                }
             }
 
-            // Server Connection (show when remote mode or on Android)
-            if (!isDesktop || currentSettings.dataMode == DataMode.REMOTE) {
+            HorizontalDivider()
+
+            // Server Connection (show when remote mode)
+            if (currentSettings.dataMode == DataMode.REMOTE) {
                 Text(
                     "Server Connection",
                     style = MaterialTheme.typography.titleSmall,
@@ -147,6 +187,73 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Save Connection")
+                }
+
+                HorizontalDivider()
+            }
+
+            // Embedded Server (Desktop only) - serves data to Android clients
+            if (isDesktop) {
+                Text(
+                    "Embedded Server",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            "Enable the embedded HTTP server so Android devices " +
+                                    "can connect directly to this Desktop app. " +
+                                    "No separate Python companion server needed.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Enable Embedded Server", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = currentSettings.embeddedServerEnabled,
+                        onCheckedChange = {
+                            currentSettings = currentSettings.copy(embeddedServerEnabled = it)
+                            onUpdateSettings(currentSettings)
+                        }
+                    )
+                }
+
+                if (currentSettings.embeddedServerEnabled) {
+                    OutlinedTextField(
+                        value = embeddedPortInput,
+                        onValueChange = { embeddedPortInput = it },
+                        label = { Text("Server Port") },
+                        placeholder = { Text("5123") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Button(
+                        onClick = {
+                            currentSettings = currentSettings.copy(
+                                embeddedServerPort = embeddedPortInput.toIntOrNull() ?: 5123
+                            )
+                            onUpdateSettings(currentSettings)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Apply Port")
+                    }
                 }
 
                 HorizontalDivider()
@@ -307,21 +414,31 @@ fun SettingsScreen(
                             "Local Mode (recommended for desktop):\n" +
                                     "  Data is read directly from ~/.claude/\n" +
                                     "  No additional setup needed.\n\n" +
+                                    "Embedded Server:\n" +
+                                    "  Enable the embedded server above so that\n" +
+                                    "  Android devices on your network can connect\n" +
+                                    "  directly to this Desktop app.\n\n" +
                                     "Remote Mode:\n" +
-                                    "  1. Run the companion server on a remote PC:\n" +
-                                    "     python companion/claude_monitor_server.py\n" +
-                                    "  2. Enter the remote PC's IP address above",
+                                    "  Connect to another machine running the\n" +
+                                    "  companion server or Desktop app with\n" +
+                                    "  embedded server enabled.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
                         Text(
-                            "1. Run the companion server on your PC:\n" +
-                                    "   python companion/claude_monitor_server.py\n\n" +
-                                    "2. Enter your PC's local IP address above\n\n" +
-                                    "3. Ensure both devices are on the same network\n\n" +
-                                    "4. The server reads Claude Code usage data from\n" +
-                                    "   ~/.claude/ and serves it via HTTP",
+                            "Local Mode (Termux / on-device):\n" +
+                                    "  Reads .claude/ files directly from this device.\n" +
+                                    "  Works with Termux or synced directories.\n" +
+                                    "  Set custom path above if needed.\n\n" +
+                                    "Remote Mode:\n" +
+                                    "  Connect to the Desktop app (with embedded\n" +
+                                    "  server enabled) or the standalone companion\n" +
+                                    "  server on your PC.\n\n" +
+                                    "  1. On your PC: open the Desktop app and\n" +
+                                    "     enable 'Embedded Server' in settings\n" +
+                                    "  2. Enter your PC's local IP address above\n" +
+                                    "  3. Both devices must be on the same network",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

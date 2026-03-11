@@ -6,7 +6,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import com.claudemonitor.app.data.AndroidLocalFileUsageDataSource
 import com.claudemonitor.app.data.AndroidNetworkDataSource
+import com.claudemonitor.app.data.UsageDataSource
+import com.claudemonitor.app.model.DataMode
 import com.claudemonitor.app.model.SettingsState
 import com.claudemonitor.app.ui.ClaudeMonitorApp
 
@@ -23,19 +26,23 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ClaudeMonitorApp(
-                dataSource = AndroidNetworkDataSource(
-                    host = initialSettings.serverHost,
-                    port = initialSettings.serverPort
-                ),
+                dataSource = createDataSource(initialSettings),
                 initialSettings = initialSettings,
                 isDesktop = false,
                 onSettingsChanged = { settings -> saveSettings(settings) },
-                onDataSourceChanged = { settings ->
-                    AndroidNetworkDataSource(
-                        host = settings.serverHost,
-                        port = settings.serverPort
-                    )
-                }
+                onDataSourceChanged = { settings -> createDataSource(settings) }
+            )
+        }
+    }
+
+    private fun createDataSource(settings: SettingsState): UsageDataSource {
+        return when (settings.dataMode) {
+            DataMode.LOCAL -> AndroidLocalFileUsageDataSource(
+                customPath = settings.claudePath
+            )
+            DataMode.REMOTE, DataMode.AUTO -> AndroidNetworkDataSource(
+                host = settings.serverHost,
+                port = settings.serverPort
             )
         }
     }
@@ -50,6 +57,12 @@ class MainActivity : ComponentActivity() {
             notificationsEnabled = prefs.getBoolean("notifications", true),
             warningThreshold = prefs.getInt("warningThreshold", 70),
             criticalThreshold = prefs.getInt("criticalThreshold", 90),
+            dataMode = try {
+                DataMode.valueOf(prefs.getString("dataMode", "AUTO") ?: "AUTO")
+            } catch (_: Exception) {
+                DataMode.AUTO
+            },
+            claudePath = prefs.getString("claudePath", "") ?: "",
         )
     }
 
@@ -63,6 +76,8 @@ class MainActivity : ComponentActivity() {
             .putBoolean("notifications", settings.notificationsEnabled)
             .putInt("warningThreshold", settings.warningThreshold)
             .putInt("criticalThreshold", settings.criticalThreshold)
+            .putString("dataMode", settings.dataMode.name)
+            .putString("claudePath", settings.claudePath)
             .apply()
     }
 }
