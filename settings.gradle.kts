@@ -14,4 +14,4 @@ dependencyResolution {
 }
 
 rootProject.name = "ClaudeTokenMonitor"
-include(":app")
+include(":composeApp")

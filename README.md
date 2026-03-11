@@ -1,10 +1,12 @@
-# Claude Token Monitor - Android App
+# Claude Token Monitor - Cross-Platform App
 
-Real-time monitoring of Claude Code token usage as a native Android app. Inspired by [Claude-Code-Usage-Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor).
+Real-time monitoring of Claude Code token usage as a **cross-platform app** running natively on **Android** and **macOS/Linux/Windows Desktop**. Built with Kotlin Multiplatform + Compose Multiplatform. Inspired by [Claude-Code-Usage-Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor).
 
 ## Features
 
 - **Real-time Dashboard** - Live token usage with auto-refresh (configurable interval)
+- **Cross-Platform** - Single codebase for Android + Desktop (macOS, Linux, Windows)
+- **Direct File Reading** - Desktop reads `~/.claude/` directly, no server needed
 - **Session Tracking** - Current session tokens, cost, and message count
 - **Burn Rate Analysis** - Tokens/hour, cost/hour, estimated time to limit
 - **Token Breakdown** - Visual split of input/output/cache-read/cache-write tokens
@@ -13,30 +15,51 @@ Real-time monitoring of Claude Code token usage as a native Android app. Inspire
 - **Progress Bar with Thresholds** - Color-coded (green/yellow/red) with warning markers
 - **7-Day History** - Aggregated weekly usage and cost
 - **Dark/Light Theme** - Claude brand-inspired color scheme
-- **Configurable Alerts** - Warning (70%) and critical (90%) threshold notifications
-- **Material 3 Design** - Modern Jetpack Compose UI
+- **Configurable Alerts** - Warning and critical threshold notifications
+- **Material 3 Design** - Modern Compose UI on all platforms
 
 ## Architecture
 
 ```
-┌─────────────────┐     HTTP/JSON      ┌──────────────────────┐
-│  Android App    │◄──────────────────►│  Companion Server    │
-│  (Kotlin/       │    Port 5123       │  (Python)            │
-│   Compose)      │                    │                      │
-└─────────────────┘                    └──────────┬───────────┘
-                                                  │
-                                                  │ reads
-                                                  ▼
-                                       ┌──────────────────────┐
-                                       │  ~/.claude/          │
-                                       │  Claude Code local   │
-                                       │  usage data (JSONL)  │
-                                       └──────────────────────┘
+Desktop (macOS/Linux/Windows)           Android
+┌──────────────────────┐     ┌─────────────────┐     ┌──────────────────────┐
+│  Desktop App         │     │  Android App    │◄───►│  Companion Server    │
+│  (Compose Desktop)   │     │  (Compose)      │HTTP │  (Python)            │
+│                      │     └─────────────────┘     └──────────┬───────────┘
+│  reads directly ─────┤                                        │ reads
+│                      │                                        ▼
+└──────────┬───────────┘                              ┌──────────────────────┐
+           │ reads                                    │  ~/.claude/          │
+           ▼                                          │  Claude Code local   │
+┌──────────────────────┐                              │  usage data (JSONL)  │
+│  ~/.claude/          │                              └──────────────────────┘
+│  Claude Code local   │
+│  usage data (JSONL)  │
+└──────────────────────┘
 ```
+
+**Desktop:** Reads `~/.claude/` JSONL files directly - no companion server required.
+**Android:** Connects to the companion server (Python) over your local network.
 
 ## Quick Start
 
-### 1. Start the Companion Server (on your PC)
+### Desktop (macOS / Linux / Windows)
+
+```bash
+# Run the desktop app directly
+./gradlew :composeApp:run
+
+# Or build a distributable package
+./gradlew :composeApp:packageDmg          # macOS .dmg
+./gradlew :composeApp:packageMsi          # Windows .msi
+./gradlew :composeApp:packageDeb          # Linux .deb
+```
+
+The desktop app reads `~/.claude/` directly. No companion server needed.
+
+### Android
+
+#### 1. Start the Companion Server (on your PC)
 
 ```bash
 cd companion
@@ -49,7 +72,14 @@ Options:
 python claude_monitor_server.py --host 0.0.0.0 --port 5123
 ```
 
-### 2. Configure the Android App
+#### 2. Build and Install the Android App
+
+```bash
+./gradlew :composeApp:assembleDebug
+# APK at: composeApp/build/outputs/apk/debug/composeApp-debug.apk
+```
+
+#### 3. Configure
 
 1. Open the app on your Android device
 2. Go to **Settings**
@@ -59,13 +89,6 @@ python claude_monitor_server.py --host 0.0.0.0 --port 5123
 6. Save and return to the dashboard
 
 Both devices must be on the same local network.
-
-### 3. Build the Android App
-
-```bash
-./gradlew assembleDebug
-# APK at: app/build/outputs/apk/debug/app-debug.apk
-```
 
 ## API Endpoints
 
@@ -92,44 +115,63 @@ The companion server exposes:
     "total_cost": 1.2345,
     "message_count": 42
   },
-  "today": { ... },
-  "last_7_days": { ... },
-  "records": [ ... ]
+  "today": { "..." : "..." },
+  "last_7_days": { "..." : "..." },
+  "records": []
 }
 ```
 
 ## Tech Stack
 
-**Android App:**
-- Kotlin
-- Jetpack Compose + Material 3
-- Retrofit + OkHttp
-- DataStore Preferences
+**Cross-Platform App (Kotlin Multiplatform + Compose Multiplatform):**
+- Kotlin 2.0 with KMP
+- Compose Multiplatform (Material 3)
+- kotlinx.serialization for JSON
+- kotlinx.coroutines for async
 - Custom Canvas charts (no external chart library)
+- Platform-specific data sources:
+  - Desktop: Direct `java.io.File` reading of `~/.claude/`
+  - Android: `java.net.HttpURLConnection` to companion server
 
-**Companion Server:**
+**Companion Server (for Android):**
 - Python 3.8+ (stdlib only, no pip dependencies)
 - Built-in HTTP server
 
 ## Project Structure
 
 ```
-├── app/                          # Android application
-│   └── src/main/
-│       ├── java/.../tokentracker/
-│       │   ├── data/
-│       │   │   ├── model/        # Data classes
-│       │   │   ├── network/      # Retrofit API
-│       │   │   └── repository/   # Data layer
-│       │   ├── service/          # Background services
-│       │   ├── ui/
-│       │   │   ├── components/   # Reusable Compose widgets
-│       │   │   ├── screens/      # Dashboard, Settings
-│       │   │   └── theme/        # Colors, typography
-│       │   └── util/
-│       └── res/
-├── companion/                    # PC-side server
+├── composeApp/                        # Cross-platform Compose app
+│   ├── build.gradle.kts               # KMP build config
+│   └── src/
+│       ├── commonMain/kotlin/.../     # Shared code (95%+ of codebase)
+│       │   ├── model/Models.kt        # Data classes, enums
+│       │   ├── data/UsageDataSource.kt # Interface + shared logic
+│       │   └── ui/
+│       │       ├── App.kt             # Main app composable
+│       │       ├── theme/Theme.kt     # Colors, Material theme
+│       │       ├── components/        # StatCard, ProgressBar, Charts
+│       │       └── screens/           # Dashboard, Settings
+│       ├── androidMain/               # Android-specific
+│       │   ├── AndroidManifest.xml
+│       │   ├── kotlin/.../
+│       │   │   ├── MainActivity.kt
+│       │   │   └── data/AndroidNetworkDataSource.kt
+│       │   └── res/
+│       └── desktopMain/               # Desktop-specific
+│           └── kotlin/.../
+│               ├── main.kt            # Desktop window entry
+│               └── data/
+│                   ├── LocalFileUsageDataSource.kt  # Direct file reader
+│                   └── NetworkUsageDataSource.kt     # Optional remote mode
+├── companion/                         # Python companion server
 │   └── claude_monitor_server.py
-├── build.gradle.kts
-└── README.md
+├── build.gradle.kts                   # Root build
+├── settings.gradle.kts
+└── gradle/libs.versions.toml          # Version catalog
 ```
+
+## Requirements
+
+- **Desktop:** JDK 17+, Gradle 8.5+
+- **Android:** Android SDK 34, min SDK 26
+- **Server:** Python 3.8+

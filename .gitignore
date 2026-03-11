@@ -5,6 +5,7 @@
 .DS_Store
 /build
 /app/build
+/composeApp/build
 /captures
 .externalNativeBuild
 .cxx
@@ -16,3 +17,5 @@ local.properties
 __pycache__/
 *.pyc
 .env
+*.icns
+*.ico
