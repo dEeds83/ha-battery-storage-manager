@@ -23,6 +23,7 @@ from .const import (
     CONF_MIN_SOC,
     CONF_PRICE_HIGH_THRESHOLD,
     CONF_PRICE_LOW_THRESHOLD,
+    CONF_SOLAR_FORECAST_ENTITIES,
     CONF_SOLAR_FORECAST_ENTITY,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
@@ -53,6 +54,11 @@ STEP_TIBBER_SCHEMA = vol.Schema(
         ),
         vol.Optional(CONF_SOLAR_FORECAST_ENTITY, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(
+            CONF_SOLAR_FORECAST_ENTITIES, default=[]
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", multiple=True)
         ),
     }
 )

@@ -36,6 +36,7 @@ from .const import (
     CONF_MIN_SOC,
     CONF_PRICE_HIGH_THRESHOLD,
     CONF_PRICE_LOW_THRESHOLD,
+    CONF_SOLAR_FORECAST_ENTITIES,
     CONF_SOLAR_FORECAST_ENTITY,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
@@ -99,6 +100,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             CONF_PRICE_HIGH_THRESHOLD, DEFAULT_PRICE_HIGH_THRESHOLD
         )
         self._solar_forecast_entity = self._config.get(CONF_SOLAR_FORECAST_ENTITY, "")
+        self._solar_forecast_entities: list[str] = self._config.get(
+            CONF_SOLAR_FORECAST_ENTITIES, []
+        )
         self._house_consumption_w = self._config.get(
             CONF_HOUSE_CONSUMPTION_W, DEFAULT_HOUSE_CONSUMPTION_W
         )
@@ -120,7 +124,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Runtime toggles
         self._allow_grid_charging = True
         self._allow_discharging = True
-        self._use_solar_forecast = bool(self._solar_forecast_entity)
+        self._use_solar_forecast = bool(
+            self._solar_forecast_entity or self._solar_forecast_entities
+        )
 
         # Solar forecast and battery plan
         self._solar_forecast: dict[str, float] = {}  # hour_key -> Wh expected
@@ -356,9 +362,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
     # ── Solar forecast ──────────────────────────────────────────────
 
     def _read_solar_forecast(self) -> None:
-        """Read solar production forecast from configured entity.
+        """Read solar production forecast from configured entities.
 
-        Supports common formats:
+        Supports multiple entities (e.g. multiple roof arrays, mixed services).
+        All forecasts are summed together per hour.
+
+        Supported formats per entity:
         - Forecast.Solar: watt_hours_period attribute {ISO_datetime: Wh}
         - Solcast / generic: forecast attribute [{period_start, pv_estimate}, ...]
         - watt_hours attribute (Forecast.Solar cumulative)
@@ -366,15 +375,45 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._solar_forecast = {}
         self._expected_solar_kwh = 0.0
 
-        if not self._solar_forecast_entity or not self._use_solar_forecast:
+        if not self._use_solar_forecast:
             return
 
-        state = self.hass.states.get(self._solar_forecast_entity)
+        # Collect all configured solar forecast entity IDs
+        entity_ids: list[str] = []
+        if self._solar_forecast_entity:
+            entity_ids.append(self._solar_forecast_entity)
+        for eid in self._solar_forecast_entities:
+            if eid and eid not in entity_ids:
+                entity_ids.append(eid)
+
+        if not entity_ids:
+            return
+
+        for entity_id in entity_ids:
+            self._read_single_solar_forecast(entity_id)
+
+        if self._solar_forecast:
+            _LOGGER.debug(
+                "Combined solar forecast from %d entities: %d hours, total %.1f kWh",
+                len(entity_ids),
+                len(self._solar_forecast),
+                sum(self._solar_forecast.values()) / 1000,
+            )
+
+        now = dt_util.now()
+        now_key = now.strftime("%Y-%m-%dT%H")
+        remaining = {k: v for k, v in self._solar_forecast.items() if k >= now_key}
+        self._expected_solar_kwh = sum(remaining.values()) / 1000
+
+    def _read_single_solar_forecast(self, entity_id: str) -> None:
+        """Read solar forecast from a single entity and add to combined forecast."""
+        state = self.hass.states.get(entity_id)
         if not state:
-            _LOGGER.debug("Solar forecast entity '%s' not found", self._solar_forecast_entity)
+            _LOGGER.debug("Solar forecast entity '%s' not found", entity_id)
             return
 
         attrs = state.attributes
+        parsed = False
 
         # Format 1: Forecast.Solar watt_hours_period {datetime_str: Wh}
         wh_period = attrs.get("watt_hours_period")
@@ -387,14 +426,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     )
                 except (ValueError, TypeError):
                     continue
+            parsed = True
             _LOGGER.debug(
-                "Solar forecast (watt_hours_period): %d hours, total %.1f kWh",
-                len(self._solar_forecast),
-                sum(self._solar_forecast.values()) / 1000,
+                "Solar forecast '%s' (watt_hours_period): %d entries",
+                entity_id,
+                len(wh_period),
             )
 
         # Format 2: Solcast / generic forecast list
-        if not self._solar_forecast:
+        if not parsed:
             forecast_list = attrs.get("forecast") or attrs.get("detailedForecast")
             if isinstance(forecast_list, list) and forecast_list:
                 for entry in forecast_list:
@@ -405,20 +445,20 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     if dt_str and pv is not None:
                         try:
                             hour_key = self._to_hour_key(str(dt_str))
-                            # pv_estimate is typically in kW, convert to Wh for the hour
                             self._solar_forecast[hour_key] = (
                                 self._solar_forecast.get(hour_key, 0) + float(pv) * 1000
                             )
                         except (ValueError, TypeError):
                             continue
+                parsed = True
                 _LOGGER.debug(
-                    "Solar forecast (forecast list): %d hours, total %.1f kWh",
-                    len(self._solar_forecast),
-                    sum(self._solar_forecast.values()) / 1000,
+                    "Solar forecast '%s' (forecast list): %d entries",
+                    entity_id,
+                    len(forecast_list),
                 )
 
         # Format 3: Forecast.Solar watt_hours (cumulative) → derive per-period
-        if not self._solar_forecast:
+        if not parsed:
             wh_cum = attrs.get("watt_hours")
             if isinstance(wh_cum, dict) and len(wh_cum) > 1:
                 sorted_entries = sorted(wh_cum.items())
@@ -429,19 +469,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                         hour_key = self._to_hour_key(dt_str)
                         delta = float(cum_wh) - float(prev_wh)
                         if delta > 0:
-                            self._solar_forecast[hour_key] = delta
+                            self._solar_forecast[hour_key] = (
+                                self._solar_forecast.get(hour_key, 0) + delta
+                            )
                     except (ValueError, TypeError):
                         continue
                 _LOGGER.debug(
-                    "Solar forecast (watt_hours cumulative): %d hours, total %.1f kWh",
-                    len(self._solar_forecast),
-                    sum(self._solar_forecast.values()) / 1000,
+                    "Solar forecast '%s' (watt_hours cumulative): %d entries",
+                    entity_id,
+                    len(sorted_entries),
                 )
-
-        now = dt_util.now()
-        now_key = now.strftime("%Y-%m-%dT%H")
-        remaining = {k: v for k, v in self._solar_forecast.items() if k >= now_key}
-        self._expected_solar_kwh = sum(remaining.values()) / 1000
 
     @staticmethod
     def _to_hour_key(dt_str: str) -> str:
