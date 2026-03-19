@@ -1,0 +1,200 @@
+# ============================================================
+# Battery Storage Manager – Example Dashboard Cards
+# ============================================================
+#
+# Copy & paste these cards into your Home Assistant Lovelace
+# dashboard (YAML mode or via Raw Configuration Editor).
+#
+# Required HACS frontend components:
+#   - apexcharts-card  (for the price/plan chart)
+#   - mushroom cards   (optional, for nicer toggle buttons)
+#
+# Replace "ENTRY_ID" with your actual config entry ID if
+# your entity IDs differ from the defaults shown below.
+# ============================================================
+
+
+# ── 1. Status Overview Card ────────────────────────────────
+# Shows current operating mode, strategy, SOC, price, and
+# the planned action for this hour.
+
+- type: entities
+  title: Speichermanager Status
+  show_header_toggle: false
+  entities:
+    - entity: sensor.battery_storage_manager_betriebsmodus
+      name: Betriebsmodus
+    - entity: sensor.battery_storage_manager_strategie
+      name: Strategie
+    - entity: sensor.battery_storage_manager_speicher_ladestand
+      name: Ladestand
+    - entity: sensor.battery_storage_manager_aktueller_strompreis
+      name: Strompreis
+    - entity: sensor.battery_storage_manager_geplante_aktion
+      name: Aktuelle Aktion
+    - entity: sensor.battery_storage_manager_erwartete_solarproduktion
+      name: Solar erwartet
+    - entity: sensor.battery_storage_manager_speicherplan
+      name: Tagesplan
+
+
+# ── 2. Runtime Toggle Switches ─────────────────────────────
+# Allow users to enable/disable features on the fly.
+
+- type: entities
+  title: Einstellungen
+  show_header_toggle: false
+  entities:
+    - entity: switch.battery_storage_manager_automatik_modus
+      name: Automatik
+    - entity: switch.battery_storage_manager_netzladen_erlauben
+      name: Netzladen
+    - entity: switch.battery_storage_manager_entladen_erlauben
+      name: Entladen
+    - entity: switch.battery_storage_manager_solarprognose_nutzen
+      name: Solarprognose
+    - type: divider
+    - entity: switch.battery_storage_manager_zwangsladen
+      name: Zwangsladen
+    - entity: switch.battery_storage_manager_zwangsentladen
+      name: Zwangsentladen
+
+
+# ── 3. Sliders for SOC and Price Thresholds ─────────────────
+
+- type: entities
+  title: Schwellwerte
+  entities:
+    - entity: number.battery_storage_manager_minimaler_ladestand
+    - entity: number.battery_storage_manager_maximaler_ladestand
+    - entity: number.battery_storage_manager_preisschwelle_niedrig
+    - entity: number.battery_storage_manager_preisschwelle_hoch
+
+
+# ── 4. Battery Plan Table (Markdown Card) ───────────────────
+# Shows the hourly plan as a colored table.
+# Requires no extra HACS components.
+
+- type: markdown
+  title: Speicherplan (24h)
+  content: >-
+    | Uhrzeit | Preis | Solar | Aktion | Grund |
+    |---------|-------|-------|--------|-------|
+    {% set plan = state_attr('sensor.battery_storage_manager_speicherplan', 'plan') %}
+    {% if plan %}
+      {% for entry in plan %}
+    | {{ entry.hour[-5:] }} | {{ (entry.price * 100) | round(1) }} ct | {{ entry.solar_kwh }} kWh | {% if entry.action == 'charge' %}🔋 Laden{% elif entry.action == 'discharge' %}⚡ Entladen{% elif entry.action == 'solar_charge' %}☀️ Solar{% elif entry.action == 'hold' %}🔒 Halten{% else %}💤 Idle{% endif %} | {{ entry.reason }} |
+      {% endfor %}
+    {% else %}
+    | – | – | – | Kein Plan | – |
+    {% endif %}
+
+
+# ── 5. Price + Plan Chart (ApexCharts Card) ─────────────────
+# Shows electricity prices as bars, colored by planned action.
+# Requires: apexcharts-card (HACS)
+#
+# Install via HACS → Frontend → Search "apexcharts-card"
+
+- type: custom:apexcharts-card
+  header:
+    title: Strompreis & Speicherplan
+    show: true
+  graph_span: 36h
+  span:
+    start: hour
+  now:
+    show: true
+    label: Jetzt
+    color: red
+  yaxis:
+    - id: price
+      min: 0
+      apex_config:
+        title:
+          text: ct/kWh
+  series:
+    - entity: sensor.battery_storage_manager_speicherplan
+      type: column
+      name: Strompreis
+      yaxis_id: price
+      data_generator: |
+        const plan = entity.attributes.plan;
+        if (!plan) return [];
+        return plan.map(entry => {
+          const ts = new Date(entry.hour.length === 13 ? entry.hour + ':00:00' : entry.hour).getTime();
+          return [ts, Math.round(entry.price * 10000) / 100];
+        });
+      color_threshold:
+        - value: 0
+          color: green
+        - value: 15
+          color: orange
+        - value: 25
+          color: red
+    - entity: sensor.battery_storage_manager_speicherplan
+      type: line
+      name: Solar (kWh)
+      yaxis_id: price
+      color: gold
+      stroke_width: 2
+      data_generator: |
+        const plan = entity.attributes.plan;
+        if (!plan) return [];
+        return plan.map(entry => {
+          const ts = new Date(entry.hour.length === 13 ? entry.hour + ':00:00' : entry.hour).getTime();
+          return [ts, entry.solar_kwh * 100];
+        });
+
+
+# ── 6. Plan Action Timeline (ApexCharts Card) ──────────────
+# Shows the planned actions as colored blocks over time.
+
+- type: custom:apexcharts-card
+  header:
+    title: Geplante Aktionen
+    show: true
+  graph_span: 36h
+  span:
+    start: hour
+  now:
+    show: true
+    label: Jetzt
+    color: white
+  yaxis:
+    - id: action
+      min: 0
+      max: 5
+      show: false
+  series:
+    - entity: sensor.battery_storage_manager_speicherplan
+      type: column
+      name: Aktion
+      yaxis_id: action
+      data_generator: |
+        const plan = entity.attributes.plan;
+        if (!plan) return [];
+        const actionValues = {
+          'charge': 4,
+          'discharge': 3,
+          'solar_charge': 5,
+          'hold': 2,
+          'idle': 1
+        };
+        return plan.map(entry => {
+          const ts = new Date(entry.hour.length === 13 ? entry.hour + ':00:00' : entry.hour).getTime();
+          return [ts, actionValues[entry.action] || 1];
+        });
+      color_threshold:
+        - value: 0
+          color: gray
+        - value: 1
+          color: lightgray
+        - value: 2
+          color: steelblue
+        - value: 3
+          color: orange
+        - value: 4
+          color: green
+        - value: 5
+          color: gold

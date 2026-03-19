@@ -117,6 +117,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._inverter_active = False
         self._inverter_target_power: float = 0  # current target power for zero-feed
 
+        # Runtime toggles
+        self._allow_grid_charging = True
+        self._allow_discharging = True
+        self._use_solar_forecast = bool(self._solar_forecast_entity)
+
         # Solar forecast and battery plan
         self._solar_forecast: dict[str, float] = {}  # hour_key -> Wh expected
         self._battery_plan: list[dict] = []  # hourly plan entries
@@ -361,7 +366,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._solar_forecast = {}
         self._expected_solar_kwh = 0.0
 
-        if not self._solar_forecast_entity:
+        if not self._solar_forecast_entity or not self._use_solar_forecast:
             return
 
         state = self.hass.states.get(self._solar_forecast_entity)
@@ -721,9 +726,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         is_cheap = self._is_in_cheap_window()
         is_expensive = self._is_in_expensive_window()
 
-        if is_cheap and self._battery_soc < self._max_soc:
+        if is_cheap and self._battery_soc < self._max_soc and self._allow_grid_charging:
             await self._start_charging()
-        elif is_expensive and self._battery_soc > self._min_soc:
+        elif is_expensive and self._battery_soc > self._min_soc and self._allow_discharging:
             await self._start_discharging()
         else:
             await self._set_mode_idle()
@@ -731,17 +736,25 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
     async def _execute_plan_action(self, action: str) -> None:
         """Execute the action from the battery plan for the current hour."""
         if action == "charge" and self._battery_soc < self._max_soc:
+            if not self._allow_grid_charging:
+                _LOGGER.debug("Plan action: CHARGE skipped (grid charging disabled)")
+                await self._set_mode_idle()
+                return
             _LOGGER.debug("Plan action: CHARGE (grid)")
             await self._start_charging()
         elif action == "discharge" and self._battery_soc > self._min_soc:
+            if not self._allow_discharging:
+                _LOGGER.debug("Plan action: DISCHARGE skipped (discharging disabled)")
+                await self._set_mode_idle()
+                return
             _LOGGER.debug("Plan action: DISCHARGE")
             await self._start_discharging()
         elif action == "solar_charge":
             # During solar hours: don't charge from grid, but allow solar to fill battery
-            # If grid is exporting (solar surplus), stay idle to let solar charge via MPPT
             # If grid is importing, discharge to cover house demand
             if (
-                self._grid_power is not None
+                self._allow_discharging
+                and self._grid_power is not None
                 and self._grid_power > 50
                 and self._battery_soc > self._min_soc
             ):
@@ -754,7 +767,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             # Hold charge for upcoming expensive hours
             # But still cover immediate house demand if importing heavily
             if (
-                self._grid_power is not None
+                self._allow_discharging
+                and self._grid_power is not None
                 and self._grid_power > 200
                 and self._battery_soc > self._min_soc + 10
             ):
@@ -777,11 +791,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             await self._set_mode_idle()
             return
 
-        if self._grid_power > 50 and self._battery_soc > self._min_soc:
+        if self._grid_power > 50 and self._battery_soc > self._min_soc and self._allow_discharging:
             # House is importing from grid - discharge battery to cover it
             await self._start_discharging()
         elif self._grid_power < -50 and self._battery_soc < self._max_soc:
-            # Excess production (exporting) - charge battery
+            # Excess production (exporting) - charge battery (solar, not grid)
             await self._start_charging()
         else:
             await self._set_mode_idle()
@@ -1006,6 +1020,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "min_soc": self._min_soc,
             "max_soc": self._max_soc,
             "battery_capacity_kwh": self._battery_capacity,
+            "allow_grid_charging": self._allow_grid_charging,
+            "allow_discharging": self._allow_discharging,
+            "use_solar_forecast": self._use_solar_forecast,
         }
 
     # Properties for entities
@@ -1060,3 +1077,30 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
     @price_high_threshold.setter
     def price_high_threshold(self, value: float) -> None:
         self._price_high = value
+
+    @property
+    def allow_grid_charging(self) -> bool:
+        return self._allow_grid_charging
+
+    @allow_grid_charging.setter
+    def allow_grid_charging(self, value: bool) -> None:
+        self._allow_grid_charging = value
+        _LOGGER.info("Grid charging %s", "enabled" if value else "disabled")
+
+    @property
+    def allow_discharging(self) -> bool:
+        return self._allow_discharging
+
+    @allow_discharging.setter
+    def allow_discharging(self, value: bool) -> None:
+        self._allow_discharging = value
+        _LOGGER.info("Discharging %s", "enabled" if value else "disabled")
+
+    @property
+    def use_solar_forecast(self) -> bool:
+        return self._use_solar_forecast
+
+    @use_solar_forecast.setter
+    def use_solar_forecast(self, value: bool) -> None:
+        self._use_solar_forecast = value
+        _LOGGER.info("Solar forecast %s", "enabled" if value else "disabled")
