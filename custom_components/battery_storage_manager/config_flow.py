@@ -38,7 +38,7 @@ STEP_TIBBER_SCHEMA = vol.Schema(
         vol.Required(CONF_TIBBER_PRICE_ENTITY): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
         ),
-        vol.Required(CONF_TIBBER_PRICES_ENTITY): selector.EntitySelector(
+        vol.Optional(CONF_TIBBER_PRICES_ENTITY, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
         ),
         vol.Required(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY): selector.EntitySelector(

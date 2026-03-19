@@ -104,6 +104,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._charger_2_active = False
         self._inverter_active = False
 
+        # Track whether entities have ever been seen (for startup race condition)
+        self._price_entity_seen = False
+        self._prices_entity_seen = False
+        self._fallback_price_range: dict | None = None
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch and process data, then decide on battery action."""
         _LOGGER.debug(
@@ -152,11 +157,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     price_state.state,
                 )
             else:
-                _LOGGER.warning(
+                # Use debug level if entity was never seen (startup race condition)
+                log_fn = _LOGGER.warning if self._price_entity_seen else _LOGGER.debug
+                log_fn(
                     "Price entity '%s' not found in Home Assistant. "
                     "Check that the entity ID is correct and the Tibber integration is loaded.",
                     self._tibber_price_entity,
                 )
+
+        if price_state:
+            self._price_entity_seen = True
 
         # Battery SOC
         soc_state = self.hass.states.get(self._battery_soc_entity)
@@ -196,13 +206,19 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
     def _update_price_forecast(self) -> None:
         """Update price forecast from Tibber prices entity attributes."""
-        prices_state = self.hass.states.get(self._tibber_prices_entity)
+        # Use the dedicated prices entity if configured, otherwise fall back to price entity
+        prices_entity = self._tibber_prices_entity or self._tibber_price_entity
+        prices_state = self.hass.states.get(prices_entity)
         if not prices_state:
-            _LOGGER.warning(
+            # Use debug level if entity was never seen (startup race condition)
+            log_fn = _LOGGER.warning if self._prices_entity_seen else _LOGGER.debug
+            log_fn(
                 "Prices forecast entity '%s' not found in Home Assistant.",
-                self._tibber_prices_entity,
+                prices_entity,
             )
             return
+
+        self._prices_entity_seen = True
 
         # Tibber provides today and tomorrow prices in attributes
         today = prices_state.attributes.get("today", [])
@@ -211,7 +227,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         _LOGGER.debug(
             "Price forecast from '%s': %d today entries, %d tomorrow entries. "
             "Available attributes: %s",
-            self._tibber_prices_entity,
+            prices_entity,
             len(today) if isinstance(today, list) else 0,
             len(tomorrow) if isinstance(tomorrow, list) else 0,
             list(prices_state.attributes.keys()),
@@ -224,6 +240,37 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     "start": price_entry.get("startsAt", ""),
                     "total": price_entry.get("total", 0),
                 })
+
+        # Fallback: if no today/tomorrow forecast available, build a simplified
+        # forecast from summary attributes (max_price, avg_price, min_price)
+        if not self._price_forecast:
+            max_price = prices_state.attributes.get("max_price")
+            avg_price = prices_state.attributes.get("avg_price")
+            min_price = prices_state.attributes.get("min_price")
+
+            if max_price is not None and min_price is not None:
+                _LOGGER.debug(
+                    "No hourly forecast available. Using price summary attributes: "
+                    "min=%.4f, avg=%.4f, max=%.4f",
+                    min_price,
+                    avg_price or 0,
+                    max_price,
+                )
+                # Store summary prices for threshold calculations
+                self._fallback_price_range = {
+                    "min": float(min_price),
+                    "avg": float(avg_price) if avg_price is not None else None,
+                    "max": float(max_price),
+                }
+            else:
+                self._fallback_price_range = None
+                _LOGGER.debug(
+                    "No hourly forecast and no summary price attributes available "
+                    "on '%s'.",
+                    prices_entity,
+                )
+        else:
+            self._fallback_price_range = None
 
         _LOGGER.debug("Price forecast built with %d entries", len(self._price_forecast))
 
@@ -271,6 +318,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 dynamic_threshold = sorted_prices[threshold_idx]
                 return self._current_price <= dynamic_threshold
 
+        # Fallback: use summary price range from entity attributes
+        if self._fallback_price_range:
+            price_range = self._fallback_price_range
+            # "Cheap" = in the lower third of today's price range
+            low_third = price_range["min"] + (price_range["max"] - price_range["min"]) / 3
+            return self._current_price <= low_third
+
         return self._current_price <= self._price_low / 100  # convert ct to EUR
 
     def _is_in_expensive_window(self) -> bool:
@@ -286,6 +340,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 threshold_idx = (len(sorted_prices) * 2) // 3
                 dynamic_threshold = sorted_prices[threshold_idx]
                 return self._current_price >= dynamic_threshold
+
+        # Fallback: use summary price range from entity attributes
+        if self._fallback_price_range:
+            price_range = self._fallback_price_range
+            # "Expensive" = in the upper third of today's price range
+            high_third = price_range["min"] + (price_range["max"] - price_range["min"]) * 2 / 3
+            return self._current_price >= high_third
 
         return self._current_price >= self._price_high / 100  # convert ct to EUR
 

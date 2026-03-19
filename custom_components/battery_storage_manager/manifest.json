@@ -3,6 +3,7 @@
   "name": "Battery Storage Manager",
   "codeowners": [],
   "config_flow": true,
+  "after_dependencies": ["tibber"],
   "dependencies": [],
   "documentation": "https://github.com/dEeds83/ha-battery-storage-manager",
   "iot_class": "local_polling",

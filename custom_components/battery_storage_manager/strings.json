@@ -6,7 +6,7 @@
         "description": "Configure the Tibber entities for electricity prices and consumption metering.",
         "data": {
           "tibber_price_entity": "Tibber price sensor (current price)",
-          "tibber_prices_entity": "Tibber prices overview sensor (with today/tomorrow attributes)",
+          "tibber_prices_entity": "Tibber prices overview sensor (optional, leave empty to use price sensor)",
           "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor (current power drawn from grid)",
           "tibber_pulse_production_entity": "Tibber Pulse production sensor (current power fed into grid)"
         }
