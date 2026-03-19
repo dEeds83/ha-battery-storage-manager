@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-1.1.7-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von Batteriespeichern basierend auf Strompreisen (Tibber), Solarprognosen und Eigenverbrauchsoptimierung.
 
@@ -67,8 +67,9 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 | Ladegerät 2 Switch | Schalter für zweites Ladegerät | – |
 | Ladegerät 2 Leistung | Nennleistung in Watt | 800 W |
 | Einspeise-Wechselrichter Switch | Schalter für Feed-Inverter (optional) | – |
-| Einspeise-Wechselrichter Power-Entity | Number-Entity für Leistungsregelung (optional) | – |
+| Einspeise-Wechselrichter Power-Entity | Number/Input-Number-Entity für Leistungsregelung (optional) | – |
 | Einspeise-Wechselrichter Leistung | Maximale Nennleistung in Watt | 800 W |
+| Einspeise-Wechselrichter Ist-Leistung | Sensor mit aktueller Wechselrichter-Ausgangsleistung (optional) | – |
 
 ### Schritt 3: Batterie
 
@@ -118,6 +119,8 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Ladegerät 1 Status | Aktiv / Inaktiv |
 | Ladegerät 2 Status | Aktiv / Inaktiv |
 | Wechselrichter Status | Aktiv / Inaktiv |
+| Wechselrichter Leistung | Aktuelle Ist-Leistung des Einspeise-Wechselrichters in Watt |
+| Wechselrichter Soll-Leistung | Vom Plugin gesetzter Zielwert für den Wechselrichter in Watt |
 | Nächstes günstiges Fenster | Zeitpunkt der nächsten günstigen Preisperiode |
 | Nächstes teures Fenster | Zeitpunkt der nächsten teuren Preisperiode |
 | Speicherplan | Tagesplan-Zusammenfassung mit vollständigem stündlichen Plan als Attribut |
@@ -168,7 +171,7 @@ show_solar: true     # optional, Standard: true
 - Solarproduktion als goldene Linie im Overlay
 - Aktuelle Stunde hervorgehoben mit blauem Rahmen und Jetzt-Marker
 - Legende mit Stundenzählung pro Aktionstyp
-- Aufklappbare Detailtabelle (Zeit, Preis, Solar, Aktion, Grund)
+- Aufklappbare Detailtabelle (Zeit, Preis, Solar, erwarteter SOC, Aktion, Grund)
 - Tooltip mit Details bei Hover auf Balken
 
 ### Battery Status Card
@@ -214,10 +217,10 @@ Der Battery Storage Manager analysiert alle 30 Sekunden die Situation und erstel
 3. **Ladebedarf ermitteln** – Wie viele Stunden Netzladen nötig, um die Batterie zu füllen (nach Abzug von Solar)
 4. **Entladekapazität berechnen** – Wie viele Stunden Entladung möglich basierend auf aktuellem SOC
 5. **Aktionen zuweisen:**
-   - **Solar-Laden** – Stunden mit signifikantem Solarüberschuss (>30% der Ladeleistung)
+   - **Solar-Laden** – Stunden mit Solarüberschuss (> 50 Wh nach Hausverbrauch)
    - **Netzladen** – Günstigste Stunden ohne nennenswerte Solarproduktion
    - **Entladen** – Teuerste Stunden (über Durchschnittspreis)
-   - **Halten** – Ladung für kommende teure Stunden aufbewahren
+   - **Halten** – Ladung für kommende teure Stunden aufbewahren (keine Entladung)
    - **Inaktiv** – Keine Aktion nötig
 
 ### Strategien
@@ -239,7 +242,7 @@ Die drei Laufzeit-Schalter beeinflussen die Planausführung sofort:
 | Toggle | Wenn AUS |
 |--------|----------|
 | Netzladen erlauben | Plan-Aktionen "charge" werden übersprungen (idle stattdessen) |
-| Entladen erlauben | Plan-Aktionen "discharge", "solar_charge" (Entladeteil) und "hold" (Entladeteil) werden übersprungen |
+| Entladen erlauben | Plan-Aktionen "discharge" werden übersprungen |
 | Solarprognose nutzen | Solarprognosen werden nicht gelesen, Plan basiert nur auf Preisen |
 
 ## Weitere Dashboard-Beispiele
