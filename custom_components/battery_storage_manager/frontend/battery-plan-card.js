@@ -6,7 +6,7 @@
  * integration and is auto-registered.
  */
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
 
 const ACTION_CONFIG = {
   charge:       { color: "#4CAF50", icon: "mdi:battery-charging",     label: "Laden (Netz)", short: "Laden" },
@@ -145,7 +145,7 @@ class BatteryPlanCard extends HTMLElement {
     const chartHeight = 120;
 
     let barsHtml = "";
-    let solarHtml = "";
+    let solarPoints = [];
     let labelsHtml = "";
 
     // Find max solar for scaling
@@ -166,11 +166,11 @@ class BatteryPlanCard extends HTMLElement {
         </div>
       `;
 
-      // Solar overlay line
+      // Collect solar points for polyline
       if (showSolar && entry.solar_kwh > 0) {
         const solarPct = (entry.solar_kwh / maxSolar) * 80 + 5;
         const centerX = left + barWidth / 2;
-        solarHtml += `${i > 0 ? "L" : "M"}${centerX} ${100 - solarPct} `;
+        solarPoints.push({ x: centerX, y: 100 - solarPct });
       }
 
       // Time labels (every 3 hours or if current)
@@ -185,14 +185,36 @@ class BatteryPlanCard extends HTMLElement {
       }
     });
 
+    // Render solar as absolutely positioned line segments (no SVG overflow issues)
     let solarOverlay = "";
-    if (showSolar && solarHtml) {
-      solarOverlay = `
-        <svg class="solar-overlay" viewBox="0 0 100 100" preserveAspectRatio="none">
-          <path d="${solarHtml}" fill="none" stroke="#FFD600" stroke-width="0.8"
-                stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      `;
+    if (showSolar && solarPoints.length > 1) {
+      let lineSegments = "";
+      for (let i = 1; i < solarPoints.length; i++) {
+        const p1 = solarPoints[i - 1];
+        const p2 = solarPoints[i];
+        // Use CSS to draw line segments as rotated divs
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        lineSegments += `
+          <div class="solar-line" style="
+            left:${p1.x}%; top:${p1.y}%;
+            width:${length}%; height:0;
+            transform:rotate(${angle}deg);
+            transform-origin:0 0;
+          "></div>
+        `;
+      }
+      // Also add dots at each point
+      let dots = solarPoints.map(p => `
+        <div class="solar-dot" style="left:${p.x}%; top:${p.y}%"></div>
+      `).join("");
+      solarOverlay = `<div class="solar-layer">${lineSegments}${dots}</div>`;
+    } else if (showSolar && solarPoints.length === 1) {
+      solarOverlay = `<div class="solar-layer">
+        <div class="solar-dot" style="left:${solarPoints[0].x}%; top:${solarPoints[0].y}%"></div>
+      </div>`;
     }
 
     // Price axis labels
@@ -320,6 +342,7 @@ class BatteryPlanCard extends HTMLElement {
       .bars {
         position: absolute;
         top: 0; left: 28px; right: 0; bottom: 20px;
+        overflow: hidden;
       }
       .bar {
         position: absolute;
@@ -335,9 +358,24 @@ class BatteryPlanCard extends HTMLElement {
       .bar.current {
         box-shadow: 0 0 0 2px var(--primary-color, #03a9f4);
       }
-      .solar-overlay {
+      .solar-layer {
         position: absolute;
         top: 0; left: 0; right: 0; bottom: 0;
+        pointer-events: none;
+        overflow: hidden;
+      }
+      .solar-line {
+        position: absolute;
+        border-top: 2px solid #FFD600;
+        pointer-events: none;
+      }
+      .solar-dot {
+        position: absolute;
+        width: 4px;
+        height: 4px;
+        background: #FFD600;
+        border-radius: 50%;
+        transform: translate(-2px, -2px);
         pointer-events: none;
       }
       .now-marker {
