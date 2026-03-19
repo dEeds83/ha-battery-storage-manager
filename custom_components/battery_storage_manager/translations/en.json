@@ -1,0 +1,52 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tibber Configuration",
+        "description": "Configure the Tibber entities for electricity prices and consumption metering.",
+        "data": {
+          "tibber_price_entity": "Tibber price sensor (current price)",
+          "tibber_prices_entity": "Tibber prices overview sensor (with today/tomorrow attributes)",
+          "tibber_pulse_power_entity": "Tibber Pulse power sensor (current grid import/export)"
+        }
+      },
+      "devices": {
+        "title": "Device Configuration",
+        "description": "Configure the chargers and the controllable inverter.",
+        "data": {
+          "charger_1_switch": "Charger 1 switch",
+          "charger_1_power": "Charger 1 power (W)",
+          "charger_2_switch": "Charger 2 switch",
+          "charger_2_power": "Charger 2 power (W)",
+          "inverter_feed_switch": "Feed inverter switch",
+          "inverter_feed_power": "Feed inverter power (W)"
+        }
+      },
+      "battery": {
+        "title": "Battery Configuration",
+        "description": "Configure battery parameters and price thresholds.",
+        "data": {
+          "battery_soc_entity": "Battery state of charge sensor (SOC in %)",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "min_soc": "Minimum SOC (%)",
+          "max_soc": "Maximum SOC (%)",
+          "price_low_threshold": "Low price threshold (ct/kWh) - charge below this",
+          "price_high_threshold": "High price threshold (ct/kWh) - discharge above this"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Adjust Settings",
+        "data": {
+          "min_soc": "Minimum SOC (%)",
+          "max_soc": "Maximum SOC (%)",
+          "price_low_threshold": "Low price threshold (ct/kWh)",
+          "price_high_threshold": "High price threshold (ct/kWh)"
+        }
+      }
+    }
+  }
+}

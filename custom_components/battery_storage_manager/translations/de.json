@@ -1,0 +1,52 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tibber Konfiguration",
+        "description": "Konfiguriere die Tibber-Entitäten für Strompreise und Verbrauchsmessung.",
+        "data": {
+          "tibber_price_entity": "Tibber Strompreis-Sensor (aktueller Preis)",
+          "tibber_prices_entity": "Tibber Preisübersicht-Sensor (mit today/tomorrow Attributen)",
+          "tibber_pulse_power_entity": "Tibber Pulse Leistungs-Sensor (aktueller Netzbezug/Einspeisung)"
+        }
+      },
+      "devices": {
+        "title": "Geräte Konfiguration",
+        "description": "Konfiguriere die Ladegeräte und den steuerbaren Wechselrichter.",
+        "data": {
+          "charger_1_switch": "Ladegerät 1 Schalter",
+          "charger_1_power": "Ladegerät 1 Leistung (W)",
+          "charger_2_switch": "Ladegerät 2 Schalter",
+          "charger_2_power": "Ladegerät 2 Leistung (W)",
+          "inverter_feed_switch": "Einspeise-Wechselrichter Schalter",
+          "inverter_feed_power": "Einspeise-Wechselrichter Leistung (W)"
+        }
+      },
+      "battery": {
+        "title": "Speicher Konfiguration",
+        "description": "Konfiguriere die Batterie-Parameter und Preisschwellen.",
+        "data": {
+          "battery_soc_entity": "Batterie Ladestand-Sensor (SOC in %)",
+          "battery_capacity_kwh": "Batteriekapazität (kWh)",
+          "min_soc": "Minimaler Ladestand (%)",
+          "max_soc": "Maximaler Ladestand (%)",
+          "price_low_threshold": "Preisschwelle niedrig (ct/kWh) - darunter wird geladen",
+          "price_high_threshold": "Preisschwelle hoch (ct/kWh) - darüber wird entladen"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Einstellungen anpassen",
+        "data": {
+          "min_soc": "Minimaler Ladestand (%)",
+          "max_soc": "Maximaler Ladestand (%)",
+          "price_low_threshold": "Preisschwelle niedrig (ct/kWh)",
+          "price_high_threshold": "Preisschwelle hoch (ct/kWh)"
+        }
+      }
+    }
+  }
+}

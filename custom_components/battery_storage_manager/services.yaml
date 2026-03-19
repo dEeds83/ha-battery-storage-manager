@@ -1,0 +1,56 @@
+set_strategy:
+  name: Strategie setzen
+  description: Setzt die Betriebsstrategie des Speichermanagers
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Die Config Entry ID der Integration
+      required: true
+      selector:
+        text:
+    strategy:
+      name: Strategie
+      description: Die gewünschte Betriebsstrategie
+      required: true
+      selector:
+        select:
+          options:
+            - label: Preisoptimiert
+              value: price_optimized
+            - label: Eigenverbrauch
+              value: self_consumption
+            - label: Manuell
+              value: manual
+
+force_charge:
+  name: Zwangsladen
+  description: Erzwingt das Laden des Speichers unabhängig vom Preis
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Die Config Entry ID der Integration
+      required: true
+      selector:
+        text:
+
+force_discharge:
+  name: Zwangsentladen
+  description: Erzwingt das Entladen des Speichers ins Hausnetz
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Die Config Entry ID der Integration
+      required: true
+      selector:
+        text:
+
+stop:
+  name: Stopp
+  description: Stoppt alle Lade- und Entladevorgänge
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Die Config Entry ID der Integration
+      required: true
+      selector:
+        text:
