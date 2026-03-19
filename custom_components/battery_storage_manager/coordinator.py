@@ -120,7 +120,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._tibber_prices_entity,
         )
         self._read_sensor_states()
-        self._update_price_forecast()
+        await self._update_price_forecast()
 
         if self._strategy == STRATEGY_PRICE_OPTIMIZED:
             await self._run_price_optimization()
@@ -207,13 +207,67 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         else:
             self._grid_power = None
 
-    def _update_price_forecast(self) -> None:
-        """Update price forecast from Tibber prices entity attributes."""
-        # Use the dedicated prices entity if configured, otherwise fall back to price entity
+    async def _update_price_forecast(self) -> None:
+        """Update price forecast, preferring tibber.get_prices action."""
+        # Try the tibber.get_prices action first (HA 2024.8+)
+        if await self._fetch_prices_via_action():
+            self._fallback_price_range = None
+            _LOGGER.debug(
+                "Price forecast built with %d entries (via tibber.get_prices action)",
+                len(self._price_forecast),
+            )
+            return
+
+        # Fallback: read from entity attributes (older Tibber integration)
+        self._fetch_prices_from_attributes()
+
+    async def _fetch_prices_via_action(self) -> bool:
+        """Fetch prices using the tibber.get_prices action. Returns True on success."""
+        if not self.hass.services.has_service("tibber", "get_prices"):
+            _LOGGER.debug("tibber.get_prices action not available, using attribute fallback")
+            return False
+
+        now = dt_util.now()
+        start = now.replace(minute=0, second=0, microsecond=0)
+        end = (now + timedelta(days=1)).replace(hour=23, minute=59, second=0, microsecond=0)
+
+        try:
+            response = await self.hass.services.async_call(
+                "tibber",
+                "get_prices",
+                {"start": start.isoformat(), "end": end.isoformat()},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception:
+            _LOGGER.debug("tibber.get_prices action call failed", exc_info=True)
+            return False
+
+        if not response or "prices" not in response:
+            _LOGGER.debug("tibber.get_prices returned no price data: %s", response)
+            return False
+
+        # Response format: {"prices": {"HomeName": [{"start_time": "...", "price": 0.46}, ...]}}
+        self._price_forecast = []
+        for home_prices in response["prices"].values():
+            if not isinstance(home_prices, list):
+                continue
+            for entry in home_prices:
+                if isinstance(entry, dict) and "start_time" in entry and "price" in entry:
+                    self._price_forecast.append({
+                        "start": str(entry["start_time"]),
+                        "total": entry["price"],
+                    })
+            # Use the first home's prices only
+            break
+
+        return len(self._price_forecast) > 0
+
+    def _fetch_prices_from_attributes(self) -> None:
+        """Fallback: read price forecast from Tibber entity attributes."""
         prices_entity = self._tibber_prices_entity or self._tibber_price_entity
         prices_state = self.hass.states.get(prices_entity)
         if not prices_state:
-            # Use debug level if entity was never seen (startup race condition)
             log_fn = _LOGGER.warning if self._prices_entity_seen else _LOGGER.debug
             log_fn(
                 "Prices forecast entity '%s' not found in Home Assistant.",
@@ -259,7 +313,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     avg_price or 0,
                     max_price,
                 )
-                # Store summary prices for threshold calculations
                 self._fallback_price_range = {
                     "min": float(min_price),
                     "avg": float(avg_price) if avg_price is not None else None,
