@@ -22,23 +22,28 @@ FRONTEND_CARDS = [
 ]
 
 
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up Battery Storage Manager integration (register frontend resources)."""
+    hass.data.setdefault(DOMAIN, {})
+
+    # Register frontend cards once at integration load time
+    static_paths = []
+    for card_file in FRONTEND_CARDS:
+        url_path = f"/{DOMAIN}/{card_file}"
+        file_path = str(FRONTEND_DIR / card_file)
+        static_paths.append(
+            StaticPathConfig(url_path, file_path, cache_headers=False)
+        )
+        add_extra_js_url(hass, url_path)
+        _LOGGER.debug("Registered frontend card: %s", url_path)
+    await hass.http.async_register_static_paths(static_paths)
+
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Battery Storage Manager from a config entry."""
     hass.data.setdefault(DOMAIN, {})
-
-    # Register frontend cards (once per HA instance)
-    if f"{DOMAIN}_frontend_registered" not in hass.data:
-        static_paths = []
-        for card_file in FRONTEND_CARDS:
-            url_path = f"/{DOMAIN}/{card_file}"
-            file_path = str(FRONTEND_DIR / card_file)
-            static_paths.append(
-                StaticPathConfig(url_path, file_path, cache_headers=False)
-            )
-            add_extra_js_url(hass, url_path)
-            _LOGGER.debug("Registered frontend card: %s", url_path)
-        await hass.http.async_register_static_paths(static_paths)
-        hass.data[f"{DOMAIN}_frontend_registered"] = True
 
     coordinator = BatteryStorageCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
