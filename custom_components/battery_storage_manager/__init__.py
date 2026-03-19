@@ -24,10 +24,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Listen for options updates and apply them live
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     # Register services
     await _register_services(hass)
 
     return True
+
+
+async def _async_options_updated(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """Handle options update - apply new config to coordinator without restart."""
+    coordinator: BatteryStorageCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator.apply_options(entry.options)
+    _LOGGER.info("Options updated, applied to coordinator")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

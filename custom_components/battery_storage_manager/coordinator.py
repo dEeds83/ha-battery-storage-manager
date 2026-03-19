@@ -1013,6 +1013,66 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._strategy = STRATEGY_MANUAL
         await self._start_discharging()
 
+    def apply_options(self, options: dict) -> None:
+        """Apply updated options from the options flow (live, no restart needed)."""
+        self._tibber_price_entity = options.get(
+            CONF_TIBBER_PRICE_ENTITY, self._tibber_price_entity
+        )
+        self._tibber_prices_entity = options.get(
+            CONF_TIBBER_PRICES_ENTITY, self._tibber_prices_entity
+        )
+        self._pulse_consumption_entity = options.get(
+            CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, self._pulse_consumption_entity
+        )
+        self._pulse_production_entity = options.get(
+            CONF_TIBBER_PULSE_PRODUCTION_ENTITY, self._pulse_production_entity
+        )
+        self._charger_1_switch = options.get(
+            CONF_CHARGER_1_SWITCH, self._charger_1_switch
+        )
+        self._charger_2_switch = options.get(
+            CONF_CHARGER_2_SWITCH, self._charger_2_switch
+        )
+        self._charger_1_power = options.get(
+            CONF_CHARGER_1_POWER, self._charger_1_power
+        )
+        self._charger_2_power = options.get(
+            CONF_CHARGER_2_POWER, self._charger_2_power
+        )
+        self._inverter_switch = options.get(
+            CONF_INVERTER_FEED_SWITCH, self._inverter_switch
+        )
+        self._inverter_power = options.get(
+            CONF_INVERTER_FEED_POWER, self._inverter_power
+        )
+        self._inverter_power_entity = options.get(
+            CONF_INVERTER_FEED_POWER_ENTITY, self._inverter_power_entity
+        )
+        self._battery_soc_entity = options.get(
+            CONF_BATTERY_SOC_ENTITY, self._battery_soc_entity
+        )
+        self._battery_capacity = options.get(
+            CONF_BATTERY_CAPACITY_KWH, self._battery_capacity
+        )
+        self._min_soc = options.get(CONF_MIN_SOC, self._min_soc)
+        self._max_soc = options.get(CONF_MAX_SOC, self._max_soc)
+        self._price_low = options.get(
+            CONF_PRICE_LOW_THRESHOLD, self._price_low
+        )
+        self._price_high = options.get(
+            CONF_PRICE_HIGH_THRESHOLD, self._price_high
+        )
+        self._solar_forecast_entity = options.get(
+            CONF_SOLAR_FORECAST_ENTITY, self._solar_forecast_entity
+        )
+        self._solar_forecast_entities = options.get(
+            CONF_SOLAR_FORECAST_ENTITIES, self._solar_forecast_entities
+        )
+        self._house_consumption_w = options.get(
+            CONF_HOUSE_CONSUMPTION_W, self._house_consumption_w
+        )
+        _LOGGER.info("Configuration updated from options flow")
+
     def set_strategy(self, strategy: str) -> None:
         """Set the operating strategy."""
         if strategy in (STRATEGY_PRICE_OPTIMIZED, STRATEGY_SELF_CONSUMPTION, STRATEGY_MANUAL):
