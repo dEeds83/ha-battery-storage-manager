@@ -8,7 +8,8 @@
           "tibber_price_entity": "Tibber price sensor (current price)",
           "tibber_prices_entity": "Tibber prices overview sensor (optional, leave empty to use price sensor)",
           "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor (current power drawn from grid)",
-          "tibber_pulse_production_entity": "Tibber Pulse production sensor (current power fed into grid)"
+          "tibber_pulse_production_entity": "Tibber Pulse production sensor (current power fed into grid)",
+          "solar_forecast_entity": "Solar forecast sensor (optional, e.g. Forecast.Solar or Solcast)"
         }
       },
       "devices": {
@@ -33,7 +34,8 @@
           "min_soc": "Minimum SOC (%)",
           "max_soc": "Maximum SOC (%)",
           "price_low_threshold": "Low price threshold (ct/kWh) - charge below this",
-          "price_high_threshold": "High price threshold (ct/kWh) - discharge above this"
+          "price_high_threshold": "High price threshold (ct/kWh) - discharge above this",
+          "house_consumption_w": "Average house consumption (W) - used for planning"
         }
       }
     }

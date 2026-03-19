@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import ATTR_BATTERY_PLAN, ATTR_EXPECTED_SOLAR_KWH, ATTR_PLAN_SUMMARY, DOMAIN
 from .coordinator import BatteryStorageCoordinator
 
 
@@ -36,6 +36,9 @@ async def async_setup_entry(
         InverterStatusSensor(coordinator, entry),
         NextCheapWindowSensor(coordinator, entry),
         NextExpensiveWindowSensor(coordinator, entry),
+        BatteryPlanSensor(coordinator, entry),
+        PlannedActionSensor(coordinator, entry),
+        ExpectedSolarSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -272,4 +275,98 @@ class NextExpensiveWindowSensor(BatteryStorageBaseSensor):
     def native_value(self) -> str | None:
         if self.coordinator.data:
             return self.coordinator.data.get("next_expensive_window")
+        return None
+
+
+class BatteryPlanSensor(BatteryStorageBaseSensor):
+    """Sensor showing the battery plan summary with full plan as attribute."""
+
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "battery_plan", "Speicherplan"
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data:
+            return self.coordinator.data.get(ATTR_PLAN_SUMMARY)
+        return None
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        plan = self.coordinator.data.get(ATTR_BATTERY_PLAN, [])
+        attrs = {"plan": plan}
+        # Add counts per action type
+        action_counts = {}
+        for entry in plan:
+            action = entry.get("action", "unknown")
+            action_counts[action] = action_counts.get(action, 0) + 1
+        attrs["action_counts"] = action_counts
+        return attrs
+
+
+class PlannedActionSensor(BatteryStorageBaseSensor):
+    """Sensor showing the currently planned action for this hour."""
+
+    _attr_icon = "mdi:play-circle"
+
+    ACTION_LABELS = {
+        "charge": "Laden (Netz)",
+        "discharge": "Entladen",
+        "solar_charge": "Laden (Solar)",
+        "hold": "Halten",
+        "idle": "Inaktiv",
+    }
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "planned_action", "Geplante Aktion"
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data:
+            action = self.coordinator.data.get("planned_action")
+            if action:
+                return self.ACTION_LABELS.get(action, action)
+        return None
+
+    @property
+    def icon(self) -> str:
+        if not self.coordinator.data:
+            return "mdi:play-circle"
+        action = self.coordinator.data.get("planned_action")
+        icons = {
+            "charge": "mdi:battery-charging",
+            "discharge": "mdi:battery-arrow-down",
+            "solar_charge": "mdi:solar-power",
+            "hold": "mdi:battery-lock",
+            "idle": "mdi:battery-outline",
+        }
+        return icons.get(action, "mdi:play-circle")
+
+
+class ExpectedSolarSensor(BatteryStorageBaseSensor):
+    """Sensor showing expected remaining solar production today."""
+
+    _attr_icon = "mdi:solar-power-variant"
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "expected_solar", "Erwartete Solarproduktion"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get(ATTR_EXPECTED_SOLAR_KWH)
+            if val is not None:
+                return round(val, 2)
         return None

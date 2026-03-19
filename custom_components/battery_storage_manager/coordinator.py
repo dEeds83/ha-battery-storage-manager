@@ -13,11 +13,14 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    ATTR_BATTERY_PLAN,
     ATTR_CURRENT_PRICE,
     ATTR_ESTIMATED_SAVINGS,
+    ATTR_EXPECTED_SOLAR_KWH,
     ATTR_NEXT_CHEAP_WINDOW,
     ATTR_NEXT_EXPENSIVE_WINDOW,
     ATTR_OPERATING_MODE,
+    ATTR_PLAN_SUMMARY,
     ATTR_STRATEGY,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_SOC_ENTITY,
@@ -25,6 +28,7 @@ from .const import (
     CONF_CHARGER_1_SWITCH,
     CONF_CHARGER_2_POWER,
     CONF_CHARGER_2_SWITCH,
+    CONF_HOUSE_CONSUMPTION_W,
     CONF_INVERTER_FEED_POWER,
     CONF_INVERTER_FEED_POWER_ENTITY,
     CONF_INVERTER_FEED_SWITCH,
@@ -32,11 +36,13 @@ from .const import (
     CONF_MIN_SOC,
     CONF_PRICE_HIGH_THRESHOLD,
     CONF_PRICE_LOW_THRESHOLD,
+    CONF_SOLAR_FORECAST_ENTITY,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
     CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
+    DEFAULT_HOUSE_CONSUMPTION_W,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
     DEFAULT_PRICE_HIGH_THRESHOLD,
@@ -92,6 +98,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._price_high = self._config.get(
             CONF_PRICE_HIGH_THRESHOLD, DEFAULT_PRICE_HIGH_THRESHOLD
         )
+        self._solar_forecast_entity = self._config.get(CONF_SOLAR_FORECAST_ENTITY, "")
+        self._house_consumption_w = self._config.get(
+            CONF_HOUSE_CONSUMPTION_W, DEFAULT_HOUSE_CONSUMPTION_W
+        )
 
         # State
         self._strategy = STRATEGY_PRICE_OPTIMIZED
@@ -107,6 +117,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._inverter_active = False
         self._inverter_target_power: float = 0  # current target power for zero-feed
 
+        # Solar forecast and battery plan
+        self._solar_forecast: dict[str, float] = {}  # hour_key -> Wh expected
+        self._battery_plan: list[dict] = []  # hourly plan entries
+        self._plan_summary: str = ""
+        self._expected_solar_kwh: float = 0.0
+
         # Track whether entities have ever been seen (for startup race condition)
         self._price_entity_seen = False
         self._prices_entity_seen = False
@@ -121,6 +137,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         )
         self._read_sensor_states()
         await self._update_price_forecast()
+        self._read_solar_forecast()
+        self._create_battery_plan()
 
         if self._strategy == STRATEGY_PRICE_OPTIMIZED:
             await self._run_price_optimization()
@@ -330,6 +348,282 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         _LOGGER.debug("Price forecast built with %d entries", len(self._price_forecast))
 
+    # ── Solar forecast ──────────────────────────────────────────────
+
+    def _read_solar_forecast(self) -> None:
+        """Read solar production forecast from configured entity.
+
+        Supports common formats:
+        - Forecast.Solar: watt_hours_period attribute {ISO_datetime: Wh}
+        - Solcast / generic: forecast attribute [{period_start, pv_estimate}, ...]
+        - watt_hours attribute (Forecast.Solar cumulative)
+        """
+        self._solar_forecast = {}
+        self._expected_solar_kwh = 0.0
+
+        if not self._solar_forecast_entity:
+            return
+
+        state = self.hass.states.get(self._solar_forecast_entity)
+        if not state:
+            _LOGGER.debug("Solar forecast entity '%s' not found", self._solar_forecast_entity)
+            return
+
+        attrs = state.attributes
+
+        # Format 1: Forecast.Solar watt_hours_period {datetime_str: Wh}
+        wh_period = attrs.get("watt_hours_period")
+        if isinstance(wh_period, dict) and wh_period:
+            for dt_str, wh in wh_period.items():
+                try:
+                    hour_key = self._to_hour_key(dt_str)
+                    self._solar_forecast[hour_key] = (
+                        self._solar_forecast.get(hour_key, 0) + float(wh)
+                    )
+                except (ValueError, TypeError):
+                    continue
+            _LOGGER.debug(
+                "Solar forecast (watt_hours_period): %d hours, total %.1f kWh",
+                len(self._solar_forecast),
+                sum(self._solar_forecast.values()) / 1000,
+            )
+
+        # Format 2: Solcast / generic forecast list
+        if not self._solar_forecast:
+            forecast_list = attrs.get("forecast") or attrs.get("detailedForecast")
+            if isinstance(forecast_list, list) and forecast_list:
+                for entry in forecast_list:
+                    if not isinstance(entry, dict):
+                        continue
+                    dt_str = entry.get("period_start") or entry.get("datetime") or entry.get("start")
+                    pv = entry.get("pv_estimate") or entry.get("pv_estimate10") or entry.get("power_production")
+                    if dt_str and pv is not None:
+                        try:
+                            hour_key = self._to_hour_key(str(dt_str))
+                            # pv_estimate is typically in kW, convert to Wh for the hour
+                            self._solar_forecast[hour_key] = (
+                                self._solar_forecast.get(hour_key, 0) + float(pv) * 1000
+                            )
+                        except (ValueError, TypeError):
+                            continue
+                _LOGGER.debug(
+                    "Solar forecast (forecast list): %d hours, total %.1f kWh",
+                    len(self._solar_forecast),
+                    sum(self._solar_forecast.values()) / 1000,
+                )
+
+        # Format 3: Forecast.Solar watt_hours (cumulative) → derive per-period
+        if not self._solar_forecast:
+            wh_cum = attrs.get("watt_hours")
+            if isinstance(wh_cum, dict) and len(wh_cum) > 1:
+                sorted_entries = sorted(wh_cum.items())
+                for i in range(1, len(sorted_entries)):
+                    dt_str, cum_wh = sorted_entries[i]
+                    prev_wh = sorted_entries[i - 1][1]
+                    try:
+                        hour_key = self._to_hour_key(dt_str)
+                        delta = float(cum_wh) - float(prev_wh)
+                        if delta > 0:
+                            self._solar_forecast[hour_key] = delta
+                    except (ValueError, TypeError):
+                        continue
+                _LOGGER.debug(
+                    "Solar forecast (watt_hours cumulative): %d hours, total %.1f kWh",
+                    len(self._solar_forecast),
+                    sum(self._solar_forecast.values()) / 1000,
+                )
+
+        now = dt_util.now()
+        now_key = now.strftime("%Y-%m-%dT%H")
+        remaining = {k: v for k, v in self._solar_forecast.items() if k >= now_key}
+        self._expected_solar_kwh = sum(remaining.values()) / 1000
+
+    @staticmethod
+    def _to_hour_key(dt_str: str) -> str:
+        """Convert a datetime string to an hour key like '2024-01-15T14'."""
+        dt = datetime.fromisoformat(str(dt_str))
+        return dt.strftime("%Y-%m-%dT%H")
+
+    # ── Battery plan ────────────────────────────────────────────────
+
+    def _create_battery_plan(self) -> None:
+        """Create an optimized 24h battery charge/discharge plan.
+
+        Combines price forecast, solar forecast, current SOC, and battery
+        capacity to decide when to charge from grid, let solar charge,
+        discharge, or hold.
+        """
+        now = dt_util.now()
+        now_key = now.strftime("%Y-%m-%dT%H")
+
+        # Build hourly data: price + solar for each upcoming hour
+        hourly_data = self._build_hourly_data(now)
+        if not hourly_data:
+            self._battery_plan = []
+            self._plan_summary = "Keine Preisdaten verfügbar"
+            return
+
+        # Battery parameters
+        usable_kwh = (self._max_soc - self._min_soc) / 100 * self._battery_capacity
+        current_soc = self._battery_soc if self._battery_soc is not None else 50.0
+        current_stored_kwh = (current_soc - self._min_soc) / 100 * self._battery_capacity
+        headroom_kwh = (self._max_soc - current_soc) / 100 * self._battery_capacity
+
+        # Charge power (combined chargers)
+        charge_power_w = (self._charger_1_power or 0) + (self._charger_2_power or 0)
+        charge_kwh_per_hour = charge_power_w / 1000
+        discharge_power_w = self._inverter_power or 800
+        discharge_kwh_per_hour = discharge_power_w / 1000
+        house_kwh_per_hour = self._house_consumption_w / 1000
+
+        # Step 1: Estimate solar contribution per hour (net after house consumption)
+        total_solar_charge_kwh = 0.0
+        for h in hourly_data:
+            solar_wh = self._solar_forecast.get(h["hour_key"], 0)
+            h["solar_kwh"] = solar_wh / 1000
+            # Net solar surplus after house consumption
+            h["solar_surplus_kwh"] = max(0, h["solar_kwh"] - house_kwh_per_hour)
+            total_solar_charge_kwh += min(h["solar_surplus_kwh"], charge_kwh_per_hour)
+
+        # Solar will fill this much of the battery
+        solar_fills_kwh = min(total_solar_charge_kwh, headroom_kwh)
+        # How much we still need from grid
+        grid_charge_needed_kwh = max(0, headroom_kwh - solar_fills_kwh)
+
+        # Step 2: Determine how many grid-charge hours we need
+        grid_charge_hours_needed = (
+            int(grid_charge_needed_kwh / charge_kwh_per_hour) + 1
+            if charge_kwh_per_hour > 0 and grid_charge_needed_kwh > 0
+            else 0
+        )
+
+        # Step 3: Determine how many discharge hours we can sustain
+        discharge_hours_available = (
+            int(current_stored_kwh / discharge_kwh_per_hour)
+            if discharge_kwh_per_hour > 0
+            else 0
+        )
+
+        # Step 4: Sort hours by price to find optimal charge/discharge windows
+        sorted_by_price = sorted(hourly_data, key=lambda h: h["price"])
+
+        # Cheapest hours → charge candidates (only if no significant solar)
+        charge_candidates = []
+        for h in sorted_by_price:
+            if h["solar_surplus_kwh"] < charge_kwh_per_hour * 0.5:
+                charge_candidates.append(h["hour_key"])
+            if len(charge_candidates) >= grid_charge_hours_needed:
+                break
+
+        # Most expensive hours → discharge candidates
+        discharge_candidates = []
+        sorted_expensive = sorted(hourly_data, key=lambda h: h["price"], reverse=True)
+        for h in sorted_expensive:
+            # Only discharge if price is significantly above average
+            avg_price = sum(x["price"] for x in hourly_data) / len(hourly_data)
+            if h["price"] >= avg_price and h["solar_surplus_kwh"] < house_kwh_per_hour * 0.5:
+                discharge_candidates.append(h["hour_key"])
+            if len(discharge_candidates) >= discharge_hours_available:
+                break
+
+        # Step 5: Build the plan
+        self._battery_plan = []
+        charge_count = 0
+        discharge_count = 0
+        solar_count = 0
+
+        for h in hourly_data:
+            key = h["hour_key"]
+            entry = {
+                "hour": key + ":00",
+                "price": round(h["price"], 4),
+                "solar_kwh": round(h["solar_kwh"], 2),
+                "solar_surplus_kwh": round(h["solar_surplus_kwh"], 2),
+            }
+
+            if h["solar_surplus_kwh"] >= charge_kwh_per_hour * 0.3:
+                # Significant solar surplus → let solar charge the battery
+                entry["action"] = "solar_charge"
+                entry["reason"] = f"Solarüberschuss {h['solar_kwh']:.1f} kWh"
+                solar_count += 1
+            elif key in charge_candidates:
+                entry["action"] = "charge"
+                entry["reason"] = f"Günstiger Strom ({h['price']*100:.1f} ct/kWh)"
+                charge_count += 1
+            elif key in discharge_candidates:
+                entry["action"] = "discharge"
+                entry["reason"] = f"Teurer Strom ({h['price']*100:.1f} ct/kWh)"
+                discharge_count += 1
+            else:
+                # Check if expensive hours are still coming → hold charge
+                remaining_expensive = [
+                    d for d in discharge_candidates if d > key
+                ]
+                if remaining_expensive:
+                    entry["action"] = "hold"
+                    entry["reason"] = "Ladung halten für teure Stunden"
+                else:
+                    entry["action"] = "idle"
+                    entry["reason"] = "Keine Aktion nötig"
+
+            self._battery_plan.append(entry)
+
+        # Summary
+        parts = []
+        if solar_count:
+            parts.append(f"{solar_count}h Solar")
+        if charge_count:
+            parts.append(f"{charge_count}h Laden ({grid_charge_needed_kwh:.1f} kWh)")
+        if discharge_count:
+            parts.append(f"{discharge_count}h Entladen")
+        self._plan_summary = " | ".join(parts) if parts else "Kein Plan erstellt"
+
+        _LOGGER.debug(
+            "Battery plan: %s (SOC: %.0f%%, Solar: %.1f kWh, Headroom: %.1f kWh)",
+            self._plan_summary,
+            current_soc,
+            self._expected_solar_kwh,
+            headroom_kwh,
+        )
+
+    def _build_hourly_data(self, now: datetime) -> list[dict]:
+        """Build list of hourly data combining price and solar forecasts."""
+        now_key = now.strftime("%Y-%m-%dT%H")
+        hourly = []
+
+        for p in self._price_forecast:
+            try:
+                start = datetime.fromisoformat(p["start"])
+                hour_key = start.strftime("%Y-%m-%dT%H")
+                if hour_key >= now_key:
+                    hourly.append({
+                        "hour_key": hour_key,
+                        "price": p.get("total", 0),
+                    })
+            except (ValueError, TypeError):
+                continue
+
+        # Deduplicate (keep first occurrence)
+        seen = set()
+        unique = []
+        for h in hourly:
+            if h["hour_key"] not in seen:
+                seen.add(h["hour_key"])
+                unique.append(h)
+
+        return unique
+
+    def _get_current_plan_action(self) -> str | None:
+        """Get the planned action for the current hour."""
+        if not self._battery_plan:
+            return None
+
+        now_key = dt_util.now().strftime("%Y-%m-%dT%H")
+        for entry in self._battery_plan:
+            if entry["hour"].startswith(now_key):
+                return entry["action"]
+        return None
+
     def _find_cheap_hours(self, count: int = 4) -> list[dict]:
         """Find the cheapest upcoming hours from the forecast."""
         now = dt_util.now()
@@ -407,46 +701,70 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         return self._current_price >= self._price_high / 100  # convert ct to EUR
 
     async def _run_price_optimization(self) -> None:
-        """Main price optimization logic.
+        """Main price optimization logic using the battery plan.
 
-        Strategy:
-        - Charge when electricity is cheap (lower third of prices)
-        - Discharge/feed when electricity is expensive (upper third)
-        - In between: optimize self-consumption (cover house demand from battery)
+        If a plan exists, follow it. Otherwise fall back to simple
+        threshold-based logic.
         """
         if self._current_price is None or self._battery_soc is None:
             _LOGGER.debug("Missing price or SOC data, staying idle")
             await self._set_mode_idle()
             return
 
+        # Use plan-based decisions if a plan is available
+        planned_action = self._get_current_plan_action()
+        if planned_action:
+            await self._execute_plan_action(planned_action)
+            return
+
+        # Fallback: simple threshold-based logic (no forecast data available)
         is_cheap = self._is_in_cheap_window()
         is_expensive = self._is_in_expensive_window()
 
-        # Check if more expensive hours are coming (worth saving battery for)
-        expensive_hours_ahead = self._find_expensive_hours(3)
-        has_expensive_ahead = len(expensive_hours_ahead) > 0 and any(
-            p.get("total", 0) > (self._current_price * 1.3)
-            for p in expensive_hours_ahead
-        )
-
         if is_cheap and self._battery_soc < self._max_soc:
-            # Cheap electricity - charge the battery
             await self._start_charging()
         elif is_expensive and self._battery_soc > self._min_soc:
-            # Expensive electricity - discharge battery into home network
-            await self._start_discharging()
-        elif (
-            not is_cheap
-            and not is_expensive
-            and self._battery_soc > self._min_soc
-            and self._grid_power is not None
-            and self._grid_power > 50  # importing more than 50W from grid
-            and not has_expensive_ahead
-        ):
-            # Mid-price: cover house consumption from battery if no expensive
-            # hours coming where we could earn more
             await self._start_discharging()
         else:
+            await self._set_mode_idle()
+
+    async def _execute_plan_action(self, action: str) -> None:
+        """Execute the action from the battery plan for the current hour."""
+        if action == "charge" and self._battery_soc < self._max_soc:
+            _LOGGER.debug("Plan action: CHARGE (grid)")
+            await self._start_charging()
+        elif action == "discharge" and self._battery_soc > self._min_soc:
+            _LOGGER.debug("Plan action: DISCHARGE")
+            await self._start_discharging()
+        elif action == "solar_charge":
+            # During solar hours: don't charge from grid, but allow solar to fill battery
+            # If grid is exporting (solar surplus), stay idle to let solar charge via MPPT
+            # If grid is importing, discharge to cover house demand
+            if (
+                self._grid_power is not None
+                and self._grid_power > 50
+                and self._battery_soc > self._min_soc
+            ):
+                _LOGGER.debug("Plan action: SOLAR_CHARGE - discharging to cover grid import")
+                await self._start_discharging()
+            else:
+                _LOGGER.debug("Plan action: SOLAR_CHARGE - idle (solar filling battery)")
+                await self._set_mode_idle()
+        elif action == "hold":
+            # Hold charge for upcoming expensive hours
+            # But still cover immediate house demand if importing heavily
+            if (
+                self._grid_power is not None
+                and self._grid_power > 200
+                and self._battery_soc > self._min_soc + 10
+            ):
+                _LOGGER.debug("Plan action: HOLD - light discharge to reduce grid import")
+                await self._start_discharging()
+            else:
+                _LOGGER.debug("Plan action: HOLD - keeping charge for later")
+                await self._set_mode_idle()
+        else:
+            _LOGGER.debug("Plan action: IDLE")
             await self._set_mode_idle()
 
     async def _run_self_consumption(self) -> None:
@@ -672,6 +990,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             ATTR_NEXT_EXPENSIVE_WINDOW: (
                 expensive_hours[0]["start"] if expensive_hours else None
             ),
+            ATTR_BATTERY_PLAN: self._battery_plan,
+            ATTR_PLAN_SUMMARY: self._plan_summary,
+            ATTR_EXPECTED_SOLAR_KWH: self._expected_solar_kwh,
+            "planned_action": self._get_current_plan_action(),
             "battery_soc": self._battery_soc,
             "grid_power": self._grid_power,
             "charger_1_active": self._charger_1_active,

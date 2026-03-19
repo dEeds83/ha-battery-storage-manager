@@ -15,6 +15,7 @@ from .const import (
     CONF_CHARGER_1_SWITCH,
     CONF_CHARGER_2_POWER,
     CONF_CHARGER_2_SWITCH,
+    CONF_HOUSE_CONSUMPTION_W,
     CONF_INVERTER_FEED_POWER,
     CONF_INVERTER_FEED_POWER_ENTITY,
     CONF_INVERTER_FEED_SWITCH,
@@ -22,11 +23,13 @@ from .const import (
     CONF_MIN_SOC,
     CONF_PRICE_HIGH_THRESHOLD,
     CONF_PRICE_LOW_THRESHOLD,
+    CONF_SOLAR_FORECAST_ENTITY,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
     CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
+    DEFAULT_HOUSE_CONSUMPTION_W,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
     DEFAULT_PRICE_HIGH_THRESHOLD,
@@ -46,6 +49,9 @@ STEP_TIBBER_SCHEMA = vol.Schema(
             selector.EntitySelectorConfig(domain="sensor")
         ),
         vol.Required(CONF_TIBBER_PULSE_PRODUCTION_ENTITY): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_SOLAR_FORECAST_ENTITY, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
         ),
     }
@@ -117,6 +123,13 @@ STEP_BATTERY_SCHEMA = vol.Schema(
         ): selector.NumberSelector(
             selector.NumberSelectorConfig(
                 min=0, max=100, step=1, unit_of_measurement="ct/kWh"
+            )
+        ),
+        vol.Optional(
+            CONF_HOUSE_CONSUMPTION_W, default=DEFAULT_HOUSE_CONSUMPTION_W
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=100, max=5000, step=50, unit_of_measurement="W"
             )
         ),
     }
