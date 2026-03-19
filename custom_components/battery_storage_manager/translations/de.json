@@ -8,7 +8,9 @@
           "tibber_price_entity": "Tibber Strompreis-Sensor (aktueller Preis)",
           "tibber_prices_entity": "Tibber Preisübersicht-Sensor (optional, leer lassen um Preis-Sensor zu nutzen)",
           "tibber_pulse_consumption_entity": "Tibber Pulse Verbrauch (aktuelle bezogene Leistung)",
-          "tibber_pulse_production_entity": "Tibber Pulse Einspeisung (aktuelle eingespeiste Leistung)"
+          "tibber_pulse_production_entity": "Tibber Pulse Einspeisung (aktuelle eingespeiste Leistung)",
+          "solar_forecast_entity": "Solar-Prognose-Sensor (optional, z.B. Forecast.Solar oder Solcast)",
+          "solar_forecast_entities": "Weitere Solar-Prognose-Sensoren (optional, für mehrere Anlagen/Dienste)"
         }
       },
       "devices": {
@@ -33,7 +35,8 @@
           "min_soc": "Minimaler Ladestand (%)",
           "max_soc": "Maximaler Ladestand (%)",
           "price_low_threshold": "Preisschwelle niedrig (ct/kWh) - darunter wird geladen",
-          "price_high_threshold": "Preisschwelle hoch (ct/kWh) - darüber wird entladen"
+          "price_high_threshold": "Preisschwelle hoch (ct/kWh) - darüber wird entladen",
+          "house_consumption_w": "Durchschnittlicher Hausverbrauch (W) - wird für Planung verwendet"
         }
       }
     }
@@ -41,12 +44,41 @@
   "options": {
     "step": {
       "init": {
-        "title": "Einstellungen anpassen",
+        "title": "Tibber & Solar Konfiguration",
+        "description": "Tibber-Entitäten und Solar-Prognose-Sensoren anpassen.",
         "data": {
+          "tibber_price_entity": "Tibber Strompreis-Sensor (aktueller Preis)",
+          "tibber_prices_entity": "Tibber Preisübersicht-Sensor (optional)",
+          "tibber_pulse_consumption_entity": "Tibber Pulse Verbrauch",
+          "tibber_pulse_production_entity": "Tibber Pulse Einspeisung",
+          "solar_forecast_entity": "Solar-Prognose-Sensor (optional)",
+          "solar_forecast_entities": "Weitere Solar-Prognose-Sensoren (optional)"
+        }
+      },
+      "devices": {
+        "title": "Geräte Konfiguration",
+        "description": "Ladegeräte und Wechselrichter-Einstellungen anpassen.",
+        "data": {
+          "charger_1_switch": "Ladegerät 1 Schalter",
+          "charger_1_power": "Ladegerät 1 Leistung (W)",
+          "charger_2_switch": "Ladegerät 2 Schalter",
+          "charger_2_power": "Ladegerät 2 Leistung (W)",
+          "inverter_feed_switch": "Einspeise-Wechselrichter Schalter (optional)",
+          "inverter_feed_power_entity": "Einspeise-Wechselrichter Leistungs-Entity (optional)",
+          "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)"
+        }
+      },
+      "battery": {
+        "title": "Speicher Konfiguration",
+        "description": "Batterie-Parameter und Preisschwellen anpassen.",
+        "data": {
+          "battery_soc_entity": "Batterie Ladestand-Sensor",
+          "battery_capacity_kwh": "Batteriekapazität (kWh)",
           "min_soc": "Minimaler Ladestand (%)",
           "max_soc": "Maximaler Ladestand (%)",
           "price_low_threshold": "Preisschwelle niedrig (ct/kWh)",
-          "price_high_threshold": "Preisschwelle hoch (ct/kWh)"
+          "price_high_threshold": "Preisschwelle hoch (ct/kWh)",
+          "house_consumption_w": "Durchschnittlicher Hausverbrauch (W)"
         }
       }
     }

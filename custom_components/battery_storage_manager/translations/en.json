@@ -8,7 +8,9 @@
           "tibber_price_entity": "Tibber price sensor (current price)",
           "tibber_prices_entity": "Tibber prices overview sensor (optional, leave empty to use price sensor)",
           "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor (current power drawn from grid)",
-          "tibber_pulse_production_entity": "Tibber Pulse production sensor (current power fed into grid)"
+          "tibber_pulse_production_entity": "Tibber Pulse production sensor (current power fed into grid)",
+          "solar_forecast_entity": "Solar forecast sensor (optional, e.g. Forecast.Solar or Solcast)",
+          "solar_forecast_entities": "Additional solar forecast sensors (optional, for multiple arrays/services)"
         }
       },
       "devices": {
@@ -33,7 +35,8 @@
           "min_soc": "Minimum SOC (%)",
           "max_soc": "Maximum SOC (%)",
           "price_low_threshold": "Low price threshold (ct/kWh) - charge below this",
-          "price_high_threshold": "High price threshold (ct/kWh) - discharge above this"
+          "price_high_threshold": "High price threshold (ct/kWh) - discharge above this",
+          "house_consumption_w": "Average house consumption (W) - used for planning"
         }
       }
     }
@@ -41,12 +44,41 @@
   "options": {
     "step": {
       "init": {
-        "title": "Adjust Settings",
+        "title": "Tibber & Solar Configuration",
+        "description": "Adjust Tibber entities and solar forecast sensors.",
         "data": {
+          "tibber_price_entity": "Tibber price sensor (current price)",
+          "tibber_prices_entity": "Tibber prices overview sensor (optional)",
+          "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor",
+          "tibber_pulse_production_entity": "Tibber Pulse production sensor",
+          "solar_forecast_entity": "Solar forecast sensor (optional)",
+          "solar_forecast_entities": "Additional solar forecast sensors (optional)"
+        }
+      },
+      "devices": {
+        "title": "Device Configuration",
+        "description": "Adjust chargers and inverter settings.",
+        "data": {
+          "charger_1_switch": "Charger 1 switch",
+          "charger_1_power": "Charger 1 power (W)",
+          "charger_2_switch": "Charger 2 switch",
+          "charger_2_power": "Charger 2 power (W)",
+          "inverter_feed_switch": "Feed inverter switch (optional)",
+          "inverter_feed_power_entity": "Feed inverter power entity (optional)",
+          "inverter_feed_power": "Feed inverter max power (W)"
+        }
+      },
+      "battery": {
+        "title": "Battery Configuration",
+        "description": "Adjust battery parameters and price thresholds.",
+        "data": {
+          "battery_soc_entity": "Battery state of charge sensor",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
           "min_soc": "Minimum SOC (%)",
           "max_soc": "Maximum SOC (%)",
           "price_low_threshold": "Low price threshold (ct/kWh)",
-          "price_high_threshold": "High price threshold (ct/kWh)"
+          "price_high_threshold": "High price threshold (ct/kWh)",
+          "house_consumption_w": "Average house consumption (W)"
         }
       }
     }
