@@ -106,6 +106,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch and process data, then decide on battery action."""
+        _LOGGER.debug(
+            "Update cycle - Price entity: '%s', Prices entity: '%s'",
+            self._tibber_price_entity,
+            self._tibber_prices_entity,
+        )
         self._read_sensor_states()
         self._update_price_forecast()
 
@@ -124,8 +129,34 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         if price_state and price_state.state not in ("unknown", "unavailable"):
             try:
                 self._current_price = float(price_state.state)
-            except (ValueError, TypeError):
+                _LOGGER.debug(
+                    "Price read successfully: %s EUR/kWh from '%s' (state: '%s')",
+                    self._current_price,
+                    self._tibber_price_entity,
+                    price_state.state,
+                )
+            except (ValueError, TypeError) as err:
                 self._current_price = None
+                _LOGGER.warning(
+                    "Could not convert price state '%s' to float from entity '%s': %s",
+                    price_state.state,
+                    self._tibber_price_entity,
+                    err,
+                )
+        else:
+            self._current_price = None
+            if price_state:
+                _LOGGER.debug(
+                    "Price entity '%s' has state '%s' - not usable",
+                    self._tibber_price_entity,
+                    price_state.state,
+                )
+            else:
+                _LOGGER.warning(
+                    "Price entity '%s' not found in Home Assistant. "
+                    "Check that the entity ID is correct and the Tibber integration is loaded.",
+                    self._tibber_price_entity,
+                )
 
         # Battery SOC
         soc_state = self.hass.states.get(self._battery_soc_entity)
@@ -167,11 +198,24 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         """Update price forecast from Tibber prices entity attributes."""
         prices_state = self.hass.states.get(self._tibber_prices_entity)
         if not prices_state:
+            _LOGGER.warning(
+                "Prices forecast entity '%s' not found in Home Assistant.",
+                self._tibber_prices_entity,
+            )
             return
 
         # Tibber provides today and tomorrow prices in attributes
         today = prices_state.attributes.get("today", [])
         tomorrow = prices_state.attributes.get("tomorrow", [])
+
+        _LOGGER.debug(
+            "Price forecast from '%s': %d today entries, %d tomorrow entries. "
+            "Available attributes: %s",
+            self._tibber_prices_entity,
+            len(today) if isinstance(today, list) else 0,
+            len(tomorrow) if isinstance(tomorrow, list) else 0,
+            list(prices_state.attributes.keys()),
+        )
 
         self._price_forecast = []
         for price_entry in today + tomorrow:
@@ -180,6 +224,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     "start": price_entry.get("startsAt", ""),
                     "total": price_entry.get("total", 0),
                 })
+
+        _LOGGER.debug("Price forecast built with %d entries", len(self._price_forecast))
 
     def _find_cheap_hours(self, count: int = 4) -> list[dict]:
         """Find the cheapest upcoming hours from the forecast."""
