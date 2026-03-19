@@ -87,10 +87,20 @@ class OperatingModeSensor(BatteryStorageBaseSensor):
     def extra_state_attributes(self):
         if not self.coordinator.data:
             return {}
+        d = self.coordinator.data
         return {
-            "charger_1_active": self.coordinator.data.get("charger_1_active"),
-            "charger_2_active": self.coordinator.data.get("charger_2_active"),
-            "inverter_active": self.coordinator.data.get("inverter_active"),
+            "charger_1_active": d.get("charger_1_active"),
+            "charger_2_active": d.get("charger_2_active"),
+            "inverter_active": d.get("inverter_active"),
+            "inverter_target_power": d.get("inverter_target_power"),
+            "strategy": d.get("strategy"),
+            "current_price": d.get("current_price"),
+            "battery_soc": d.get("battery_soc"),
+            "grid_power": d.get("grid_power"),
+            "planned_action": d.get("planned_action"),
+            "allow_grid_charging": d.get("allow_grid_charging"),
+            "allow_discharging": d.get("allow_discharging"),
+            "use_solar_forecast": d.get("use_solar_forecast"),
         }
 
 
