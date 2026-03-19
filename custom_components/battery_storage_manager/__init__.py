@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
@@ -27,12 +28,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Register frontend cards (once per HA instance)
     if f"{DOMAIN}_frontend_registered" not in hass.data:
+        static_paths = []
         for card_file in FRONTEND_CARDS:
             url_path = f"/{DOMAIN}/{card_file}"
             file_path = str(FRONTEND_DIR / card_file)
-            hass.http.register_static_path(url_path, file_path, cache_headers=False)
+            static_paths.append(
+                StaticPathConfig(url_path, file_path, cache_headers=False)
+            )
             add_extra_js_url(hass, url_path)
             _LOGGER.debug("Registered frontend card: %s", url_path)
+        await hass.http.async_register_static_paths(static_paths)
         hass.data[f"{DOMAIN}_frontend_registered"] = True
 
     coordinator = BatteryStorageCoordinator(hass, entry)
