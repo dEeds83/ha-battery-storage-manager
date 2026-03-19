@@ -16,6 +16,7 @@ from .const import (
     CONF_CHARGER_2_POWER,
     CONF_CHARGER_2_SWITCH,
     CONF_INVERTER_FEED_POWER,
+    CONF_INVERTER_FEED_POWER_ENTITY,
     CONF_INVERTER_FEED_SWITCH,
     CONF_MAX_SOC,
     CONF_MIN_SOC,
@@ -68,8 +69,11 @@ STEP_DEVICES_SCHEMA = vol.Schema(
                 min=0, max=5000, step=100, unit_of_measurement="W"
             )
         ),
-        vol.Required(CONF_INVERTER_FEED_SWITCH): selector.EntitySelector(
+        vol.Optional(CONF_INVERTER_FEED_SWITCH, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
+        ),
+        vol.Optional(CONF_INVERTER_FEED_POWER_ENTITY, default=""): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="number")
         ),
         vol.Optional(CONF_INVERTER_FEED_POWER, default=800): selector.NumberSelector(
             selector.NumberSelectorConfig(

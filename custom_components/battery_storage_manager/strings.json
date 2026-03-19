@@ -19,8 +19,9 @@
           "charger_1_power": "Charger 1 power (W)",
           "charger_2_switch": "Charger 2 switch",
           "charger_2_power": "Charger 2 power (W)",
-          "inverter_feed_switch": "Feed inverter switch",
-          "inverter_feed_power": "Feed inverter power (W)"
+          "inverter_feed_switch": "Feed inverter switch (optional, on/off only)",
+          "inverter_feed_power_entity": "Feed inverter power entity (optional, for zero-feed control)",
+          "inverter_feed_power": "Feed inverter max power (W)"
         }
       },
       "battery": {
