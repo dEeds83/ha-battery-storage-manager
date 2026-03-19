@@ -86,7 +86,7 @@ STEP_DEVICES_SCHEMA = vol.Schema(
             selector.EntitySelectorConfig(domain="switch")
         ),
         vol.Optional(CONF_INVERTER_FEED_POWER_ENTITY, default=""): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="number")
+            selector.EntitySelectorConfig(domain=["number", "input_number"])
         ),
         vol.Optional(CONF_INVERTER_FEED_POWER, default=800): selector.NumberSelector(
             selector.NumberSelectorConfig(
@@ -325,7 +325,7 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         CONF_INVERTER_FEED_POWER_ENTITY,
                         default=self._current(CONF_INVERTER_FEED_POWER_ENTITY, ""),
                     ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="number")
+                        selector.EntitySelectorConfig(domain=["number", "input_number"])
                     ),
                     vol.Optional(
                         CONF_INVERTER_FEED_POWER,

@@ -1051,8 +1051,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             max_power,
         )
 
+        domain = self._inverter_power_entity.split(".")[0]
         await self.hass.services.async_call(
-            "number",
+            domain,
             "set_value",
             {
                 "entity_id": self._inverter_power_entity,
@@ -1101,8 +1102,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             return
 
         self._inverter_target_power = value
+        domain = self._inverter_power_entity.split(".")[0]
         await self.hass.services.async_call(
-            "number",
+            domain,
             "set_value",
             {
                 "entity_id": self._inverter_power_entity,
