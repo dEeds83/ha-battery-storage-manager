@@ -35,6 +35,7 @@ async def async_setup_entry(
         Charger2StatusSensor(coordinator, entry),
         InverterStatusSensor(coordinator, entry),
         InverterActualPowerSensor(coordinator, entry),
+        InverterTargetPowerSensor(coordinator, entry),
         NextCheapWindowSensor(coordinator, entry),
         NextExpensiveWindowSensor(coordinator, entry),
         BatteryPlanSensor(coordinator, entry),
@@ -273,6 +274,26 @@ class InverterActualPowerSensor(BatteryStorageBaseSensor):
     def native_value(self) -> float | None:
         if self.coordinator.data:
             return self.coordinator.data.get("inverter_actual_power")
+        return None
+
+
+class InverterTargetPowerSensor(BatteryStorageBaseSensor):
+    """Sensor showing the target power the plugin sets for the feed inverter."""
+
+    _attr_icon = "mdi:tune-vertical"
+    _attr_native_unit_of_measurement = "W"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "inverter_target_power", "Wechselrichter Soll-Leistung"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            return self.coordinator.data.get("inverter_target_power")
         return None
 
 
