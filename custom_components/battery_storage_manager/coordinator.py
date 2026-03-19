@@ -75,7 +75,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
         self.entry = entry
-        self._config = entry.data
+        self._config = {**entry.data, **entry.options}
 
         # Entity IDs from config
         self._tibber_price_entity = self._config.get(CONF_TIBBER_PRICE_ENTITY, "")
