@@ -919,19 +919,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Plan action: SOLAR_CHARGE - idle (solar filling battery)")
                 await self._set_mode_idle()
         elif action == "hold":
-            # Hold charge for upcoming expensive hours
-            # But still cover immediate house demand if importing heavily
-            if (
-                self._allow_discharging
-                and self._grid_power is not None
-                and self._grid_power > 200
-                and self._battery_soc > self._min_soc + 10
-            ):
-                _LOGGER.debug("Plan action: HOLD - light discharge to reduce grid import")
-                await self._start_discharging()
-            else:
-                _LOGGER.debug("Plan action: HOLD - keeping charge for later")
-                await self._set_mode_idle()
+            _LOGGER.debug("Plan action: HOLD - keeping charge for later")
+            await self._set_mode_idle()
         else:
             _LOGGER.debug("Plan action: IDLE")
             await self._set_mode_idle()
