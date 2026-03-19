@@ -60,7 +60,8 @@ class BatteryStatusCard extends HTMLElement {
     const strategy = attrs.strategy || "manual";
     const gridPower = attrs.grid_power;
     const plannedAction = attrs.planned_action;
-    const inverterPower = attrs.inverter_target_power || 0;
+    const inverterActualPower = attrs.inverter_actual_power;
+    const inverterTargetPower = attrs.inverter_target_power || 0;
 
     const modeCfg = MODE_ICONS[mode] || MODE_ICONS.idle;
 
@@ -147,11 +148,11 @@ class BatteryStatusCard extends HTMLElement {
                   ${gridPower != null && gridPower > 10 ? "Bezug " : gridPower != null && gridPower < -10 ? "Einsp. " : ""}${gridText}
                 </span>
               </div>
-              ${inverterPower > 0 ? `
+              ${inverterActualPower != null || inverterTargetPower > 0 ? `
               <div class="stat-row">
                 <ha-icon icon="mdi:solar-power" style="color:#FF9800"></ha-icon>
                 <span class="stat-label">Wechselr.</span>
-                <span class="stat-value">${Math.round(inverterPower)} W</span>
+                <span class="stat-value">${inverterActualPower != null ? Math.round(inverterActualPower) + " W" : Math.round(inverterTargetPower) + " W (Soll)"}</span>
               </div>
               ` : ""}
             </div>

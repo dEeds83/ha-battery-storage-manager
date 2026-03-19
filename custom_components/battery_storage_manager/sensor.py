@@ -34,6 +34,7 @@ async def async_setup_entry(
         Charger1StatusSensor(coordinator, entry),
         Charger2StatusSensor(coordinator, entry),
         InverterStatusSensor(coordinator, entry),
+        InverterActualPowerSensor(coordinator, entry),
         NextCheapWindowSensor(coordinator, entry),
         NextExpensiveWindowSensor(coordinator, entry),
         BatteryPlanSensor(coordinator, entry),
@@ -93,6 +94,7 @@ class OperatingModeSensor(BatteryStorageBaseSensor):
             "charger_2_active": d.get("charger_2_active"),
             "inverter_active": d.get("inverter_active"),
             "inverter_target_power": d.get("inverter_target_power"),
+            "inverter_actual_power": d.get("inverter_actual_power"),
             "strategy": d.get("strategy"),
             "current_price": d.get("current_price"),
             "battery_soc": d.get("battery_soc"),
@@ -252,6 +254,26 @@ class InverterStatusSensor(BatteryStorageBaseSensor):
         if self.coordinator.data and self.coordinator.data.get("inverter_active"):
             return "Aktiv"
         return "Inaktiv"
+
+
+class InverterActualPowerSensor(BatteryStorageBaseSensor):
+    """Sensor showing the actual power output of the feed inverter."""
+
+    _attr_icon = "mdi:solar-power"
+    _attr_native_unit_of_measurement = "W"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "inverter_actual_power", "Wechselrichter Leistung"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            return self.coordinator.data.get("inverter_actual_power")
+        return None
 
 
 class NextCheapWindowSensor(BatteryStorageBaseSensor):

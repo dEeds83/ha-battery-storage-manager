@@ -30,6 +30,7 @@ from .const import (
     CONF_CHARGER_2_POWER,
     CONF_CHARGER_2_SWITCH,
     CONF_HOUSE_CONSUMPTION_W,
+    CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
     CONF_INVERTER_FEED_POWER,
     CONF_INVERTER_FEED_POWER_ENTITY,
     CONF_INVERTER_FEED_SWITCH,
@@ -88,6 +89,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._inverter_switch = self._config.get(CONF_INVERTER_FEED_SWITCH, "")
         self._inverter_power = self._config.get(CONF_INVERTER_FEED_POWER, 0)
         self._inverter_power_entity = self._config.get(CONF_INVERTER_FEED_POWER_ENTITY, "")
+        self._inverter_actual_power_entity = self._config.get(CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY, "")
         self._battery_soc_entity = self._config.get(CONF_BATTERY_SOC_ENTITY, "")
         self._battery_capacity = self._config.get(
             CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY
@@ -121,6 +123,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._charger_2_active = False
         self._inverter_active = False
         self._inverter_target_power: float = 0  # current target power for zero-feed
+        self._inverter_actual_power: float | None = None  # actual power from sensor
 
         # Runtime toggles
         self._allow_grid_charging = True
@@ -236,6 +239,17 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._grid_power = -production
         else:
             self._grid_power = None
+
+        # Inverter actual power
+        if self._inverter_actual_power_entity:
+            inv_state = self.hass.states.get(self._inverter_actual_power_entity)
+            if inv_state and inv_state.state not in ("unknown", "unavailable"):
+                try:
+                    self._inverter_actual_power = float(inv_state.state)
+                except (ValueError, TypeError):
+                    self._inverter_actual_power = None
+            else:
+                self._inverter_actual_power = None
 
     async def _update_price_forecast(self) -> None:
         """Update price forecast, preferring tibber.get_prices action."""
@@ -475,7 +489,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 for dt_obj, wh in wh_period.items():
                     try:
                         if isinstance(dt_obj, datetime):
-                            hour_key = dt_obj.strftime("%Y-%m-%dT%H")
+                            local_dt = dt_util.as_local(dt_obj) if dt_obj.tzinfo is not None else dt_obj
+                            hour_key = local_dt.strftime("%Y-%m-%dT%H")
                         else:
                             hour_key = self._to_hour_key(str(dt_obj))
                         self._solar_forecast[hour_key] = (
@@ -577,8 +592,14 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
     @staticmethod
     def _to_hour_key(dt_str: str) -> str:
-        """Convert a datetime string to an hour key like '2024-01-15T14'."""
+        """Convert a datetime string to an hour key like '2024-01-15T14'.
+
+        Always normalizes to local time so that keys from different sources
+        (Tibber in UTC+1, Forecast.Solar in UTC, etc.) match correctly.
+        """
         dt = datetime.fromisoformat(str(dt_str))
+        if dt.tzinfo is not None:
+            dt = dt_util.as_local(dt)
         return dt.strftime("%Y-%m-%dT%H")
 
     # ── Battery plan ────────────────────────────────────────────────
@@ -679,9 +700,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             }
 
             if h["solar_surplus_kwh"] >= charge_kwh_per_hour * 0.3:
-                # Significant solar surplus → let solar charge the battery
+                # Significant solar surplus → charge battery via chargers from solar
                 entry["action"] = "solar_charge"
-                entry["reason"] = f"Solarüberschuss {h['solar_kwh']:.1f} kWh"
+                entry["reason"] = f"Solarüberschuss {h['solar_surplus_kwh']:.1f} kWh"
                 solar_count += 1
             elif key in charge_candidates:
                 entry["action"] = "charge"
@@ -731,6 +752,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         for p in self._price_forecast:
             try:
                 start = datetime.fromisoformat(p["start"])
+                if start.tzinfo is not None:
+                    start = dt_util.as_local(start)
                 hour_key = start.strftime("%Y-%m-%dT%H")
                 if hour_key >= now_key:
                     hourly.append({
@@ -1143,6 +1166,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._inverter_power_entity = options.get(
             CONF_INVERTER_FEED_POWER_ENTITY, self._inverter_power_entity
         )
+        self._inverter_actual_power_entity = options.get(
+            CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY, self._inverter_actual_power_entity
+        )
         self._battery_soc_entity = options.get(
             CONF_BATTERY_SOC_ENTITY, self._battery_soc_entity
         )
@@ -1206,6 +1232,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "charger_2_active": self._charger_2_active,
             "inverter_active": self._inverter_active,
             "inverter_target_power": self._inverter_target_power,
+            "inverter_actual_power": self._inverter_actual_power,
             "price_forecast": self._price_forecast,
             "cheap_hours": cheap_hours,
             "expensive_hours": expensive_hours,

@@ -16,6 +16,7 @@ from .const import (
     CONF_CHARGER_2_POWER,
     CONF_CHARGER_2_SWITCH,
     CONF_HOUSE_CONSUMPTION_W,
+    CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
     CONF_INVERTER_FEED_POWER,
     CONF_INVERTER_FEED_POWER_ENTITY,
     CONF_INVERTER_FEED_SWITCH,
@@ -91,6 +92,9 @@ STEP_DEVICES_SCHEMA = vol.Schema(
             selector.NumberSelectorConfig(
                 min=0, max=5000, step=100, unit_of_measurement="W"
             )
+        ),
+        vol.Optional(CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY, default=""): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
         ),
     }
 )
@@ -330,6 +334,12 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         selector.NumberSelectorConfig(
                             min=0, max=5000, step=100, unit_of_measurement="W"
                         )
+                    ),
+                    vol.Optional(
+                        CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
+                        default=self._current(CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY, ""),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
                     ),
                 }
             ),

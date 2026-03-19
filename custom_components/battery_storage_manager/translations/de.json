@@ -23,7 +23,8 @@
           "charger_2_power": "Ladegerät 2 Leistung (W)",
           "inverter_feed_switch": "Einspeise-Wechselrichter Schalter (optional, nur Ein/Aus)",
           "inverter_feed_power_entity": "Einspeise-Wechselrichter Leistungs-Entity (optional, für Nulleinspeisung)",
-          "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)"
+          "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)",
+          "inverter_feed_actual_power_entity": "Einspeise-Wechselrichter Ist-Leistung Sensor (optional, aktuelle Ausgangsleistung)"
         }
       },
       "battery": {
@@ -65,7 +66,8 @@
           "charger_2_power": "Ladegerät 2 Leistung (W)",
           "inverter_feed_switch": "Einspeise-Wechselrichter Schalter (optional)",
           "inverter_feed_power_entity": "Einspeise-Wechselrichter Leistungs-Entity (optional)",
-          "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)"
+          "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)",
+          "inverter_feed_actual_power_entity": "Einspeise-Wechselrichter Ist-Leistung Sensor (optional)"
         }
       },
       "battery": {
