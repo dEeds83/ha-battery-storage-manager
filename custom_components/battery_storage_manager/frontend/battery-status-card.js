@@ -5,7 +5,7 @@
  * operating mode, and runtime toggles. Ships with the integration.
  */
 
-const STATUS_CARD_VERSION = "1.0.0";
+const STATUS_CARD_VERSION = "1.0.1";
 
 const MODE_ICONS = {
   idle:        { icon: "mdi:sleep",                color: "#9E9E9E", label: "Inaktiv" },
@@ -22,13 +22,22 @@ class BatteryStatusCard extends HTMLElement {
     const entityId = this._config.entity;
     const stateObj = hass.states[entityId];
     if (!stateObj) {
-      this._lastStateJson = null;
+      this._lastStateKey = null;
       this._render();
       return;
     }
-    const key = stateObj.state + "|" + stateObj.last_updated;
-    if (key === this._lastStateJson) return;
-    this._lastStateJson = key;
+    const attrs = stateObj.attributes;
+    const key = [
+      stateObj.state,
+      attrs.battery_soc,
+      attrs.current_price,
+      attrs.grid_power,
+      attrs.strategy,
+      attrs.inverter_actual_power,
+      attrs.planned_action,
+    ].join("|");
+    if (key === this._lastStateKey) return;
+    this._lastStateKey = key;
     this._render();
   }
 

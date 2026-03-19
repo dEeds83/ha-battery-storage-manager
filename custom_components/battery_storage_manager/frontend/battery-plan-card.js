@@ -6,7 +6,7 @@
  * integration and is auto-registered.
  */
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.1.3";
 
 const ACTION_CONFIG = {
   charge:       { color: "#4CAF50", icon: "mdi:battery-charging",     label: "Laden (Netz)", short: "Laden" },
@@ -100,6 +100,10 @@ class BatteryPlanCard extends HTMLElement {
     const showLegend = this._config.show_legend !== false;
     const showSolar = this._config.show_solar !== false;
 
+    // Preserve scroll position of table container across re-renders
+    const oldContainer = this.shadowRoot.querySelector(".table-container");
+    const scrollTop = oldContainer ? oldContainer.scrollTop : 0;
+
     this.shadowRoot.innerHTML = `
       <ha-card header="${title}">
         <style>
@@ -120,6 +124,10 @@ class BatteryPlanCard extends HTMLElement {
         </div>
       </ha-card>
     `;
+
+    // Restore scroll position
+    const newContainer = this.shadowRoot.querySelector(".table-container");
+    if (newContainer && scrollTop) newContainer.scrollTop = scrollTop;
 
     this.shadowRoot.getElementById("toggleTable")
       .addEventListener("click", () => {
