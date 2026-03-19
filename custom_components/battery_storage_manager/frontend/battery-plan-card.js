@@ -200,35 +200,15 @@ class BatteryPlanCard extends HTMLElement {
       }
     });
 
-    // Render solar as absolutely positioned line segments (no SVG overflow issues)
+    // Render solar as SVG overlay
     let solarOverlay = "";
-    if (showSolar && solarPoints.length > 1) {
-      let lineSegments = "";
-      for (let i = 1; i < solarPoints.length; i++) {
-        const p1 = solarPoints[i - 1];
-        const p2 = solarPoints[i];
-        // Use CSS to draw line segments as rotated divs
-        const dx = p2.x - p1.x;
-        const dy = p2.y - p1.y;
-        const length = Math.sqrt(dx * dx + dy * dy);
-        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-        lineSegments += `
-          <div class="solar-line" style="
-            left:${p1.x}%; top:${p1.y}%;
-            width:${length}%; height:0;
-            transform:rotate(${angle}deg);
-            transform-origin:0 0;
-          "></div>
-        `;
-      }
-      // Also add dots at each point
-      let dots = solarPoints.map(p => `
-        <div class="solar-dot" style="left:${p.x}%; top:${p.y}%"></div>
-      `).join("");
-      solarOverlay = `<div class="solar-layer">${lineSegments}${dots}</div>`;
-    } else if (showSolar && solarPoints.length === 1) {
+    if (showSolar && solarPoints.length > 0) {
+      const polyPoints = solarPoints.map(p => `${p.x},${p.y}`).join(" ");
       solarOverlay = `<div class="solar-layer">
-        <div class="solar-dot" style="left:${solarPoints[0].x}%; top:${solarPoints[0].y}%"></div>
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:100%;position:absolute;top:0;left:0;overflow:visible">
+          ${solarPoints.length > 1 ? `<polyline points="${polyPoints}" fill="none" stroke="#FFD600" stroke-width="2" vector-effect="non-scaling-stroke"/>` : ""}
+          ${solarPoints.map(p => `<circle cx="${p.x}" cy="${p.y}" r="3" fill="#FFD600" vector-effect="non-scaling-stroke"/>`).join("")}
+        </svg>
       </div>`;
     }
 
@@ -378,20 +358,6 @@ class BatteryPlanCard extends HTMLElement {
         top: 0; left: 0; right: 0; bottom: 0;
         pointer-events: none;
         overflow: hidden;
-      }
-      .solar-line {
-        position: absolute;
-        border-top: 2px solid #FFD600;
-        pointer-events: none;
-      }
-      .solar-dot {
-        position: absolute;
-        width: 4px;
-        height: 4px;
-        background: #FFD600;
-        border-radius: 50%;
-        transform: translate(-2px, -2px);
-        pointer-events: none;
       }
       .now-marker {
         position: absolute;

@@ -699,8 +699,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 "solar_surplus_kwh": round(h["solar_surplus_kwh"], 2),
             }
 
-            if h["solar_surplus_kwh"] >= charge_kwh_per_hour * 0.3:
-                # Significant solar surplus → charge battery via chargers from solar
+            if h["solar_surplus_kwh"] > 0.05:
+                # Solar surplus available → charge battery from solar via chargers
                 entry["action"] = "solar_charge"
                 entry["reason"] = f"Solarüberschuss {h['solar_surplus_kwh']:.1f} kWh"
                 solar_count += 1
