@@ -7,7 +7,8 @@
         "data": {
           "tibber_price_entity": "Tibber price sensor (current price)",
           "tibber_prices_entity": "Tibber prices overview sensor (with today/tomorrow attributes)",
-          "tibber_pulse_power_entity": "Tibber Pulse power sensor (current grid import/export)"
+          "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor (current power drawn from grid)",
+          "tibber_pulse_production_entity": "Tibber Pulse production sensor (current power fed into grid)"
         }
       },
       "devices": {

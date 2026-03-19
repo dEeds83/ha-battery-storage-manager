@@ -33,7 +33,8 @@ from .const import (
     CONF_PRICE_LOW_THRESHOLD,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
-    CONF_TIBBER_PULSE_POWER_ENTITY,
+    CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
+    CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
@@ -69,7 +70,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Entity IDs from config
         self._tibber_price_entity = self._config.get(CONF_TIBBER_PRICE_ENTITY, "")
         self._tibber_prices_entity = self._config.get(CONF_TIBBER_PRICES_ENTITY, "")
-        self._pulse_power_entity = self._config.get(CONF_TIBBER_PULSE_POWER_ENTITY, "")
+        self._pulse_consumption_entity = self._config.get(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, "")
+        self._pulse_production_entity = self._config.get(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, "")
         self._charger_1_switch = self._config.get(CONF_CHARGER_1_SWITCH, "")
         self._charger_2_switch = self._config.get(CONF_CHARGER_2_SWITCH, "")
         self._charger_1_power = self._config.get(CONF_CHARGER_1_POWER, 0)
@@ -133,13 +135,33 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             except (ValueError, TypeError):
                 self._battery_soc = None
 
-        # Grid power from Tibber Pulse (positive = importing, negative = exporting)
-        grid_state = self.hass.states.get(self._pulse_power_entity)
-        if grid_state and grid_state.state not in ("unknown", "unavailable"):
+        # Grid power from Tibber Pulse: consumption - production = net grid power
+        # positive = net import from grid, negative = net export to grid
+        consumption = None
+        production = None
+
+        cons_state = self.hass.states.get(self._pulse_consumption_entity)
+        if cons_state and cons_state.state not in ("unknown", "unavailable"):
             try:
-                self._grid_power = float(grid_state.state)
+                consumption = float(cons_state.state)
             except (ValueError, TypeError):
-                self._grid_power = None
+                pass
+
+        prod_state = self.hass.states.get(self._pulse_production_entity)
+        if prod_state and prod_state.state not in ("unknown", "unavailable"):
+            try:
+                production = float(prod_state.state)
+            except (ValueError, TypeError):
+                pass
+
+        if consumption is not None and production is not None:
+            self._grid_power = consumption - production
+        elif consumption is not None:
+            self._grid_power = consumption
+        elif production is not None:
+            self._grid_power = -production
+        else:
+            self._grid_power = None
 
     def _update_price_forecast(self) -> None:
         """Update price forecast from Tibber prices entity attributes."""

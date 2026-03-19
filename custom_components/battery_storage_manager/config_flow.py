@@ -23,7 +23,8 @@ from .const import (
     CONF_PRICE_LOW_THRESHOLD,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
-    CONF_TIBBER_PULSE_POWER_ENTITY,
+    CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
+    CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
@@ -40,7 +41,10 @@ STEP_TIBBER_SCHEMA = vol.Schema(
         vol.Required(CONF_TIBBER_PRICES_ENTITY): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
         ),
-        vol.Required(CONF_TIBBER_PULSE_POWER_ENTITY): selector.EntitySelector(
+        vol.Required(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Required(CONF_TIBBER_PULSE_PRODUCTION_ENTITY): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
         ),
     }

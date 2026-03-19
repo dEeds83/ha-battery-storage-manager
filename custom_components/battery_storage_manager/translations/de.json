@@ -7,7 +7,8 @@
         "data": {
           "tibber_price_entity": "Tibber Strompreis-Sensor (aktueller Preis)",
           "tibber_prices_entity": "Tibber Preisübersicht-Sensor (mit today/tomorrow Attributen)",
-          "tibber_pulse_power_entity": "Tibber Pulse Leistungs-Sensor (aktueller Netzbezug/Einspeisung)"
+          "tibber_pulse_consumption_entity": "Tibber Pulse Verbrauch (aktuelle bezogene Leistung)",
+          "tibber_pulse_production_entity": "Tibber Pulse Einspeisung (aktuelle eingespeiste Leistung)"
         }
       },
       "devices": {

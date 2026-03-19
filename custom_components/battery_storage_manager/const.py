@@ -4,7 +4,8 @@ DOMAIN = "battery_storage_manager"
 
 # Configuration keys
 CONF_TIBBER_PRICE_ENTITY = "tibber_price_entity"
-CONF_TIBBER_PULSE_POWER_ENTITY = "tibber_pulse_power_entity"
+CONF_TIBBER_PULSE_CONSUMPTION_ENTITY = "tibber_pulse_consumption_entity"
+CONF_TIBBER_PULSE_PRODUCTION_ENTITY = "tibber_pulse_production_entity"
 CONF_CHARGER_1_SWITCH = "charger_1_switch"
 CONF_CHARGER_2_SWITCH = "charger_2_switch"
 CONF_CHARGER_1_POWER = "charger_1_power"
