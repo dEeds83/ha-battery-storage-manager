@@ -17,6 +17,18 @@ class BatteryStatusCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (!this._config) return;
+
+    // Only re-render when relevant data actually changed
+    const entityId = this._config.entity;
+    const stateObj = hass.states[entityId];
+    if (!stateObj) {
+      this._lastStateJson = null;
+      this._render();
+      return;
+    }
+    const key = stateObj.state + "|" + stateObj.last_updated;
+    if (key === this._lastStateJson) return;
+    this._lastStateJson = key;
     this._render();
   }
 

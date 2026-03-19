@@ -20,6 +20,21 @@ class BatteryPlanCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (!this._config) return;
+
+    // Only re-render when relevant data actually changed
+    const entityId = this._config.entity;
+    const stateObj = hass.states[entityId];
+    if (!stateObj) {
+      this._lastState = null;
+      this._render();
+      return;
+    }
+    const newState = stateObj.state;
+    const newPlan = stateObj.attributes.plan;
+    const planKey = newPlan ? JSON.stringify(newPlan) : "";
+    if (newState === this._lastState && planKey === this._lastPlanKey) return;
+    this._lastState = newState;
+    this._lastPlanKey = planKey;
     this._render();
   }
 
