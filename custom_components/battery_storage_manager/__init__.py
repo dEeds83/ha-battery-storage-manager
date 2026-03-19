@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
@@ -12,10 +14,26 @@ from .coordinator import BatteryStorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
+FRONTEND_DIR = Path(__file__).parent / "frontend"
+FRONTEND_CARDS = [
+    "battery-plan-card.js",
+    "battery-status-card.js",
+]
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Battery Storage Manager from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+
+    # Register frontend cards (once per HA instance)
+    if f"{DOMAIN}_frontend_registered" not in hass.data:
+        for card_file in FRONTEND_CARDS:
+            url_path = f"/{DOMAIN}/{card_file}"
+            file_path = str(FRONTEND_DIR / card_file)
+            hass.http.register_static_path(url_path, file_path, cache_headers=False)
+            add_extra_js_url(hass, url_path)
+            _LOGGER.debug("Registered frontend card: %s", url_path)
+        hass.data[f"{DOMAIN}_frontend_registered"] = True
 
     coordinator = BatteryStorageCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
@@ -24,10 +42,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Listen for options updates and apply them live
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     # Register services
     await _register_services(hass)
 
     return True
+
+
+async def _async_options_updated(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """Handle options update - apply new config to coordinator without restart."""
+    coordinator: BatteryStorageCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator.apply_options(entry.options)
+    _LOGGER.info("Options updated, applied to coordinator")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

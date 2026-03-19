@@ -20,6 +20,10 @@ CONF_MAX_SOC = "max_soc"
 CONF_PRICE_LOW_THRESHOLD = "price_low_threshold"
 CONF_PRICE_HIGH_THRESHOLD = "price_high_threshold"
 CONF_TIBBER_PRICES_ENTITY = "tibber_prices_entity"
+CONF_SOLAR_FORECAST_ENTITY = "solar_forecast_entity"
+CONF_SOLAR_FORECAST_ENTITIES = "solar_forecast_entities"
+CONF_HOUSE_CONSUMPTION_W = "house_consumption_w"
+DEFAULT_HOUSE_CONSUMPTION_W = 500  # average house consumption in watts
 
 # Defaults
 DEFAULT_MIN_SOC = 10  # percent
@@ -50,3 +54,6 @@ ATTR_NEXT_EXPENSIVE_WINDOW = "next_expensive_window"
 ATTR_ESTIMATED_SAVINGS = "estimated_savings"
 ATTR_STRATEGY = "strategy"
 ATTR_OPERATING_MODE = "operating_mode"
+ATTR_BATTERY_PLAN = "battery_plan"
+ATTR_PLAN_SUMMARY = "plan_summary"
+ATTR_EXPECTED_SOLAR_KWH = "expected_solar_kwh"

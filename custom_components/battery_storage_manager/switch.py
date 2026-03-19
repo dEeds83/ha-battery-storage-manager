@@ -29,6 +29,9 @@ async def async_setup_entry(
         AutoModeSwitch(coordinator, entry),
         ForceChargeSwitch(coordinator, entry),
         ForceDischargeSwitch(coordinator, entry),
+        AllowGridChargingSwitch(coordinator, entry),
+        AllowDischargingSwitch(coordinator, entry),
+        UseSolarForecastSwitch(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -106,6 +109,71 @@ class ForceChargeSwitch(BatteryStorageBaseSwitch):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.stop_all()
+        self.async_write_ha_state()
+
+
+class AllowGridChargingSwitch(BatteryStorageBaseSwitch):
+    """Switch to allow/disallow charging from grid."""
+
+    _attr_icon = "mdi:transmission-tower-import"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "allow_grid_charging", "Netzladen erlauben")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.allow_grid_charging
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self.coordinator.allow_grid_charging = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self.coordinator.allow_grid_charging = False
+        self.async_write_ha_state()
+
+
+class AllowDischargingSwitch(BatteryStorageBaseSwitch):
+    """Switch to allow/disallow battery discharging."""
+
+    _attr_icon = "mdi:battery-arrow-down-outline"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "allow_discharging", "Entladen erlauben")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.allow_discharging
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self.coordinator.allow_discharging = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self.coordinator.allow_discharging = False
+        self.async_write_ha_state()
+
+
+class UseSolarForecastSwitch(BatteryStorageBaseSwitch):
+    """Switch to enable/disable solar-aware planning."""
+
+    _attr_icon = "mdi:solar-power-variant-outline"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "use_solar_forecast", "Solarprognose nutzen"
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.use_solar_forecast
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self.coordinator.use_solar_forecast = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self.coordinator.use_solar_forecast = False
         self.async_write_ha_state()
 
 
