@@ -8,6 +8,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -148,7 +149,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         )
         self._read_sensor_states()
         await self._update_price_forecast()
-        self._read_solar_forecast()
+        await self._read_solar_forecast()
         self._create_battery_plan()
 
         if self._strategy == STRATEGY_PRICE_OPTIMIZED:
@@ -361,16 +362,17 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
     # ── Solar forecast ──────────────────────────────────────────────
 
-    def _read_solar_forecast(self) -> None:
+    async def _read_solar_forecast(self) -> None:
         """Read solar production forecast from configured entities.
 
         Supports multiple entities (e.g. multiple roof arrays, mixed services).
         All forecasts are summed together per hour.
 
         Supported formats per entity:
-        - Forecast.Solar: watt_hours_period attribute {ISO_datetime: Wh}
+        - Forecast.Solar energy platform (wh_hours via config entry)
+        - Sensor attributes: watt_hours_period {ISO_datetime: Wh}
         - Solcast / generic: forecast attribute [{period_start, pv_estimate}, ...]
-        - watt_hours attribute (Forecast.Solar cumulative)
+        - Sensor attributes: watt_hours (cumulative)
         """
         self._solar_forecast = {}
         self._expected_solar_kwh = 0.0
@@ -389,8 +391,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         if not entity_ids:
             return
 
+        # Try to read from the HA energy platform first (works for forecast_solar)
+        energy_data_found = await self._read_energy_solar_forecasts(entity_ids)
+
+        # For entities not covered by energy platform, fall back to attributes
         for entity_id in entity_ids:
-            self._read_single_solar_forecast(entity_id)
+            if entity_id not in energy_data_found:
+                self._read_single_solar_forecast(entity_id)
 
         if self._solar_forecast:
             _LOGGER.debug(
@@ -404,6 +411,94 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         now_key = now.strftime("%Y-%m-%dT%H")
         remaining = {k: v for k, v in self._solar_forecast.items() if k >= now_key}
         self._expected_solar_kwh = sum(remaining.values()) / 1000
+
+    async def _read_energy_solar_forecasts(
+        self, entity_ids: list[str]
+    ) -> set[str]:
+        """Try to read solar forecasts via the HA energy platform.
+
+        This works for integrations like forecast_solar that expose data
+        through the energy platform but not through sensor attributes.
+
+        Returns set of entity_ids that were successfully read.
+        """
+        covered: set[str] = set()
+
+        # Map entity_ids to their config entries
+        entity_registry = er.async_get(self.hass)
+        entries_to_fetch: dict[str, list[str]] = {}  # config_entry_id -> [entity_ids]
+
+        for entity_id in entity_ids:
+            entry = entity_registry.async_get(entity_id)
+            if not entry or not entry.config_entry_id:
+                continue
+            config_entry = self.hass.config_entries.async_get_entry(
+                entry.config_entry_id
+            )
+            if not config_entry or config_entry.domain != "forecast_solar":
+                continue
+            entries_to_fetch.setdefault(entry.config_entry_id, []).append(
+                entity_id
+            )
+
+        if not entries_to_fetch:
+            return covered
+
+        for config_entry_id, eids in entries_to_fetch.items():
+            try:
+                config_entry = self.hass.config_entries.async_get_entry(
+                    config_entry_id
+                )
+                if (
+                    not config_entry
+                    or not hasattr(config_entry, "runtime_data")
+                    or config_entry.runtime_data is None
+                ):
+                    continue
+
+                # forecast_solar stores an Estimate object in runtime_data
+                estimate = config_entry.runtime_data
+                wh_period = getattr(estimate, "wh_period", None)
+                if not wh_period:
+                    # Try .data.wh_period for wrapped data
+                    data = getattr(estimate, "data", None)
+                    if data:
+                        wh_period = getattr(data, "wh_period", None)
+
+                if not isinstance(wh_period, dict) or not wh_period:
+                    _LOGGER.debug(
+                        "forecast_solar entry %s: no wh_period data found",
+                        config_entry_id,
+                    )
+                    continue
+
+                for dt_obj, wh in wh_period.items():
+                    try:
+                        if isinstance(dt_obj, datetime):
+                            hour_key = dt_obj.strftime("%Y-%m-%dT%H")
+                        else:
+                            hour_key = self._to_hour_key(str(dt_obj))
+                        self._solar_forecast[hour_key] = (
+                            self._solar_forecast.get(hour_key, 0) + float(wh)
+                        )
+                    except (ValueError, TypeError):
+                        continue
+
+                covered.update(eids)
+                _LOGGER.debug(
+                    "Solar forecast from forecast_solar entry %s "
+                    "(energy platform): %d entries",
+                    config_entry_id,
+                    len(wh_period),
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Could not read forecast_solar energy data for %s",
+                    config_entry_id,
+                    exc_info=True,
+                )
+
+        return covered
 
     def _read_single_solar_forecast(self, entity_id: str) -> None:
         """Read solar forecast from a single entity and add to combined forecast."""
