@@ -6,7 +6,7 @@
         "description": "Configure the Tibber entities for electricity prices and consumption metering.",
         "data": {
           "tibber_price_entity": "Tibber price sensor (current price)",
-          "tibber_prices_entity": "Tibber prices overview sensor (with today/tomorrow attributes)",
+          "tibber_prices_entity": "Tibber prices overview sensor (optional, leave empty to use price sensor)",
           "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor (current power drawn from grid)",
           "tibber_pulse_production_entity": "Tibber Pulse production sensor (current power fed into grid)"
         }
@@ -19,8 +19,9 @@
           "charger_1_power": "Charger 1 power (W)",
           "charger_2_switch": "Charger 2 switch",
           "charger_2_power": "Charger 2 power (W)",
-          "inverter_feed_switch": "Feed inverter switch",
-          "inverter_feed_power": "Feed inverter power (W)"
+          "inverter_feed_switch": "Feed inverter switch (optional, on/off only)",
+          "inverter_feed_power_entity": "Feed inverter power entity (optional, for zero-feed control)",
+          "inverter_feed_power": "Feed inverter max power (W)"
         }
       },
       "battery": {

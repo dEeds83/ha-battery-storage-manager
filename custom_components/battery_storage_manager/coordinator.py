@@ -26,6 +26,7 @@ from .const import (
     CONF_CHARGER_2_POWER,
     CONF_CHARGER_2_SWITCH,
     CONF_INVERTER_FEED_POWER,
+    CONF_INVERTER_FEED_POWER_ENTITY,
     CONF_INVERTER_FEED_SWITCH,
     CONF_MAX_SOC,
     CONF_MIN_SOC,
@@ -78,6 +79,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._charger_2_power = self._config.get(CONF_CHARGER_2_POWER, 0)
         self._inverter_switch = self._config.get(CONF_INVERTER_FEED_SWITCH, "")
         self._inverter_power = self._config.get(CONF_INVERTER_FEED_POWER, 0)
+        self._inverter_power_entity = self._config.get(CONF_INVERTER_FEED_POWER_ENTITY, "")
         self._battery_soc_entity = self._config.get(CONF_BATTERY_SOC_ENTITY, "")
         self._battery_capacity = self._config.get(
             CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY
@@ -103,6 +105,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._charger_1_active = False
         self._charger_2_active = False
         self._inverter_active = False
+        self._inverter_target_power: float = 0  # current target power for zero-feed
+
+        # Track whether entities have ever been seen (for startup race condition)
+        self._price_entity_seen = False
+        self._prices_entity_seen = False
+        self._fallback_price_range: dict | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch and process data, then decide on battery action."""
@@ -152,11 +160,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     price_state.state,
                 )
             else:
-                _LOGGER.warning(
+                # Use debug level if entity was never seen (startup race condition)
+                log_fn = _LOGGER.warning if self._price_entity_seen else _LOGGER.debug
+                log_fn(
                     "Price entity '%s' not found in Home Assistant. "
                     "Check that the entity ID is correct and the Tibber integration is loaded.",
                     self._tibber_price_entity,
                 )
+
+        if price_state:
+            self._price_entity_seen = True
 
         # Battery SOC
         soc_state = self.hass.states.get(self._battery_soc_entity)
@@ -196,13 +209,19 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
     def _update_price_forecast(self) -> None:
         """Update price forecast from Tibber prices entity attributes."""
-        prices_state = self.hass.states.get(self._tibber_prices_entity)
+        # Use the dedicated prices entity if configured, otherwise fall back to price entity
+        prices_entity = self._tibber_prices_entity or self._tibber_price_entity
+        prices_state = self.hass.states.get(prices_entity)
         if not prices_state:
-            _LOGGER.warning(
+            # Use debug level if entity was never seen (startup race condition)
+            log_fn = _LOGGER.warning if self._prices_entity_seen else _LOGGER.debug
+            log_fn(
                 "Prices forecast entity '%s' not found in Home Assistant.",
-                self._tibber_prices_entity,
+                prices_entity,
             )
             return
+
+        self._prices_entity_seen = True
 
         # Tibber provides today and tomorrow prices in attributes
         today = prices_state.attributes.get("today", [])
@@ -211,7 +230,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         _LOGGER.debug(
             "Price forecast from '%s': %d today entries, %d tomorrow entries. "
             "Available attributes: %s",
-            self._tibber_prices_entity,
+            prices_entity,
             len(today) if isinstance(today, list) else 0,
             len(tomorrow) if isinstance(tomorrow, list) else 0,
             list(prices_state.attributes.keys()),
@@ -224,6 +243,37 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     "start": price_entry.get("startsAt", ""),
                     "total": price_entry.get("total", 0),
                 })
+
+        # Fallback: if no today/tomorrow forecast available, build a simplified
+        # forecast from summary attributes (max_price, avg_price, min_price)
+        if not self._price_forecast:
+            max_price = prices_state.attributes.get("max_price")
+            avg_price = prices_state.attributes.get("avg_price")
+            min_price = prices_state.attributes.get("min_price")
+
+            if max_price is not None and min_price is not None:
+                _LOGGER.debug(
+                    "No hourly forecast available. Using price summary attributes: "
+                    "min=%.4f, avg=%.4f, max=%.4f",
+                    min_price,
+                    avg_price or 0,
+                    max_price,
+                )
+                # Store summary prices for threshold calculations
+                self._fallback_price_range = {
+                    "min": float(min_price),
+                    "avg": float(avg_price) if avg_price is not None else None,
+                    "max": float(max_price),
+                }
+            else:
+                self._fallback_price_range = None
+                _LOGGER.debug(
+                    "No hourly forecast and no summary price attributes available "
+                    "on '%s'.",
+                    prices_entity,
+                )
+        else:
+            self._fallback_price_range = None
 
         _LOGGER.debug("Price forecast built with %d entries", len(self._price_forecast))
 
@@ -271,6 +321,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 dynamic_threshold = sorted_prices[threshold_idx]
                 return self._current_price <= dynamic_threshold
 
+        # Fallback: use summary price range from entity attributes
+        if self._fallback_price_range:
+            price_range = self._fallback_price_range
+            # "Cheap" = in the lower third of today's price range
+            low_third = price_range["min"] + (price_range["max"] - price_range["min"]) / 3
+            return self._current_price <= low_third
+
         return self._current_price <= self._price_low / 100  # convert ct to EUR
 
     def _is_in_expensive_window(self) -> bool:
@@ -286,6 +343,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 threshold_idx = (len(sorted_prices) * 2) // 3
                 dynamic_threshold = sorted_prices[threshold_idx]
                 return self._current_price >= dynamic_threshold
+
+        # Fallback: use summary price range from entity attributes
+        if self._fallback_price_range:
+            price_range = self._fallback_price_range
+            # "Expensive" = in the upper third of today's price range
+            high_third = price_range["min"] + (price_range["max"] - price_range["min"]) * 2 / 3
+            return self._current_price >= high_third
 
         return self._current_price >= self._price_high / 100  # convert ct to EUR
 
@@ -380,42 +444,92 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             await self.hass.services.async_call(
                 "switch", "turn_off", {"entity_id": self._inverter_switch}
             )
-            self._inverter_active = False
+        await self._set_inverter_power(0)
+        self._inverter_active = False
 
         self._operating_mode = MODE_CHARGING
 
     async def _start_discharging(self) -> None:
-        """Activate inverter to discharge battery into home network."""
-        if self._operating_mode == MODE_DISCHARGING:
+        """Activate inverter to discharge battery into home network.
+
+        If an inverter power entity is configured, use zero-feed regulation
+        to match the inverter output to the current grid import, preventing
+        any export back to the grid.
+        """
+        # Turn off chargers (always, even if already discharging)
+        if self._operating_mode != MODE_DISCHARGING:
+            _LOGGER.info(
+                "Starting battery discharge (SOC: %.1f%%, Price: %.4f EUR/kWh)",
+                self._battery_soc or 0,
+                self._current_price or 0,
+            )
+
+            if self._charger_1_switch:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": self._charger_1_switch}
+                )
+                self._charger_1_active = False
+
+            if self._charger_2_switch:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": self._charger_2_switch}
+                )
+                self._charger_2_active = False
+
+            # Turn on inverter switch if configured (simple on/off mode)
+            if self._inverter_switch:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": self._inverter_switch}
+                )
+
+            self._inverter_active = True
+            self._operating_mode = MODE_DISCHARGING
+
+        # Zero-feed regulation: adjust inverter power to match grid import
+        if self._inverter_power_entity:
+            await self._regulate_zero_feed()
+
+    async def _regulate_zero_feed(self) -> None:
+        """Regulate inverter power to match grid import (zero-feed).
+
+        Reads current grid_power (positive = importing from grid) and adjusts
+        the inverter output so that grid import approaches zero without
+        exporting back to the grid.
+        """
+        if self._grid_power is None:
+            _LOGGER.debug("No grid power data available for zero-feed regulation")
             return
 
-        _LOGGER.info(
-            "Starting battery discharge (SOC: %.1f%%, Price: %.4f EUR/kWh)",
-            self._battery_soc or 0,
-            self._current_price or 0,
+        max_power = self._inverter_power or 800
+
+        # Target: current inverter output + what we're still importing from grid
+        # grid_power is positive when importing, negative when exporting
+        new_target = self._inverter_target_power + self._grid_power
+
+        # Clamp between 0 and max power (never negative, never over max)
+        new_target = max(0, min(max_power, new_target))
+
+        # Only update if the change is significant (> 20W) to avoid excessive calls
+        if abs(new_target - self._inverter_target_power) < 20:
+            return
+
+        self._inverter_target_power = new_target
+
+        _LOGGER.debug(
+            "Zero-feed regulation: grid_power=%.0fW, setting inverter to %.0fW (max: %dW)",
+            self._grid_power,
+            new_target,
+            max_power,
         )
 
-        # Turn off chargers
-        if self._charger_1_switch:
-            await self.hass.services.async_call(
-                "switch", "turn_off", {"entity_id": self._charger_1_switch}
-            )
-            self._charger_1_active = False
-
-        if self._charger_2_switch:
-            await self.hass.services.async_call(
-                "switch", "turn_off", {"entity_id": self._charger_2_switch}
-            )
-            self._charger_2_active = False
-
-        # Turn on inverter feed
-        if self._inverter_switch:
-            await self.hass.services.async_call(
-                "switch", "turn_on", {"entity_id": self._inverter_switch}
-            )
-            self._inverter_active = True
-
-        self._operating_mode = MODE_DISCHARGING
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {
+                "entity_id": self._inverter_power_entity,
+                "value": round(new_target),
+            },
+        )
 
     async def _set_mode_idle(self) -> None:
         """Set idle mode - turn off all devices."""
@@ -443,9 +557,29 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             await self.hass.services.async_call(
                 "switch", "turn_off", {"entity_id": self._inverter_switch}
             )
-            self._inverter_active = False
+        await self._set_inverter_power(0)
+        self._inverter_active = False
 
         self._operating_mode = MODE_IDLE
+
+    async def _set_inverter_power(self, value: float) -> None:
+        """Set inverter power entity to a specific value."""
+        if not self._inverter_power_entity:
+            return
+
+        value = max(0, round(value))
+        if value == round(self._inverter_target_power):
+            return
+
+        self._inverter_target_power = value
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {
+                "entity_id": self._inverter_power_entity,
+                "value": value,
+            },
+        )
 
     async def force_charge(self) -> None:
         """Force battery into charging mode."""
@@ -490,6 +624,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "charger_1_active": self._charger_1_active,
             "charger_2_active": self._charger_2_active,
             "inverter_active": self._inverter_active,
+            "inverter_target_power": self._inverter_target_power,
             "price_forecast": self._price_forecast,
             "cheap_hours": cheap_hours,
             "expensive_hours": expensive_hours,
