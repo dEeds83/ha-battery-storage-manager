@@ -256,11 +256,13 @@ class BatteryPlanCard extends HTMLElement {
     plan.forEach(entry => {
       const cfg = ACTION_CONFIG[entry.action] || ACTION_CONFIG.idle;
       const isCurrent = entry.hour && entry.hour.startsWith(nowHour);
+      const soc = entry.expected_soc != null ? entry.expected_soc.toFixed(0) + " %" : "-";
       rows += `
         <tr class="${isCurrent ? "current-row" : ""}">
           <td class="td-time">${this._formatHour(entry.hour)}</td>
           <td class="td-price">${(entry.price * 100).toFixed(1)} ct</td>
           <td class="td-solar">${entry.solar_kwh > 0 ? entry.solar_kwh.toFixed(1) + " kWh" : "-"}</td>
+          <td class="td-soc">${soc}</td>
           <td class="td-action">
             <span class="action-badge" style="background:${cfg.color}">
               ${cfg.short}
@@ -279,6 +281,7 @@ class BatteryPlanCard extends HTMLElement {
               <th>Zeit</th>
               <th>Preis</th>
               <th>Solar</th>
+              <th>SOC</th>
               <th>Aktion</th>
               <th>Grund</th>
             </tr>
@@ -457,7 +460,7 @@ class BatteryPlanCard extends HTMLElement {
       .current-row td {
         font-weight: 500;
       }
-      .td-price, .td-solar {
+      .td-price, .td-solar, .td-soc {
         text-align: right;
         font-variant-numeric: tabular-nums;
       }

@@ -684,11 +684,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             if len(discharge_candidates) >= discharge_hours_available:
                 break
 
-        # Step 5: Build the plan
+        # Step 5: Build the plan with expected SOC tracking
         self._battery_plan = []
         charge_count = 0
         discharge_count = 0
         solar_count = 0
+        estimated_soc = current_soc
 
         for h in hourly_data:
             key = h["hour_key"]
@@ -697,6 +698,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 "price": round(h["price"], 4),
                 "solar_kwh": round(h["solar_kwh"], 2),
                 "solar_surplus_kwh": round(h["solar_surplus_kwh"], 2),
+                "expected_soc": round(estimated_soc, 1),
             }
 
             if h["solar_surplus_kwh"] > 0.05:
@@ -704,14 +706,18 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 entry["action"] = "solar_charge"
                 entry["reason"] = f"Solarüberschuss {h['solar_surplus_kwh']:.1f} kWh"
                 solar_count += 1
+                delta_kwh = min(h["solar_surplus_kwh"], charge_kwh_per_hour)
+                estimated_soc += delta_kwh / self._battery_capacity * 100
             elif key in charge_candidates:
                 entry["action"] = "charge"
                 entry["reason"] = f"Günstiger Strom ({h['price']*100:.1f} ct/kWh)"
                 charge_count += 1
+                estimated_soc += charge_kwh_per_hour / self._battery_capacity * 100
             elif key in discharge_candidates:
                 entry["action"] = "discharge"
                 entry["reason"] = f"Teurer Strom ({h['price']*100:.1f} ct/kWh)"
                 discharge_count += 1
+                estimated_soc -= discharge_kwh_per_hour / self._battery_capacity * 100
             else:
                 # Check if expensive hours are still coming → hold charge
                 remaining_expensive = [
@@ -724,6 +730,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     entry["action"] = "idle"
                     entry["reason"] = "Keine Aktion nötig"
 
+            estimated_soc = max(self._min_soc, min(self._max_soc, estimated_soc))
             self._battery_plan.append(entry)
 
         # Summary
