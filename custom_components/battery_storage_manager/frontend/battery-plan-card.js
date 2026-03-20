@@ -128,14 +128,14 @@ class BatteryPlanCard extends HTMLElement {
           ${showLegend ? this._renderLegend(counts, slotMinutes) : ""}
           <div class="summary">${stateObj.state || ""}</div>
           <div class="chart-container">
-            ${this._renderChart(plan, nowHour, minPrice, maxPrice, priceRange, showSolar)}
+            ${this._renderChart(plan, nowSlot, minPrice, maxPrice, priceRange, showSolar)}
           </div>
           <div class="toggle-row">
             <button class="toggle-btn" id="toggleTable">
               ${this._showTable ? "Tabelle ausblenden" : "Details anzeigen"}
             </button>
           </div>
-          ${this._showTable ? this._renderTable(plan, nowHour) : ""}
+          ${this._showTable ? this._renderTable(plan, nowSlot) : ""}
         </div>
       </ha-card>
     `;
@@ -196,7 +196,7 @@ class BatteryPlanCard extends HTMLElement {
     return html;
   }
 
-  _renderChart(plan, nowHour, minPrice, maxPrice, priceRange, showSolar) {
+  _renderChart(plan, nowSlot, minPrice, maxPrice, priceRange, showSolar) {
     const barWidth = Math.max(100 / plan.length, 2);
     const chartHeight = 120;
 
@@ -268,7 +268,7 @@ class BatteryPlanCard extends HTMLElement {
 
     // "Now" marker
     let nowMarkerHtml = "";
-    const nowIdx = plan.findIndex(e => e.hour && e.hour.startsWith(nowHour));
+    const nowIdx = plan.findIndex(e => e.hour && e.hour.startsWith(nowSlot));
     if (nowIdx >= 0) {
       const nowLeft = (nowIdx / plan.length) * 100 + barWidth / 2;
       nowMarkerHtml = `<div class="now-marker" style="left:${nowLeft}%"></div>`;
@@ -289,7 +289,7 @@ class BatteryPlanCard extends HTMLElement {
     `;
   }
 
-  _renderTable(plan, nowHour) {
+  _renderTable(plan, nowSlot) {
     let rows = "";
     plan.forEach(entry => {
       const cfg = ACTION_CONFIG[entry.action] || ACTION_CONFIG.idle;
