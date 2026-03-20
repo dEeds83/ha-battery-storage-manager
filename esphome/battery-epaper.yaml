@@ -371,151 +371,129 @@ display:
       it.line(P, r2y + 16, W - P, r2y + 16);
 
       // ══════════════════════════════════════════════════════════
-      // ── Time windows (compact row) ──
+      // ── FULL WIDTH 12h PRICE CHART ──
       // ══════════════════════════════════════════════════════════
-      int tw_y = r2y + 20;
-      int tw_h = 50;
-      int tw_w = (W - P * 3) / 2;
-
-      // Günstig (inverted)
-      it.filled_rectangle(P, tw_y, tw_w, tw_h);
-      it.print(P + 8, tw_y + 4, id(font_tiny), COLOR_OFF, "Guenstigstes Fenster heute");
-      if (id(next_cheap).has_state() && id(next_cheap).state.length() > 10) {
-        std::string cheap_time, cheap_day;
-        parse_time(id(next_cheap).state, cheap_time, cheap_day);
-        if (cheap_day == "heute") {
-          char cb[24];
-          if (!isnan(id(price_min_today).state))
-            snprintf(cb, sizeof(cb), "%s Uhr  ab %.1f ct", cheap_time.c_str(), id(price_min_today).state * 100);
-          else
-            snprintf(cb, sizeof(cb), "%s Uhr", cheap_time.c_str());
-          it.print(P + 8, tw_y + 20, id(font_medium), COLOR_OFF, cb);
-        } else {
-          it.print(P + 8, tw_y + 22, id(font_small), COLOR_OFF, "Kein Fenster mehr heute");
-        }
-      }
-
-      // Teuer (border)
-      int tx = P + tw_w + P;
-      it.rectangle(tx, tw_y, tw_w, tw_h);
-      it.rectangle(tx + 1, tw_y + 1, tw_w - 2, tw_h - 2);
-      it.print(tx + 8, tw_y + 4, id(font_tiny), "Teuerstes Fenster");
-      if (id(next_expensive).has_state() && id(next_expensive).state.length() > 10) {
-        std::string exp_time, exp_day;
-        parse_time(id(next_expensive).state, exp_time, exp_day);
-        char eb[28];
-        if (!isnan(id(price_max_today).state))
-          snprintf(eb, sizeof(eb), "%s Uhr  bis %.1f ct  %s",
-                   exp_time.c_str(), id(price_max_today).state * 100, exp_day.c_str());
-        else
-          snprintf(eb, sizeof(eb), "%s Uhr  %s", exp_time.c_str(), exp_day.c_str());
-        it.print(tx + 8, tw_y + 20, id(font_medium), eb);
-      }
-
-      // ══════════════════════════════════════════════════════════
-      // ── FULL WIDTH PRICE CHART ──
-      // ══════════════════════════════════════════════════════════
-      int chart_top = tw_y + tw_h + 10;
-      int chart_left = P + 34;        // room for Y-axis
-      int chart_right = W - P;
+      int chart_top = r2y + 22;
+      int chart_left = P + 38;
+      int chart_right = W - P - 4;
       int chart_w = chart_right - chart_left;
-      int chart_bottom = H - 22;      // room for footer
+      int chart_bottom = H - 20;
       int chart_h = chart_bottom - chart_top;
 
-      it.print(P, chart_top - 2, id(font_small), "Preisverlauf");
+      it.print(P, chart_top - 4, id(font_small), "Preisverlauf 12h");
 
-      // Parse price CSV
-      float prices[16];
+      // Parse prices (limit to 12)
+      float prices[12];
       int price_count = 0;
       if (id(prices_csv).has_state() && id(prices_csv).state.length() > 3) {
-        price_count = parse_prices(id(prices_csv).state, prices, 16);
+        price_count = parse_prices(id(prices_csv).state, prices, 12);
       }
 
       if (price_count >= 2) {
-        // Find min/max for scaling
+        // Find min/max and their indices
         float p_min = prices[0], p_max = prices[0];
+        int min_idx = 0, max_idx = 0;
         for (int i = 1; i < price_count; i++) {
-          if (prices[i] < p_min) p_min = prices[i];
-          if (prices[i] > p_max) p_max = prices[i];
+          if (prices[i] < p_min) { p_min = prices[i]; min_idx = i; }
+          if (prices[i] > p_max) { p_max = prices[i]; max_idx = i; }
         }
-        // Add 5% padding
-        float p_pad = (p_max - p_min) * 0.05;
+        // Padding
+        float p_pad = (p_max - p_min) * 0.08;
         if (p_pad < 0.005) p_pad = 0.01;
-        p_min -= p_pad;
-        p_max += p_pad;
-        float p_range = p_max - p_min;
+        float scale_min = p_min - p_pad;
+        float scale_max = p_max + p_pad;
+        float p_range = scale_max - scale_min;
+
+        int cur_hour = id(ha_time).now().is_valid() ? id(ha_time).now().hour : 0;
+
+        // Chart title with min/max info
+        char info[60];
+        snprintf(info, sizeof(info), "Min: %.1f ct (%02d Uhr)   Max: %.1f ct (%02d Uhr)",
+                 p_min * 100, (cur_hour + min_idx) % 24,
+                 p_max * 100, (cur_hour + max_idx) % 24);
+        it.print(W - P, chart_top - 4, id(font_tiny), TextAlign::TOP_RIGHT, info);
+        chart_top += 14;
+        chart_h -= 14;
 
         // Axes
-        it.line(chart_left, chart_top, chart_left, chart_bottom);      // Y-axis
-        it.line(chart_left, chart_bottom, chart_right, chart_bottom);  // X-axis
+        it.line(chart_left, chart_top, chart_left, chart_bottom);
+        it.line(chart_left, chart_bottom, chart_right, chart_bottom);
 
-        // Y-axis labels
+        // Y-axis labels (top, mid, bottom)
         char yl[8];
-        snprintf(yl, sizeof(yl), "%.0f ct", p_max * 100);
-        it.print(chart_left - 4, chart_top, id(font_tiny), TextAlign::TOP_RIGHT, yl);
-        snprintf(yl, sizeof(yl), "%.0f ct", p_min * 100);
+        snprintf(yl, sizeof(yl), "%.0f ct", scale_max * 100);
+        it.print(chart_left - 4, chart_top - 2, id(font_tiny), TextAlign::TOP_RIGHT, yl);
+        snprintf(yl, sizeof(yl), "%.0f ct", scale_min * 100);
         it.print(chart_left - 4, chart_bottom - 10, id(font_tiny), TextAlign::TOP_RIGHT, yl);
-        // Mid label
-        snprintf(yl, sizeof(yl), "%.0f", ((p_max + p_min) / 2) * 100);
+        float mid_price = (scale_max + scale_min) / 2;
+        snprintf(yl, sizeof(yl), "%.0f", mid_price * 100);
         it.print(chart_left - 4, chart_top + chart_h / 2 - 5, id(font_tiny), TextAlign::TOP_RIGHT, yl);
-        // Mid grid line (dotted)
-        for (int dx = chart_left; dx < chart_right; dx += 8) {
+        // Dotted mid line
+        for (int dx = chart_left + 2; dx < chart_right; dx += 6) {
           it.draw_pixel_at(dx, chart_top + chart_h / 2);
         }
 
-        // X-axis labels
-        int cur_hour = id(ha_time).now().is_valid() ? id(ha_time).now().hour : 0;
+        // X-axis labels (every 2 hours)
         for (int i = 0; i < price_count; i += 2) {
           float xf = chart_left + (float)i / (price_count - 1) * chart_w;
           char xl[4];
           snprintf(xl, sizeof(xl), "%02d", (cur_hour + i) % 24);
           it.print((int)xf, chart_bottom + 2, id(font_tiny), TextAlign::TOP_CENTER, xl);
-          // Tick
-          it.line((int)xf, chart_bottom, (int)xf, chart_bottom + 2);
+          it.line((int)xf, chart_bottom, (int)xf, chart_bottom + 3);
         }
 
-        // Draw price line (thick: draw 3 lines offset by 1px)
+        // Draw line (thick)
         for (int i = 0; i < price_count - 1; i++) {
           float x1 = chart_left + (float)i / (price_count - 1) * chart_w;
           float x2 = chart_left + (float)(i + 1) / (price_count - 1) * chart_w;
-          float y1 = chart_bottom - ((prices[i] - p_min) / p_range) * chart_h;
-          float y2 = chart_bottom - ((prices[i + 1] - p_min) / p_range) * chart_h;
+          float y1 = chart_bottom - ((prices[i] - scale_min) / p_range) * chart_h;
+          float y2 = chart_bottom - ((prices[i + 1] - scale_min) / p_range) * chart_h;
           it.line((int)x1, (int)y1, (int)x2, (int)y2);
           it.line((int)x1, (int)y1 - 1, (int)x2, (int)y2 - 1);
-          it.line((int)x1, (int)y1 + 1, (int)x2, (int)y2 + 1);
         }
 
-        // Draw dots at each data point
+        // Dots
         for (int i = 0; i < price_count; i++) {
           float xf = chart_left + (float)i / (price_count - 1) * chart_w;
-          float yf = chart_bottom - ((prices[i] - p_min) / p_range) * chart_h;
-          it.filled_circle((int)xf, (int)yf, 3);
+          float yf = chart_bottom - ((prices[i] - scale_min) / p_range) * chart_h;
+          it.filled_circle((int)xf, (int)yf, 2);
         }
 
-        // Current price marker (first point, larger)
-        float cy = chart_bottom - ((prices[0] - p_min) / p_range) * chart_h;
-        it.filled_circle(chart_left, (int)cy, 5);
-        char cp[10];
-        snprintf(cp, sizeof(cp), "%.1f", prices[0] * 100);
-        it.print(chart_left + 8, (int)cy - 8, id(font_tiny), cp);
+        // Highlight min point (open circle)
+        {
+          float xf = chart_left + (float)min_idx / (price_count - 1) * chart_w;
+          float yf = chart_bottom - ((prices[min_idx] - scale_min) / p_range) * chart_h;
+          it.circle((int)xf, (int)yf, 6);
+          it.circle((int)xf, (int)yf, 7);
+        }
+
+        // Highlight max point (filled circle)
+        {
+          float xf = chart_left + (float)max_idx / (price_count - 1) * chart_w;
+          float yf = chart_bottom - ((prices[max_idx] - scale_min) / p_range) * chart_h;
+          it.filled_circle((int)xf, (int)yf, 6);
+        }
+
+        // Current price label (first point)
+        {
+          float yf = chart_bottom - ((prices[0] - scale_min) / p_range) * chart_h;
+          it.filled_circle(chart_left, (int)yf, 4);
+          char cp[10];
+          snprintf(cp, sizeof(cp), "%.1f", prices[0] * 100);
+          it.print(chart_left + 8, (int)yf - 8, id(font_tiny), cp);
+        }
 
       } else {
-        // No price data available
-        it.print(W / 2, chart_top + chart_h / 2,
-                 id(font_small), TextAlign::CENTER, "Keine Preisdaten");
+        it.print(W / 2, chart_top + 40, id(font_small), TextAlign::CENTER, "Keine Preisdaten");
       }
 
-      // ══════════════════════════════════════════════════════════
-      // ── FOOTER ──
-      // ══════════════════════════════════════════════════════════
-      int foot_y = H - 16;
-      it.line(P, foot_y, W - P, foot_y);
-
+      // ── Footer ──
+      int foot_y = H - 14;
       if (id(strategy).has_state()) {
         std::string s = id(strategy).state;
         if (s == "price_optimized") s = "Preisoptimiert";
         else if (s == "self_consumption") s = "Eigenverbrauch";
         else if (s == "manual") s = "Manuell";
-        it.print(P, foot_y + 1, id(font_tiny), s.c_str());
+        it.print(P, foot_y, id(font_tiny), s.c_str());
       }
-      it.print(W - P, foot_y + 1, id(font_tiny), TextAlign::TOP_RIGHT, "Alle 30 min");
+      it.print(W - P, foot_y, id(font_tiny), TextAlign::TOP_RIGHT, "Alle 30 min");
