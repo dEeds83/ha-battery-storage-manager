@@ -919,23 +919,27 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             await self._start_discharging()
         elif action == "solar_charge":
             # AC-coupled system: solar surplus flows through the house network
-            # and needs the chargers to be ON to charge the battery
+            # and needs the chargers to be ON to charge the battery.
+            # grid_power already includes the draw of active chargers, so we
+            # must add their power back to get the true solar surplus.
+            true_surplus = self._calculate_true_solar_surplus()
             if (
-                self._grid_power is not None
-                and self._grid_power < -50
+                true_surplus is not None
+                and true_surplus > 50
                 and self._battery_soc < self._max_soc
             ):
-                surplus_w = abs(self._grid_power)
                 _LOGGER.debug(
                     "Plan action: SOLAR_CHARGE - charging from solar surplus "
-                    "(grid_power=%.0fW, surplus=%.0fW)",
-                    self._grid_power, surplus_w,
+                    "(grid_power=%.0fW, true_surplus=%.0fW)",
+                    self._grid_power, true_surplus,
                 )
-                await self._start_solar_charging(surplus_w)
+                await self._start_solar_charging(true_surplus)
             elif (
                 self._allow_discharging
                 and self._grid_power is not None
                 and self._grid_power > 50
+                and not self._charger_1_active
+                and not self._charger_2_active
                 and self._battery_soc > self._min_soc
             ):
                 _LOGGER.debug("Plan action: SOLAR_CHARGE - discharging to cover grid import")
@@ -1002,6 +1006,35 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._inverter_active = False
 
         self._operating_mode = MODE_CHARGING
+
+    def _calculate_true_solar_surplus(self) -> float | None:
+        """Calculate the true solar surplus, compensating for active charger draw.
+
+        grid_power reflects what the meter sees *after* chargers are already
+        drawing.  To know the real solar surplus we must add back the power
+        that active chargers are consuming, and subtract any inverter feed.
+
+        Example: grid_power = -200W, charger1 (500W) active
+          → true surplus = 500 - (-200) = 700W
+        """
+        if self._grid_power is None:
+            return None
+
+        active_draw = 0
+        if self._charger_1_active:
+            active_draw += self._charger_1_power or 0
+        if self._charger_2_active:
+            active_draw += self._charger_2_power or 0
+
+        # Inverter feeds power INTO the house network, reducing grid import.
+        # Subtract it to get the pure solar contribution.
+        inverter_feed = 0
+        if self._inverter_active and self._inverter_target_power > 0:
+            inverter_feed = self._inverter_target_power
+
+        # true_surplus = charger_draw + inverter_feed - grid_power
+        # (grid_power negative = export, so subtracting it adds the export)
+        return active_draw + inverter_feed - self._grid_power
 
     async def _start_solar_charging(self, surplus_w: float) -> None:
         """Activate chargers proportionally to available solar surplus.
