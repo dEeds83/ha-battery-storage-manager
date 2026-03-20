@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -26,6 +27,9 @@ from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_SOC_ENTITY,
     CONF_CHARGERS,
+    CONSUMPTION_STATS_ROLLING_DAYS,
+    STORAGE_KEY_CONSUMPTION,
+    STORAGE_VERSION_CONSUMPTION,
     CONF_HOUSE_CONSUMPTION_W,
     CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
     CONF_INVERTER_FEED_POWER,
@@ -151,10 +155,110 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._charger_min_on_time = timedelta(seconds=120)  # min 2 min on
         self._charger_min_off_time = timedelta(seconds=60)   # min 1 min off
 
+        # Consumption statistics: rolling average per hour-of-day
+        # Format: {"0": [w1, w2, ...], "1": [...], ..., "23": [...]}
+        self._consumption_store = Store(
+            hass,
+            STORAGE_VERSION_CONSUMPTION,
+            f"{DOMAIN}.{entry.entry_id}.{STORAGE_KEY_CONSUMPTION}",
+        )
+        self._consumption_stats: dict[str, list[float]] = {}
+        self._consumption_hourly_samples: list[float] = []  # samples within current hour
+        self._consumption_last_hour: int | None = None
+        self._consumption_loaded = False
+
         # Track whether entities have ever been seen (for startup race condition)
         self._price_entity_seen = False
         self._prices_entity_seen = False
         self._fallback_price_range: dict | None = None
+
+    async def _load_consumption_stats(self) -> None:
+        """Load consumption statistics from persistent storage."""
+        if self._consumption_loaded:
+            return
+        data = await self._consumption_store.async_load()
+        if data and isinstance(data, dict):
+            self._consumption_stats = data
+            total = sum(len(v) for v in self._consumption_stats.values())
+            _LOGGER.debug("Loaded consumption stats: %d entries across %d hours",
+                          total, len(self._consumption_stats))
+        else:
+            self._consumption_stats = {}
+        self._consumption_loaded = True
+
+    async def _record_consumption(self) -> None:
+        """Record current grid consumption for the current hour.
+
+        Collects samples every update cycle (30s) and when the hour changes,
+        stores the average as one data point for that hour-of-day.
+        Only records net consumption (positive grid_power = import from grid).
+        """
+        if self._grid_power is None:
+            return
+
+        now = dt_util.now()
+        current_hour = now.hour
+
+        # Collect sample (only positive = actual consumption from grid)
+        # When exporting, consumption from grid is 0
+        consumption_w = max(0, self._grid_power)
+        # Add back charger and inverter draw to get pure house consumption
+        charger_draw = sum(c["power"] for c in self._chargers if c["active"])
+        inverter_feed = self._inverter_target_power if self._inverter_active else 0
+        # Pure house consumption ≈ grid_import + solar_production - charger_draw + inverter_feed
+        # Since we only have grid_power: house ≈ grid_power + charger_draw - inverter_feed
+        # (when grid_power is negative, house is covered by solar)
+        house_w = self._grid_power + charger_draw - inverter_feed
+        house_w = max(0, house_w)
+
+        self._consumption_hourly_samples.append(house_w)
+
+        # When the hour changes, store the average for the previous hour
+        if self._consumption_last_hour is not None and current_hour != self._consumption_last_hour:
+            if self._consumption_hourly_samples:
+                avg_w = sum(self._consumption_hourly_samples) / len(self._consumption_hourly_samples)
+                hour_key = str(self._consumption_last_hour)
+
+                if hour_key not in self._consumption_stats:
+                    self._consumption_stats[hour_key] = []
+
+                self._consumption_stats[hour_key].append(round(avg_w, 1))
+
+                # Keep only the last N days
+                max_entries = CONSUMPTION_STATS_ROLLING_DAYS
+                if len(self._consumption_stats[hour_key]) > max_entries:
+                    self._consumption_stats[hour_key] = \
+                        self._consumption_stats[hour_key][-max_entries:]
+
+                _LOGGER.debug(
+                    "Consumption stats: hour %s avg %.0fW "
+                    "(%d samples, %d days stored)",
+                    hour_key, avg_w,
+                    len(self._consumption_hourly_samples),
+                    len(self._consumption_stats[hour_key]),
+                )
+
+                # Persist to disk
+                await self._consumption_store.async_save(self._consumption_stats)
+
+            self._consumption_hourly_samples = []
+
+        self._consumption_last_hour = current_hour
+
+    def get_hourly_consumption_forecast(self) -> dict[int, float]:
+        """Get predicted consumption per hour-of-day (0-23) in watts.
+
+        Returns a dict mapping hour (int) → average consumption (W).
+        Falls back to configured house_consumption_w for hours without data.
+        """
+        forecast: dict[int, float] = {}
+        for hour in range(24):
+            samples = self._consumption_stats.get(str(hour), [])
+            if samples:
+                forecast[hour] = sum(samples) / len(samples)
+            else:
+                forecast[hour] = self._house_consumption_w
+        return forecast
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch and process data, then decide on battery action."""
@@ -163,8 +267,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._tibber_price_entity,
             self._tibber_prices_entity,
         )
+        await self._load_consumption_stats()
         self._read_sensor_states()
         self._validate_operating_mode()
+        await self._record_consumption()
         await self._update_price_forecast()
         await self._read_solar_forecast()
         self._create_battery_plan()
@@ -709,11 +815,21 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         charge_kwh_h = charge_power_w / 1000
         discharge_power_w = self._inverter_power or 800
         discharge_kwh_h = discharge_power_w / 1000
-        house_kwh_h = self._house_consumption_w / 1000
         cap = self._battery_capacity
+
+        # Per-hour consumption forecast (rolling average or fallback)
+        consumption_forecast = self.get_hourly_consumption_forecast()
 
         # Enrich hourly data with solar info and effective charge cost
         for h in hourly_data:
+            # Extract hour-of-day from hour_key (format: "2024-01-15T14")
+            try:
+                hour_of_day = int(h["hour_key"].split("T")[1])
+            except (IndexError, ValueError):
+                hour_of_day = 12  # fallback
+            h["house_w"] = consumption_forecast.get(hour_of_day, self._house_consumption_w)
+            house_kwh_h = h["house_w"] / 1000
+
             solar_wh = self._solar_forecast.get(h["hour_key"], 0)
             h["solar_kwh"] = solar_wh / 1000
             h["solar_surplus_kwh"] = max(0, h["solar_kwh"] - house_kwh_h)
@@ -762,7 +878,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             # Charge candidate: effective cost (solar reduces it)
             charge_cands.append((i, h["effective_charge_cost"]))
             # Discharge candidate: only hours with low solar surplus
-            if h["solar_surplus_kwh"] < house_kwh_h * 0.3:
+            if h["solar_surplus_kwh"] < (h["house_w"] / 1000) * 0.3:
                 discharge_cands.append((i, h["price"]))
 
         charge_cands.sort(key=lambda x: x[1])
@@ -1602,6 +1718,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "allow_grid_charging": self._allow_grid_charging,
             "allow_discharging": self._allow_discharging,
             "use_solar_forecast": self._use_solar_forecast,
+            "consumption_forecast": self.get_hourly_consumption_forecast(),
         }
 
     # Properties for entities

@@ -39,6 +39,7 @@ async def async_setup_entry(
         BatteryPlanSensor(coordinator, entry),
         PlannedActionSensor(coordinator, entry),
         ExpectedSolarSensor(coordinator, entry),
+        ConsumptionForecastSensor(coordinator, entry),
     ]
 
     # Dynamic charger status sensors
@@ -429,3 +430,40 @@ class ExpectedSolarSensor(BatteryStorageBaseSensor):
             if val is not None:
                 return round(val, 2)
         return None
+
+
+class ConsumptionForecastSensor(BatteryStorageBaseSensor):
+    """Sensor showing the current hour's predicted consumption based on rolling average."""
+
+    _attr_icon = "mdi:home-lightning-bolt"
+    _attr_native_unit_of_measurement = "W"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "consumption_forecast", "Verbrauchsprognose"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if not self.coordinator.data:
+            return None
+        forecast = self.coordinator.data.get("consumption_forecast", {})
+        if not forecast:
+            return None
+        from homeassistant.util import dt as dt_util
+        current_hour = dt_util.now().hour
+        val = forecast.get(current_hour)
+        return round(val) if val is not None else None
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        forecast = self.coordinator.data.get("consumption_forecast", {})
+        return {
+            "hourly_forecast_w": {
+                f"{h:02d}:00": round(w) for h, w in sorted(forecast.items())
+            },
+        }
