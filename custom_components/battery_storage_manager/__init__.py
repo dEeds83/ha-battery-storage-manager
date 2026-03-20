@@ -35,7 +35,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             StaticPathConfig(url_path, file_path, cache_headers=False)
         )
         # Add version query param to bust browser cache on updates
-        add_extra_js_url(hass, f"{url_path}?v=1.5.0")
+        add_extra_js_url(hass, f"{url_path}?v=1.5.1")
         _LOGGER.debug("Registered frontend card: %s", url_path)
     await hass.http.async_register_static_paths(static_paths)
 
