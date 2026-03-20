@@ -1351,12 +1351,41 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             else:
                 _LOGGER.debug("Plan action: SOLAR_CHARGE - idle (no surplus/full)")
                 await self._set_mode_idle()
-        elif action == "hold":
-            _LOGGER.debug("Plan action: HOLD - keeping charge for later")
-            await self._set_mode_idle()
+        elif action in ("hold", "idle"):
+            # Even during hold/idle: capture free solar surplus if available
+            if await self._try_solar_opportunistic():
+                _LOGGER.debug(
+                    "Plan action: %s - but charging from solar surplus",
+                    action.upper(),
+                )
+            else:
+                _LOGGER.debug("Plan action: %s", action.upper())
+                await self._set_mode_idle()
         else:
-            _LOGGER.debug("Plan action: IDLE")
-            await self._set_mode_idle()
+            if not await self._try_solar_opportunistic():
+                _LOGGER.debug("Plan action: IDLE (unknown action: %s)", action)
+                await self._set_mode_idle()
+
+    async def _try_solar_opportunistic(self) -> bool:
+        """Check for solar surplus and charge opportunistically.
+
+        Called during hold/idle plan actions to capture free solar energy
+        that would otherwise be exported.  Returns True if solar charging
+        was activated, False if no surplus or battery full.
+        """
+        if self._battery_soc is not None and self._battery_soc >= self._max_soc:
+            return False
+
+        true_surplus = self._calculate_true_solar_surplus()
+        if true_surplus is None or true_surplus <= 50:
+            return False
+
+        _LOGGER.debug(
+            "Opportunistic solar charge: surplus=%.0fW (grid=%.0fW)",
+            true_surplus, self._grid_power or 0,
+        )
+        await self._start_solar_charging(true_surplus)
+        return True
 
     async def _run_self_consumption(self) -> None:
         """Self-consumption optimization.
