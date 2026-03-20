@@ -422,7 +422,7 @@ display:
       int chart_bottom = H - 22;      // room for footer
       int chart_h = chart_bottom - chart_top;
 
-      it.print(rx, chart_top - 2, id(font_small), "Preisverlauf");
+      it.print(P, chart_top - 2, id(font_small), "Preisverlauf");
 
       // Parse price CSV
       float prices[16];
@@ -501,7 +501,7 @@ display:
 
       } else {
         // No price data available
-        it.print(rx + rw / 2, chart_top + chart_h / 2,
+        it.print(W / 2, chart_top + chart_h / 2,
                  id(font_small), TextAlign::CENTER, "Keine Preisdaten");
       }
 
