@@ -1652,28 +1652,57 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         max_power = self._inverter_power or 800
 
-        # Setpoint: small positive grid import (10W) to avoid export
-        setpoint = 10
-        error = self._grid_power - setpoint  # positive = need more inverter
+        # Asymmetric regulation:
+        # - Export (grid < 0): avoid aggressively → immediate correction
+        # - Import 0-50W: tolerated, no adjustment needed
+        # - Import > 50W: increase inverter to reduce grid draw
 
-        # P term
-        p_term = self._pid_kp * error
+        if self._grid_power < 0:
+            # EXPORT detected → immediately reduce inverter by export amount
+            export_w = abs(self._grid_power)
+            new_target = self._inverter_target_power - export_w
+            _LOGGER.info(
+                "Zero-feed: EXPORT %.0fW → reducing inverter %.0f → %.0fW",
+                export_w, self._inverter_target_power, new_target,
+            )
+            self._pid_integral = 0.0
+            self._pid_last_error = None
+        elif self._grid_power <= 50:
+            # Import 0-50W → within tolerance, no adjustment
+            return
+        else:
+            # Import > 50W → increase inverter to reduce grid draw
+            setpoint = 25  # target: 25W import (middle of 0-50W band)
+            error = self._grid_power - setpoint
 
-        # I term (with anti-windup clamping)
-        self._pid_integral += error
-        # Clamp integral to prevent windup
-        max_integral = max_power / self._pid_ki if self._pid_ki > 0 else 1000
-        self._pid_integral = max(-max_integral, min(max_integral, self._pid_integral))
-        i_term = self._pid_ki * self._pid_integral
+            if error > 100:
+                # Fast path for large import
+                new_target = self._inverter_target_power + error * 0.9
+                _LOGGER.debug(
+                    "Zero-feed FAST: import=%.0fW → inverter=%.0fW",
+                    self._grid_power, new_target,
+                )
+                self._pid_integral = 0.0
+                self._pid_last_error = error
+            else:
+                # Fine PID tuning
+                p_term = self._pid_kp * error
 
-        # D term
-        d_term = 0.0
-        if self._pid_last_error is not None:
-            d_term = self._pid_kd * (error - self._pid_last_error)
-        self._pid_last_error = error
+                self._pid_integral += error
+                max_integral = max_power / self._pid_ki if self._pid_ki > 0 else 1000
+                self._pid_integral = max(-max_integral, min(max_integral, self._pid_integral))
+                i_term = self._pid_ki * self._pid_integral
 
-        # Calculate new target
-        new_target = self._inverter_target_power + p_term + i_term + d_term
+                d_term = 0.0
+                if self._pid_last_error is not None:
+                    d_term = self._pid_kd * (error - self._pid_last_error)
+                self._pid_last_error = error
+
+                new_target = self._inverter_target_power + p_term + i_term + d_term
+                _LOGGER.debug(
+                    "Zero-feed PID: grid=%.0fW P=%.0f I=%.0f D=%.0f → %.0fW",
+                    self._grid_power, p_term, i_term, d_term, new_target,
+                )
 
         # Clamp between 0 and max power
         new_target = max(0, min(max_power, new_target))
@@ -1683,11 +1712,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             return
 
         self._inverter_target_power = new_target
-
-        _LOGGER.debug(
-            "PID zero-feed: grid=%.0fW err=%.0f P=%.0f I=%.0f D=%.0f → inverter=%.0fW",
-            self._grid_power, error, p_term, i_term, d_term, new_target,
-        )
 
         domain = self._inverter_power_entity.split(".")[0]
         await self.hass.services.async_call(
