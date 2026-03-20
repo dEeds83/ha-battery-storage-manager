@@ -143,12 +143,6 @@ sensor:
     id: expected_solar
     entity_id: sensor.battery_storage_manager_erwartete_solarproduktion
 
-  # Actual solar production today (from HA energy dashboard / utility meter)
-  # Adjust entity_id to your solar production energy sensor
-  - platform: homeassistant
-    id: solar_today
-    entity_id: sensor.pv_gesamt_daily  # ← ANPASSEN an deinen PV-Tages-Sensor
-
   - platform: homeassistant
     id: inverter_power
     entity_id: sensor.battery_storage_manager_wechselrichter_leistung
@@ -157,11 +151,11 @@ sensor:
     id: consumption_forecast
     entity_id: sensor.battery_storage_manager_verbrauchsprognose
 
-  # Average price today (from Tibber)
+  # Average price today (from Tibber attribute)
   - platform: homeassistant
     id: avg_price
-    entity_id: sensor.electricity_price  # ← ANPASSEN: Tibber Preis-Sensor
-    attribute: avg_price                  # Tibber stellt avg_price als Attribut bereit
+    entity_id: sensor.electricity_price_walchenseestrasse_8
+    attribute: avg_price
 
 text_sensor:
   - platform: homeassistant
