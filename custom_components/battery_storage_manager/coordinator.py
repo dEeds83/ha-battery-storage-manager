@@ -205,10 +205,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Add back charger and inverter draw to get pure house consumption
         charger_draw = sum(c["power"] for c in self._chargers if c["active"])
         inverter_feed = self._inverter_target_power if self._inverter_active else 0
-        # Pure house consumption ≈ grid_import + solar_production - charger_draw + inverter_feed
-        # Since we only have grid_power: house ≈ grid_power + charger_draw - inverter_feed
-        # (when grid_power is negative, house is covered by solar)
-        house_w = self._grid_power + charger_draw - inverter_feed
+        # grid_power already includes charger draw and inverter feed:
+        #   grid_power = house_consumption + charger_draw - solar - inverter_feed
+        # So: house = grid_power - charger_draw + inverter_feed + solar
+        # Since we don't have a direct solar sensor, approximate:
+        #   house ≈ grid_power - charger_draw + inverter_feed
+        # (when grid_power is negative, solar covers everything)
+        house_w = self._grid_power - charger_draw + inverter_feed
         house_w = max(0, house_w)
 
         self._consumption_hourly_samples.append(house_w)
