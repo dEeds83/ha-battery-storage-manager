@@ -52,70 +52,83 @@ async def _register_lovelace_resources(hass: HomeAssistant) -> None:
             _LOGGER.warning("Lovelace not available, cannot register cards")
             return
 
-        # Only works in storage mode (not YAML mode)
-        if lovelace.get("mode") != "storage":
-            # In YAML mode, try legacy add_extra_js_url as fallback
+        # Access lovelace as object (not dict)
+        mode = getattr(lovelace, "mode", None)
+        resources = getattr(lovelace, "resources", None)
+
+        if mode != "storage" or resources is None:
+            # YAML mode or no resources → try legacy fallback
             try:
                 from homeassistant.components.frontend import add_extra_js_url
                 for card_file in FRONTEND_CARDS:
-                    url_path = f"/{DOMAIN}/{card_file}"
-                    add_extra_js_url(hass, url_path)
-                _LOGGER.debug("YAML mode: registered cards via add_extra_js_url")
-            except ImportError:
+                    add_extra_js_url(hass, f"/{DOMAIN}/{card_file}")
+                _LOGGER.info("Registered cards via add_extra_js_url (mode=%s)", mode)
+            except (ImportError, Exception):
                 _LOGGER.warning(
-                    "Lovelace is in YAML mode. Add these resources manually:\n%s",
+                    "Could not auto-register cards (lovelace mode=%s). "
+                    "Add these resources manually via Dashboard → ⋮ → Resources:\n%s",
+                    mode,
                     "\n".join(
-                        f"  - url: /{DOMAIN}/{f}\n    type: module"
+                        f"  URL: /{DOMAIN}/{f}  Type: JavaScript Module"
                         for f in FRONTEND_CARDS
                     ),
                 )
             return
 
-        resources = lovelace.get("resources")
-        if resources is None:
-            _LOGGER.warning("Lovelace resources not available")
-            return
-
         # Ensure resources are loaded
-        if not resources.loaded:
+        if not getattr(resources, "loaded", True):
             await resources.async_load()
 
         # Get existing resources
-        existing = resources.async_items()
+        existing = resources.async_items() or []
 
         for card_file in FRONTEND_CARDS:
             url_path = f"/{DOMAIN}/{card_file}"
             url_with_version = f"{url_path}?v={CARD_VERSION}"
 
-            # Check if already registered
+            # Check if already registered (compare base URL without version)
             found = None
             for item in existing:
-                if item.get("url", "").split("?")[0] == url_path:
+                item_url = ""
+                if isinstance(item, dict):
+                    item_url = item.get("url", "")
+                else:
+                    item_url = getattr(item, "url", "")
+                if item_url.split("?")[0] == url_path:
                     found = item
                     break
 
             if found is None:
-                # Create new resource
                 await resources.async_create_item(
                     {"res_type": "module", "url": url_with_version}
                 )
                 _LOGGER.info("Registered Lovelace resource: %s", url_with_version)
-            elif found.get("url") != url_with_version:
-                # Update version
-                await resources.async_update_item(
-                    found["id"],
-                    {"res_type": "module", "url": url_with_version},
-                )
-                _LOGGER.info("Updated Lovelace resource: %s", url_with_version)
             else:
-                _LOGGER.debug("Lovelace resource already current: %s", url_with_version)
+                found_url = found.get("url", "") if isinstance(found, dict) else getattr(found, "url", "")
+                found_id = found.get("id") if isinstance(found, dict) else getattr(found, "id", None)
+                if found_url != url_with_version and found_id:
+                    await resources.async_update_item(
+                        found_id,
+                        {"res_type": "module", "url": url_with_version},
+                    )
+                    _LOGGER.info("Updated Lovelace resource: %s", url_with_version)
 
     except Exception:
-        _LOGGER.warning(
-            "Could not register Lovelace resources automatically. "
-            "You may need to add them manually in the dashboard settings.",
-            exc_info=True,
-        )
+        # Last resort: try add_extra_js_url
+        try:
+            from homeassistant.components.frontend import add_extra_js_url
+            for card_file in FRONTEND_CARDS:
+                add_extra_js_url(hass, f"/{DOMAIN}/{card_file}")
+            _LOGGER.info("Fallback: registered cards via add_extra_js_url")
+        except Exception:
+            _LOGGER.warning(
+                "Could not register Lovelace resources. "
+                "Add manually: Dashboard → ⋮ (three dots) → Resources → "
+                "Add /%s/battery-plan-card.js and /%s/battery-status-card.js "
+                "as JavaScript Module",
+                DOMAIN, DOMAIN,
+                exc_info=True,
+            )
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
