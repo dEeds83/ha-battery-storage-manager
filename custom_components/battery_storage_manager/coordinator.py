@@ -873,18 +873,24 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         If a plan exists, follow it. Otherwise fall back to simple
         threshold-based logic.
         """
-        if self._current_price is None or self._battery_soc is None:
-            _LOGGER.debug("Missing price or SOC data, staying idle")
+        if self._battery_soc is None:
+            _LOGGER.debug("Missing SOC data, staying idle")
             await self._set_mode_idle()
             return
 
         # Use plan-based decisions if a plan is available
+        # Solar actions don't need price data, so check plan first
         planned_action = self._get_current_plan_action()
         if planned_action:
             await self._execute_plan_action(planned_action)
             return
 
-        # Fallback: simple threshold-based logic (no forecast data available)
+        # Fallback: simple threshold-based logic (needs price data)
+        if self._current_price is None:
+            _LOGGER.debug("No plan and no price data, staying idle")
+            await self._set_mode_idle()
+            return
+
         is_cheap = self._is_in_cheap_window()
         is_expensive = self._is_in_expensive_window()
 
