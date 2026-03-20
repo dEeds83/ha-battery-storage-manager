@@ -1668,7 +1668,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
     async def _set_mode_idle(self) -> None:
         """Set idle mode - turn off all devices."""
-        if self._operating_mode == MODE_IDLE:
+        any_device_on = (
+            any(c["active"] for c in self._chargers) or self._inverter_active
+        )
+        if self._operating_mode == MODE_IDLE and not any_device_on:
             return
 
         _LOGGER.info("Setting battery to idle mode")
