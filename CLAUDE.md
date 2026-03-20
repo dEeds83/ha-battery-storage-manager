@@ -6,8 +6,14 @@
 - Release Notes auf Deutsch, mit Zusammenfassung der Änderungen seit dem letzten Tag
 - Bei jedem neuen Release **alle Versionsnummern** aktualisieren:
   - `manifest.json` → `"version": "x.y.z"`
-  - `__init__.py` → `?v=x.y.z` (Frontend Cache-Busting)
+  - `__init__.py` → `CARD_VERSION = "x.y.z"`
   - `README.md` → Version-Badge `version-x.y.z-blue`
+- Bei jedem Release auch den **Inhalt der README.md** prüfen und anpassen:
+  - Neue Features/Änderungen in den Feature-Listen ergänzen
+  - Geänderte Konfigurationsoptionen in den Tabellen aktualisieren
+  - Neue Sensoren/Schalter in der Entitäten-Tabelle hinzufügen
+  - Geänderte Funktionsweise (z.B. Algorithmen, Steuerungslogik) aktualisieren
+  - Nicht nur die Versionsnummer, sondern den gesamten Funktionsumfang aktuell halten
 
 ## Projekt
 
