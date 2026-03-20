@@ -18,8 +18,13 @@ class BatteryStatusCard extends HTMLElement {
     this._hass = hass;
     if (!this._config) return;
 
-    // Only re-render when relevant data actually changed
     const entityId = this._config.entity;
+    if (!entityId) {
+      this._renderPlaceholder();
+      return;
+    }
+
+    // Only re-render when relevant data actually changed
     const stateObj = hass.states[entityId];
     if (!stateObj) {
       this._lastStateKey = null;
@@ -42,9 +47,6 @@ class BatteryStatusCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.entity) {
-      throw new Error("Please define an entity (battery storage manager sensor)");
-    }
     this._config = config;
   }
 
@@ -220,6 +222,17 @@ class BatteryStatusCard extends HTMLElement {
     });
     html += "</div>";
     return html;
+  }
+
+  _renderPlaceholder() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    this.shadowRoot.innerHTML = `
+      <ha-card header="Battery Status">
+        <div style="padding: 16px; color: var(--secondary-text-color, #888);">
+          Bitte Entity konfigurieren (Betriebsmodus-Sensor)
+        </div>
+      </ha-card>
+    `;
   }
 
   _renderError(msg) {
@@ -418,7 +431,7 @@ window.customCards.push({
   type: "battery-status-card",
   name: "Battery Storage Status",
   description: "Compact overview of battery SOC, price, mode, and runtime toggles.",
-  preview: true,
+  preview: false,
   documentationURL: "https://github.com/dEeds83/ha-battery-storage-manager",
 });
 

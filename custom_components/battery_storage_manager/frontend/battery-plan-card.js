@@ -21,8 +21,13 @@ class BatteryPlanCard extends HTMLElement {
     this._hass = hass;
     if (!this._config) return;
 
-    // Only re-render when relevant data actually changed
     const entityId = this._config.entity;
+    if (!entityId) {
+      this._renderPlaceholder();
+      return;
+    }
+
+    // Only re-render when relevant data actually changed
     const stateObj = hass.states[entityId];
     if (!stateObj) {
       this._lastState = null;
@@ -39,9 +44,6 @@ class BatteryPlanCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.entity) {
-      throw new Error("Please define an entity (battery plan sensor)");
-    }
     this._config = config;
     this._showTable = false;
   }
@@ -134,6 +136,17 @@ class BatteryPlanCard extends HTMLElement {
         this._showTable = !this._showTable;
         this._render();
       });
+  }
+
+  _renderPlaceholder() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    this.shadowRoot.innerHTML = `
+      <ha-card header="Speicherplan">
+        <div style="padding: 16px; color: var(--secondary-text-color, #888);">
+          Bitte Entity konfigurieren (Speicherplan-Sensor)
+        </div>
+      </ha-card>
+    `;
   }
 
   _renderError(msg) {
@@ -531,7 +544,7 @@ window.customCards.push({
   type: "battery-plan-card",
   name: "Battery Storage Plan",
   description: "Visualizes the battery storage plan as a timeline chart with detail table.",
-  preview: true,
+  preview: false,
   documentationURL: "https://github.com/dEeds83/ha-battery-storage-manager",
 });
 
