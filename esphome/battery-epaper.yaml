@@ -23,11 +23,8 @@ esphome:
   on_boot:
     priority: -100
     then:
-      # Prevent OTA rollback: mark boot as successful before deep sleep
-      - lambda: |-
-          // Mark the boot partition as valid so OTA doesn't roll back
-          // when we enter deep sleep before the default 10min timer
-          esp_ota_mark_app_valid();
+      # Small delay to let ESPHome mark boot as successful (prevents OTA rollback)
+      - delay: 1s
       - wait_until:
           condition:
             api.connected:
@@ -84,6 +81,9 @@ api:
 ota:
   - platform: esphome
     password: !secret ota_password
+
+safe_mode:
+  disabled: true  # Prevent OTA rollback when entering deep sleep quickly
 
 wifi:
   ssid: !secret wifi_ssid
