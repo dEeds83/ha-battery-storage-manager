@@ -11,6 +11,12 @@
 #   3. Adjust entity IDs below to match your Battery Storage Manager instance
 #   4. Flash via ESPHome dashboard (first flash via USB, then OTA during wake window)
 
+globals:
+  - id: night_mode
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
 esphome:
   name: battery-epaper
   friendly_name: "Batterie ePaper Display"
@@ -21,12 +27,41 @@ esphome:
           condition:
             api.connected:
           timeout: 30s
-      # Wait for sensor data to arrive from HA
-      - delay: 5s
-      - component.update: eink
-      # Wait for display to finish rendering
-      - delay: 10s
-      - deep_sleep.enter: deep_sleep_ctrl
+      # Wait for time sync from HA
+      - wait_until:
+          condition:
+            time.has_time:
+          timeout: 10s
+      # Check if we're in night mode (01:00 - 06:00 local time)
+      - lambda: |-
+          auto now = id(ha_time).now();
+          if (now.is_valid() && now.hour >= 1 && now.hour < 6) {
+            id(night_mode) = true;
+          } else {
+            id(night_mode) = false;
+          }
+      - if:
+          condition:
+            lambda: "return id(night_mode);"
+          then:
+            # Night mode: show sleep screen, then sleep until 06:00
+            - component.update: eink
+            - delay: 10s
+            - lambda: |-
+                // Calculate minutes until 06:00
+                auto now = id(ha_time).now();
+                int mins_left = (6 - now.hour - 1) * 60 + (60 - now.minute);
+                if (mins_left <= 0) mins_left = 1;
+                id(deep_sleep_ctrl).set_sleep_duration(mins_left * 60 * 1000);
+            - deep_sleep.enter: deep_sleep_ctrl
+          else:
+            # Day mode: fetch data, render, sleep 30 min
+            - delay: 5s
+            - component.update: eink
+            - delay: 10s
+            # Reset sleep duration to 30 min (in case it was changed by night mode)
+            - lambda: "id(deep_sleep_ctrl).set_sleep_duration(30 * 60 * 1000);"
+            - deep_sleep.enter: deep_sleep_ctrl
 
 esp32:
   board: seeed_xiao_esp32c3
@@ -159,10 +194,32 @@ display:
     auto_clear_enabled: false
     update_interval: never   # Only update via on_boot sequence
     lambda: |-
-      // ── Layout Constants ──
       const int W = 800;
       const int H = 480;
       const int PAD = 12;
+
+      // ── Night Mode: Sleep Screen ──
+      if (id(night_mode)) {
+        // Minimal sleep screen – almost entirely white (low power for ePaper)
+        it.print(W / 2, H / 2 - 40, id(font_title), TextAlign::CENTER, "Schlafmodus");
+
+        if (id(ha_time).now().is_valid()) {
+          char wake_buf[32];
+          snprintf(wake_buf, sizeof(wake_buf), "Naechste Aktualisierung um 06:00");
+          it.print(W / 2, H / 2 + 10, id(font_small), TextAlign::CENTER, wake_buf);
+        }
+
+        // Show SOC so you can glance at it
+        if (!isnan(id(battery_soc).state)) {
+          char soc_buf[16];
+          snprintf(soc_buf, sizeof(soc_buf), "Batterie: %.0f%%", id(battery_soc).state);
+          it.print(W / 2, H / 2 + 50, id(font_medium), TextAlign::CENTER, soc_buf);
+        }
+
+        return;  // Skip full dashboard rendering
+      }
+
+      // ── Day Mode: Full Dashboard ──
 
       // ── Helper: Draw Card Background ──
       auto draw_card = [&](int x, int y, int w, int h) {
