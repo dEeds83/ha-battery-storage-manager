@@ -836,6 +836,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             # Solar: hourly forecast divided by slots per hour
             solar_wh_hour = self._solar_forecast.get(h["hour_key"], 0)
             h["solar_kwh"] = (solar_wh_hour / 1000) / slots_per_hour
+            h["solar_wh_hour_raw"] = solar_wh_hour  # for debugging
             h["solar_surplus_kwh"] = max(0, h["solar_kwh"] - house_kwh_slot)
 
             if charge_kwh_slot > 0:
@@ -1061,7 +1062,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._battery_plan.append({
                 "hour": h.get("slot_key", h["hour_key"] + ":00"),
                 "price": round(h["price"], 4),
-                "solar_kwh": round(h["solar_kwh"], 2),
+                "solar_kwh": round(h["solar_kwh"], 3),
+                "solar_wh_hour": round(h.get("solar_wh_hour_raw", 0)),
                 "solar_surplus_kwh": round(h["solar_surplus_kwh"], 2),
                 "expected_soc": round(estimated_soc, 1),
                 "action": action,

@@ -299,7 +299,7 @@ class BatteryPlanCard extends HTMLElement {
         <tr class="${isCurrent ? "current-row" : ""}">
           <td class="td-time">${this._formatHour(entry.hour)}</td>
           <td class="td-price">${(entry.price * 100).toFixed(1)} ct</td>
-          <td class="td-solar">${entry.solar_kwh > 0 ? entry.solar_kwh.toFixed(1) + " kWh" : "-"}</td>
+          <td class="td-solar">${entry.solar_kwh > 0 ? (entry.solar_kwh >= 0.1 ? entry.solar_kwh.toFixed(2) + " kWh" : Math.round(entry.solar_kwh * 1000) + " Wh") : "-"}</td>
           <td class="td-soc">${soc}</td>
           <td class="td-action">
             <span class="action-badge" style="background:${cfg.color}">
