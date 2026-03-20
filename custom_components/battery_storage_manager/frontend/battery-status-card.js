@@ -423,17 +423,27 @@ class BatteryStatusCardEditor extends HTMLElement {
 }
 
 /* ── Registration ──────────────────────────────────────── */
-customElements.define("battery-status-card", BatteryStatusCard);
-customElements.define("battery-status-card-editor", BatteryStatusCardEditor);
+try {
+  if (!customElements.get("battery-status-card")) {
+    customElements.define("battery-status-card", BatteryStatusCard);
+  }
+  if (!customElements.get("battery-status-card-editor")) {
+    customElements.define("battery-status-card-editor", BatteryStatusCardEditor);
+  }
+} catch (e) {
+  console.warn("battery-status-card: registration failed", e);
+}
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "battery-status-card",
-  name: "Battery Storage Status",
-  description: "Compact overview of battery SOC, price, mode, and runtime toggles.",
-  preview: false,
-  documentationURL: "https://github.com/dEeds83/ha-battery-storage-manager",
-});
+if (!window.customCards.find(c => c.type === "battery-status-card")) {
+  window.customCards.push({
+    type: "battery-status-card",
+    name: "Battery Storage Status",
+    description: "Compact overview of battery SOC, price, mode, and runtime toggles.",
+    preview: false,
+    documentationURL: "https://github.com/dEeds83/ha-battery-storage-manager",
+  });
+}
 
 console.info(
   `%c BATTERY-STATUS-CARD %c v${STATUS_CARD_VERSION} `,

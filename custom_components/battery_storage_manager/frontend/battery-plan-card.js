@@ -561,17 +561,27 @@ class BatteryPlanCardEditor extends HTMLElement {
 }
 
 /* ── Registration ──────────────────────────────────────── */
-customElements.define("battery-plan-card", BatteryPlanCard);
-customElements.define("battery-plan-card-editor", BatteryPlanCardEditor);
+try {
+  if (!customElements.get("battery-plan-card")) {
+    customElements.define("battery-plan-card", BatteryPlanCard);
+  }
+  if (!customElements.get("battery-plan-card-editor")) {
+    customElements.define("battery-plan-card-editor", BatteryPlanCardEditor);
+  }
+} catch (e) {
+  console.warn("battery-plan-card: registration failed", e);
+}
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "battery-plan-card",
-  name: "Battery Storage Plan",
-  description: "Visualizes the battery storage plan as a timeline chart with detail table.",
-  preview: false,
-  documentationURL: "https://github.com/dEeds83/ha-battery-storage-manager",
-});
+if (!window.customCards.find(c => c.type === "battery-plan-card")) {
+  window.customCards.push({
+    type: "battery-plan-card",
+    name: "Battery Storage Plan",
+    description: "Visualizes the battery storage plan as a timeline chart with detail table.",
+    preview: false,
+    documentationURL: "https://github.com/dEeds83/ha-battery-storage-manager",
+  });
+}
 
 console.info(
   `%c BATTERY-PLAN-CARD %c v${CARD_VERSION} `,

@@ -26,7 +26,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up Battery Storage Manager integration (register frontend resources)."""
     hass.data.setdefault(DOMAIN, {})
 
-    # Register frontend cards once at integration load time
+    # Only register frontend resources once (guard against reloads)
+    if hass.data[DOMAIN].get("frontend_registered"):
+        return True
+
     static_paths = []
     for card_file in FRONTEND_CARDS:
         url_path = f"/{DOMAIN}/{card_file}"
@@ -34,11 +37,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         static_paths.append(
             StaticPathConfig(url_path, file_path, cache_headers=False)
         )
-        # Add version query param to bust browser cache on updates
         add_extra_js_url(hass, f"{url_path}?v=1.5.1")
         _LOGGER.debug("Registered frontend card: %s", url_path)
-    await hass.http.async_register_static_paths(static_paths)
 
+    try:
+        await hass.http.async_register_static_paths(static_paths)
+    except Exception:
+        _LOGGER.debug("Static paths already registered", exc_info=True)
+
+    hass.data[DOMAIN]["frontend_registered"] = True
     return True
 
 
