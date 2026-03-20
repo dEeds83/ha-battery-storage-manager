@@ -669,33 +669,79 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         n = len(hourly_data)
         actions = ["idle"] * n
+        headroom_kwh = (self._max_soc - current_soc) / 100 * cap
 
-        # Step 1: Build charge and discharge candidates from ALL hours
+        # Step 1: Calculate total expected solar and reserve headroom
+        # Solar is free → always prioritize it. Only grid-charge the
+        # portion of headroom that solar can't fill.
+        total_solar_kwh = 0.0
+        solar_hours_end_idx = -1  # last hour with significant solar
+        for i, h in enumerate(hourly_data):
+            solar_charge = min(h["solar_surplus_kwh"], charge_kwh_h)
+            if solar_charge > 0.05:
+                total_solar_kwh += solar_charge
+                solar_hours_end_idx = i
+
+        solar_fills_kwh = min(total_solar_kwh, headroom_kwh)
+        grid_headroom_kwh = max(0, headroom_kwh - solar_fills_kwh)
+
+        # How many grid-charge hours do we need?
+        grid_charge_hours = (
+            int(grid_headroom_kwh / charge_kwh_h) + (1 if grid_headroom_kwh % charge_kwh_h > 0.05 else 0)
+            if charge_kwh_h > 0 and grid_headroom_kwh > 0
+            else 0
+        )
+
+        _LOGGER.debug(
+            "Plan budget: headroom=%.1f kWh, solar=%.1f kWh, "
+            "grid_needed=%.1f kWh (%d hours)",
+            headroom_kwh, solar_fills_kwh, grid_headroom_kwh, grid_charge_hours,
+        )
+
+        # Step 2: Assign solar_charge to hours with surplus
+        for i, h in enumerate(hourly_data):
+            if h["solar_surplus_kwh"] > 0.05:
+                actions[i] = "solar_charge"
+
+        # Step 3: Find profitable arbitrage pairs for grid charging
+        # Only non-solar hours are charge candidates for grid power.
+        # Prefer hours AFTER solar production ends to avoid filling the
+        # battery before solar arrives.
         charge_cands = []   # (index, effective_cost)
         discharge_cands = []  # (index, price)
         for i, h in enumerate(hourly_data):
-            # Every hour is a potential charge candidate (with effective cost)
-            charge_cands.append((i, h["effective_charge_cost"]))
-            # Discharge candidates: hours with low solar (no point discharging
-            # when solar covers house consumption anyway)
+            if actions[i] != "idle":
+                continue
+            # Charge candidate: use effective cost, but add a small penalty
+            # for hours before solar ends (to preserve headroom for solar)
+            eff_cost = h["effective_charge_cost"]
+            if i <= solar_hours_end_idx and solar_fills_kwh > 0:
+                # Penalty: charging here may displace free solar later
+                eff_cost += 0.05  # 5ct penalty for pre-solar charging
+            charge_cands.append((i, eff_cost))
+            # Discharge candidate
             if h["solar_surplus_kwh"] < house_kwh_h * 0.3:
                 discharge_cands.append((i, h["price"]))
 
-        charge_cands.sort(key=lambda x: x[1])  # cheapest effective cost first
-        discharge_cands.sort(key=lambda x: x[1], reverse=True)  # most expensive first
+        charge_cands.sort(key=lambda x: x[1])
+        discharge_cands.sort(key=lambda x: x[1], reverse=True)
 
-        # Minimum spread: 2 ct/kWh to cover round-trip losses
+        # Limit charge candidates to what we actually need
         min_spread = 0.02
-
-        # Greedily pair cheapest charge with most expensive discharge
         used = set()
         pairs = []
         ci, di = 0, 0
+        charge_slots_used = 0
         while ci < len(charge_cands) and di < len(discharge_cands):
+            if charge_slots_used >= grid_charge_hours:
+                break
+
             c_idx, c_eff_cost = charge_cands[ci]
             d_idx, d_price = discharge_cands[di]
 
-            if d_price - c_eff_cost < min_spread:
+            # Use original effective cost for spread calculation (without penalty)
+            c_real_cost = hourly_data[c_idx]["effective_charge_cost"]
+            if d_price - c_real_cost < min_spread:
                 break
 
             if c_idx in used or d_idx in used or c_idx == d_idx:
@@ -705,21 +751,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     di += 1
                 continue
 
-            pairs.append((c_idx, d_idx, d_price - c_eff_cost))
+            pairs.append((c_idx, d_idx, d_price - c_real_cost))
             used.add(c_idx)
             used.add(d_idx)
+            charge_slots_used += 1
             ci += 1
             di += 1
 
         for c_idx, d_idx, _ in pairs:
-            actions[c_idx] = "charge"  # may be solar-assisted charge
+            actions[c_idx] = "charge"
             actions[d_idx] = "discharge"
-
-        # Step 2: Hours with solar surplus that aren't grid-charging → solar_charge
-        # (pure solar charging, no grid cost)
-        for i, h in enumerate(hourly_data):
-            if actions[i] == "idle" and h["solar_surplus_kwh"] > 0.05:
-                actions[i] = "solar_charge"
 
         # Step 3: Forward-simulate SOC to validate and build plan
         self._battery_plan = []
