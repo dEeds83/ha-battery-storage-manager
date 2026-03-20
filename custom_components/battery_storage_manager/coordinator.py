@@ -1157,41 +1157,41 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
     def _get_current_plan_action(self) -> str | None:
         """Get the planned action for the current time slot.
 
-        Supports both hourly ("2024-01-15T14:00") and sub-hourly
-        ("2024-01-15T14:15") plan entries.  For sub-hourly plans, finds
-        the slot that contains the current time.
+        Detects slot duration from the plan, rounds current time down to
+        the nearest slot boundary, and does a simple string match.
         """
         if not self._battery_plan:
             return None
 
         now = dt_util.now()
 
-        # Try exact slot match first (for 15-min plans)
-        # Round down to nearest slot boundary
-        for entry in self._battery_plan:
+        # Detect slot duration from first two entries
+        slot_minutes = 60
+        if len(self._battery_plan) >= 2:
+            h1 = self._battery_plan[0]["hour"]
+            h2 = self._battery_plan[1]["hour"]
             try:
-                entry_dt = datetime.fromisoformat(entry["hour"])
-                if entry_dt.tzinfo is None:
-                    entry_dt = entry_dt.replace(tzinfo=now.tzinfo)
+                d1 = datetime.fromisoformat(h1)
+                d2 = datetime.fromisoformat(h2)
+                diff = int((d2 - d1).total_seconds() / 60)
+                if 10 <= diff <= 60:
+                    slot_minutes = diff
             except (ValueError, TypeError):
-                continue
+                pass
 
-            # Find the slot that contains "now"
-            # Check if next entry exists to determine slot end
-            entry_idx = self._battery_plan.index(entry)
-            if entry_idx + 1 < len(self._battery_plan):
-                try:
-                    next_dt = datetime.fromisoformat(
-                        self._battery_plan[entry_idx + 1]["hour"]
-                    )
-                    if next_dt.tzinfo is None:
-                        next_dt = next_dt.replace(tzinfo=now.tzinfo)
-                except (ValueError, TypeError):
-                    next_dt = entry_dt + timedelta(hours=1)
-            else:
-                next_dt = entry_dt + timedelta(hours=1)
+        # Round current time down to slot boundary
+        minute = (now.minute // slot_minutes) * slot_minutes
+        now_key = now.strftime("%Y-%m-%dT%H:") + f"{minute:02d}"
 
-            if entry_dt <= now < next_dt:
+        # Simple string match
+        for entry in self._battery_plan:
+            if entry["hour"] == now_key:
+                return entry["action"]
+
+        # Fallback: match by hour only (for hourly plans without :MM)
+        now_hour = now.strftime("%Y-%m-%dT%H")
+        for entry in self._battery_plan:
+            if entry["hour"].startswith(now_hour):
                 return entry["action"]
 
         return None
