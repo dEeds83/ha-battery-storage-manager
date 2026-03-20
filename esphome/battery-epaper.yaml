@@ -356,7 +356,7 @@ display:
       it.filled_rectangle(card_x, row3_y, W - card_x - PAD, banner_h);
 
       it.print(card_x + 12, row3_y + 6, id(font_tiny), COLOR_OFF,
-               "Spuel-/Waschmaschine starten um:");
+               "Naechstes guenstiges Zeitfenster:");
 
       if (id(next_cheap).has_state() && id(next_cheap).state.length() > 10) {
         // Parse time from ISO timestamp (e.g. "2026-03-21T12:30:00.000+01:00")
