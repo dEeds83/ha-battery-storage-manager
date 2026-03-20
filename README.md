@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-1.7.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -124,7 +124,7 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 
 | Sensor | Beschreibung |
 |--------|-------------|
-| Betriebsmodus | Aktueller Modus (Laden / Entladen / Leerlauf) mit erweiterten Statusattributen |
+| Betriebsmodus | Aktueller Modus (Laden Netz / Laden Solar / Entladen / Leerlauf) mit erweiterten Statusattributen |
 | Strategie | Aktive Strategie (Preisoptimiert / Eigenverbrauch / Manuell) |
 | Aktueller Strompreis | Strompreis in EUR/kWh mit günstigen/teuren Stunden als Attribute |
 | Speicher Ladestand | Ladezustand in Prozent mit dynamischem Batterie-Icon |
@@ -252,6 +252,10 @@ Das System ist auf AC-gekoppelte Speicher ausgelegt: Solarüberschuss fließt du
 | < 50% | Idle (Kreislaufverluste nicht lohnend) |
 
 Der **wahre Solarüberschuss** wird bei jedem Zyklus berechnet: gemessener Export + Leistung aktiver Ladegeräte + Wechselrichter-Einspeisung. So wird Oszillation verhindert.
+
+**Opportunistisches Solar-Laden:** Auch bei Plan-Aktionen "Halten" und "Idle" wird Solarüberschuss automatisch mitgenommen. Kostenlose Solarenergie wird nie verschenkt – der Plan kontrolliert nur Netz-Laden und Entlade-Zeitpunkte.
+
+**Betriebsmodus:** Der Sensor zeigt `solar_charging` (gold) wenn von Solar geladen wird, `charging` (grün) bei Netz-Laden – so ist im Dashboard sofort erkennbar, woher die Energie kommt.
 
 ### PID-geregelte Nulleinspeisung
 
