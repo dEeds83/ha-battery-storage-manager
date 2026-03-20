@@ -25,10 +25,7 @@ from .const import (
     ATTR_STRATEGY,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_SOC_ENTITY,
-    CONF_CHARGER_1_POWER,
-    CONF_CHARGER_1_SWITCH,
-    CONF_CHARGER_2_POWER,
-    CONF_CHARGER_2_SWITCH,
+    CONF_CHARGERS,
     CONF_HOUSE_CONSUMPTION_W,
     CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
     CONF_INVERTER_FEED_POWER,
@@ -82,10 +79,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._tibber_prices_entity = self._config.get(CONF_TIBBER_PRICES_ENTITY, "")
         self._pulse_consumption_entity = self._config.get(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, "")
         self._pulse_production_entity = self._config.get(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, "")
-        self._charger_1_switch = self._config.get(CONF_CHARGER_1_SWITCH, "")
-        self._charger_2_switch = self._config.get(CONF_CHARGER_2_SWITCH, "")
-        self._charger_1_power = self._config.get(CONF_CHARGER_1_POWER, 0)
-        self._charger_2_power = self._config.get(CONF_CHARGER_2_POWER, 0)
+
+        # Chargers: list of {"switch": entity_id, "power": int, "active": bool}
+        self._chargers: list[dict] = []
+        for c in self._config.get(CONF_CHARGERS, []):
+            self._chargers.append({
+                "switch": c.get("switch", ""),
+                "power": c.get("power", 0),
+                "active": False,
+            })
+
         self._inverter_switch = self._config.get(CONF_INVERTER_FEED_SWITCH, "")
         self._inverter_power = self._config.get(CONF_INVERTER_FEED_POWER, 0)
         self._inverter_power_entity = self._config.get(CONF_INVERTER_FEED_POWER_ENTITY, "")
@@ -119,8 +122,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._grid_power: float | None = None  # positive = import, negative = export
         self._estimated_savings: float = 0.0
         self._unsub_listeners: list = []
-        self._charger_1_active = False
-        self._charger_2_active = False
         self._inverter_active = False
         self._inverter_target_power: float = 0  # current target power for zero-feed
         self._inverter_actual_power: float | None = None  # actual power from sensor
@@ -628,7 +629,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         headroom_kwh = (self._max_soc - current_soc) / 100 * self._battery_capacity
 
         # Charge power (combined chargers)
-        charge_power_w = (self._charger_1_power or 0) + (self._charger_2_power or 0)
+        charge_power_w = sum(c["power"] for c in self._chargers)
         charge_kwh_per_hour = charge_power_w / 1000
         discharge_power_w = self._inverter_power or 800
         discharge_kwh_per_hour = discharge_power_w / 1000
@@ -938,8 +939,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 self._allow_discharging
                 and self._grid_power is not None
                 and self._grid_power > 50
-                and not self._charger_1_active
-                and not self._charger_2_active
+                and not any(c["active"] for c in self._chargers)
                 and self._battery_soc > self._min_soc
             ):
                 _LOGGER.debug("Plan action: SOLAR_CHARGE - discharging to cover grid import")
@@ -984,18 +984,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._current_price or 0,
         )
 
-        # Turn on chargers
-        if self._charger_1_switch:
-            await self.hass.services.async_call(
-                "switch", "turn_on", {"entity_id": self._charger_1_switch}
-            )
-            self._charger_1_active = True
-
-        if self._charger_2_switch:
-            await self.hass.services.async_call(
-                "switch", "turn_on", {"entity_id": self._charger_2_switch}
-            )
-            self._charger_2_active = True
+        # Turn on all chargers
+        for charger in self._chargers:
+            if charger["switch"]:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": charger["switch"]}
+                )
+                charger["active"] = True
 
         # Turn off inverter feed
         if self._inverter_switch:
@@ -1020,11 +1015,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         if self._grid_power is None:
             return None
 
-        active_draw = 0
-        if self._charger_1_active:
-            active_draw += self._charger_1_power or 0
-        if self._charger_2_active:
-            active_draw += self._charger_2_power or 0
+        active_draw = sum(c["power"] for c in self._chargers if c["active"])
 
         # Inverter feeds power INTO the house network, reducing grid import.
         # Subtract it to get the pure solar contribution.
@@ -1039,92 +1030,55 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
     async def _start_solar_charging(self, surplus_w: float) -> None:
         """Activate chargers proportionally to available solar surplus.
 
-        In an AC-coupled system the chargers draw from the house network.
-        Only turn on as many chargers as the current surplus can sustain,
-        so we avoid pulling power from the grid.
+        Greedily adds chargers sorted by power (largest first) until the
+        surplus is used up.  If no single charger fits, the smallest charger
+        is used with the inverter covering the deficit.
         """
-        c1_power = self._charger_1_power or 0
-        c2_power = self._charger_2_power or 0
+        if not self._chargers:
+            await self._set_mode_idle()
+            return
 
-        # Determine which chargers to run based on surplus
-        # Use a small margin (80%) to avoid grid import from fluctuations
-        want_c1 = c1_power > 0 and surplus_w >= c1_power * 0.8
-        want_c2 = c2_power > 0 and surplus_w >= c2_power * 0.8
-        want_both = (
-            c1_power > 0
-            and c2_power > 0
-            and surplus_w >= (c1_power + c2_power) * 0.8
-        )
+        # Sort chargers by power descending for greedy packing
+        indexed = [(i, c) for i, c in enumerate(self._chargers) if c["power"] > 0]
+        indexed.sort(key=lambda x: x[1]["power"], reverse=True)
 
-        if want_both:
-            need_c1, need_c2 = True, True
-        elif want_c1 and want_c2:
-            # Surplus covers either but not both – pick the larger one
-            need_c1 = c1_power >= c2_power
-            need_c2 = not need_c1
-        elif want_c1:
-            need_c1, need_c2 = True, False
-        elif want_c2:
-            need_c1, need_c2 = False, True
-        else:
-            # Surplus too small for any single charger – use the smaller
-            # charger combined with the inverter to cover the deficit,
-            # so solar energy is not wasted by feeding it back to the grid.
-            min_charger_power = min(
-                (p for p in (c1_power, c2_power) if p > 0), default=0
-            )
-            deficit_w = min_charger_power - surplus_w
-            if (
-                min_charger_power > 0
-                and surplus_w > deficit_w
-                and self._inverter_power_entity
-            ):
-                need_c1 = c1_power == min_charger_power
-                need_c2 = not need_c1 if c2_power > 0 else False
+        # Greedily select chargers that fit within surplus (80% margin)
+        selected: set[int] = set()
+        remaining = surplus_w
+        for idx, charger in indexed:
+            if remaining >= charger["power"] * 0.8:
+                selected.add(idx)
+                remaining -= charger["power"]
+
+        if not selected:
+            # No charger fits purely from surplus – try inverter-assisted
+            smallest = min(indexed, key=lambda x: x[1]["power"])
+            smallest_idx, smallest_charger = smallest
+            deficit_w = smallest_charger["power"] - surplus_w
+            if surplus_w > deficit_w and self._inverter_power_entity:
                 _LOGGER.debug(
-                    "Solar surplus %.0fW < charger – using inverter to cover "
-                    "deficit (charger=%dW, deficit=%.0fW)",
-                    surplus_w, min_charger_power,
-                    min_charger_power - surplus_w,
+                    "Solar surplus %.0fW < smallest charger (%dW) – "
+                    "using inverter to cover deficit %.0fW",
+                    surplus_w, smallest_charger["power"], deficit_w,
                 )
-                await self._start_solar_charging_with_inverter(
-                    surplus_w, need_c1, need_c2,
-                )
+                await self._apply_charger_states({smallest_idx})
+                await self._start_inverter_deficit(deficit_w)
+                self._operating_mode = MODE_CHARGING
                 return
 
+            powers_str = ", ".join(
+                f"C{i+1}={c['power']}W" for i, c in indexed
+            )
             _LOGGER.debug(
-                "Solar surplus %.0fW too low for chargers (C1=%dW, C2=%dW)",
-                surplus_w, c1_power, c2_power,
+                "Solar surplus %.0fW too low for any charger (%s)",
+                surplus_w, powers_str,
             )
             await self._set_mode_idle()
             return
 
-        # Apply charger states
-        if self._charger_1_switch:
-            if need_c1 and not self._charger_1_active:
-                await self.hass.services.async_call(
-                    "switch", "turn_on", {"entity_id": self._charger_1_switch}
-                )
-                self._charger_1_active = True
-            elif not need_c1 and self._charger_1_active:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": self._charger_1_switch}
-                )
-                self._charger_1_active = False
+        # Apply selected charger states and turn off inverter
+        await self._apply_charger_states(selected)
 
-        if self._charger_2_switch:
-            if need_c2 and not self._charger_2_active:
-                await self.hass.services.async_call(
-                    "switch", "turn_on", {"entity_id": self._charger_2_switch}
-                )
-                self._charger_2_active = True
-            elif not need_c2 and self._charger_2_active:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": self._charger_2_switch}
-                )
-                self._charger_2_active = False
-
-        # Turn off inverter
         if self._inverter_active:
             if self._inverter_switch:
                 await self.hass.services.async_call(
@@ -1134,62 +1088,36 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._inverter_active = False
 
         self._operating_mode = MODE_CHARGING
-        _LOGGER.info(
-            "Solar charging: surplus=%.0fW, C1=%s (%dW), C2=%s (%dW)",
-            surplus_w,
-            "ON" if need_c1 else "OFF", c1_power,
-            "ON" if need_c2 else "OFF", c2_power,
+        active_str = ", ".join(
+            f"C{i+1}={'ON' if i in selected else 'OFF'}({c['power']}W)"
+            for i, c in enumerate(self._chargers)
         )
+        _LOGGER.info("Solar charging: surplus=%.0fW, %s", surplus_w, active_str)
 
-    async def _start_solar_charging_with_inverter(
-        self, surplus_w: float, need_c1: bool, need_c2: bool,
-    ) -> None:
-        """Charge from solar with inverter covering the deficit.
-
-        When the solar surplus is too small for a charger alone, the inverter
-        feeds the difference back into the house network so that the charger
-        can run with minimal grid import.  The net effect is that most of the
-        solar surplus ends up in the battery (minus round-trip losses on the
-        deficit portion).
-        """
-        c1_power = self._charger_1_power or 0
-        c2_power = self._charger_2_power or 0
-        charger_power = (c1_power if need_c1 else 0) + (c2_power if need_c2 else 0)
-        deficit_w = max(0, charger_power - surplus_w)
-
-        # Turn on the chosen charger(s)
-        if self._charger_1_switch:
-            if need_c1 and not self._charger_1_active:
+    async def _apply_charger_states(self, should_be_on: set[int]) -> None:
+        """Set each charger on or off based on the index set."""
+        for i, charger in enumerate(self._chargers):
+            if not charger["switch"]:
+                continue
+            want_on = i in should_be_on
+            if want_on and not charger["active"]:
                 await self.hass.services.async_call(
-                    "switch", "turn_on", {"entity_id": self._charger_1_switch}
+                    "switch", "turn_on", {"entity_id": charger["switch"]}
                 )
-                self._charger_1_active = True
-            elif not need_c1 and self._charger_1_active:
+                charger["active"] = True
+            elif not want_on and charger["active"]:
                 await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": self._charger_1_switch}
+                    "switch", "turn_off", {"entity_id": charger["switch"]}
                 )
-                self._charger_1_active = False
+                charger["active"] = False
 
-        if self._charger_2_switch:
-            if need_c2 and not self._charger_2_active:
-                await self.hass.services.async_call(
-                    "switch", "turn_on", {"entity_id": self._charger_2_switch}
-                )
-                self._charger_2_active = True
-            elif not need_c2 and self._charger_2_active:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": self._charger_2_switch}
-                )
-                self._charger_2_active = False
-
-        # Turn on inverter and set power to cover the deficit
+    async def _start_inverter_deficit(self, deficit_w: float) -> None:
+        """Turn on inverter to cover a charger deficit."""
         if self._inverter_switch and not self._inverter_active:
             await self.hass.services.async_call(
                 "switch", "turn_on", {"entity_id": self._inverter_switch}
             )
         self._inverter_active = True
-
-        # Set inverter to cover the deficit between charger draw and solar surplus
         self._inverter_target_power = deficit_w
         domain = self._inverter_power_entity.split(".")[0]
         await self.hass.services.async_call(
@@ -1199,13 +1127,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 "entity_id": self._inverter_power_entity,
                 "value": round(deficit_w),
             },
-        )
-
-        self._operating_mode = MODE_CHARGING
-        _LOGGER.info(
-            "Solar+inverter charging: surplus=%.0fW, charger=%dW, "
-            "inverter covers deficit=%.0fW",
-            surplus_w, charger_power, deficit_w,
         )
 
     async def _start_discharging(self) -> None:
@@ -1223,17 +1144,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 self._current_price or 0,
             )
 
-            if self._charger_1_switch:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": self._charger_1_switch}
-                )
-                self._charger_1_active = False
-
-            if self._charger_2_switch:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": self._charger_2_switch}
-                )
-                self._charger_2_active = False
+            for charger in self._chargers:
+                if charger["switch"]:
+                    await self.hass.services.async_call(
+                        "switch", "turn_off", {"entity_id": charger["switch"]}
+                    )
+                    charger["active"] = False
 
             # Turn on inverter switch if configured (simple on/off mode)
             if self._inverter_switch:
@@ -1301,17 +1217,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
     async def stop_all(self) -> None:
         """Turn off all chargers and inverters."""
-        if self._charger_1_switch:
-            await self.hass.services.async_call(
-                "switch", "turn_off", {"entity_id": self._charger_1_switch}
-            )
-            self._charger_1_active = False
-
-        if self._charger_2_switch:
-            await self.hass.services.async_call(
-                "switch", "turn_off", {"entity_id": self._charger_2_switch}
-            )
-            self._charger_2_active = False
+        for charger in self._chargers:
+            if charger["switch"]:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": charger["switch"]}
+                )
+                charger["active"] = False
 
         if self._inverter_switch:
             await self.hass.services.async_call(
@@ -1366,18 +1277,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._pulse_production_entity = options.get(
             CONF_TIBBER_PULSE_PRODUCTION_ENTITY, self._pulse_production_entity
         )
-        self._charger_1_switch = options.get(
-            CONF_CHARGER_1_SWITCH, self._charger_1_switch
-        )
-        self._charger_2_switch = options.get(
-            CONF_CHARGER_2_SWITCH, self._charger_2_switch
-        )
-        self._charger_1_power = options.get(
-            CONF_CHARGER_1_POWER, self._charger_1_power
-        )
-        self._charger_2_power = options.get(
-            CONF_CHARGER_2_POWER, self._charger_2_power
-        )
+        if CONF_CHARGERS in options:
+            new_chargers = []
+            for c in options[CONF_CHARGERS]:
+                new_chargers.append({
+                    "switch": c.get("switch", ""),
+                    "power": c.get("power", 0),
+                    "active": False,
+                })
+            self._chargers = new_chargers
         self._inverter_switch = options.get(
             CONF_INVERTER_FEED_SWITCH, self._inverter_switch
         )
@@ -1449,8 +1357,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "planned_action": self._get_current_plan_action(),
             "battery_soc": self._battery_soc,
             "grid_power": self._grid_power,
-            "charger_1_active": self._charger_1_active,
-            "charger_2_active": self._charger_2_active,
+            "chargers": [
+                {"index": i, "switch": c["switch"], "power": c["power"], "active": c["active"]}
+                for i, c in enumerate(self._chargers)
+            ],
             "inverter_active": self._inverter_active,
             "inverter_target_power": self._inverter_target_power,
             "inverter_actual_power": self._inverter_actual_power,
@@ -1466,6 +1376,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         }
 
     # Properties for entities
+    @property
+    def chargers(self) -> list[dict]:
+        return self._chargers
+
     @property
     def strategy(self) -> str:
         return self._strategy

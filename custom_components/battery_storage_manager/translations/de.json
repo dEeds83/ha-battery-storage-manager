@@ -15,12 +15,10 @@
       },
       "devices": {
         "title": "Geräte Konfiguration",
-        "description": "Konfiguriere die Ladegeräte und den steuerbaren Wechselrichter.",
+        "description": "Konfiguriere die Ladegeräte und den steuerbaren Wechselrichter. Wähle alle Ladegerät-Schalter aus und setze die Standard-Leistung pro Ladegerät.",
         "data": {
-          "charger_1_switch": "Ladegerät 1 Schalter",
-          "charger_1_power": "Ladegerät 1 Leistung (W)",
-          "charger_2_switch": "Ladegerät 2 Schalter",
-          "charger_2_power": "Ladegerät 2 Leistung (W)",
+          "charger_entities": "Ladegeräte Schalter",
+          "charger_power_default": "Standard-Leistung pro Ladegerät (W)",
           "inverter_feed_switch": "Einspeise-Wechselrichter Schalter (optional, nur Ein/Aus)",
           "inverter_feed_power_entity": "Einspeise-Wechselrichter Leistungs-Entity (optional, für Nulleinspeisung)",
           "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)",
@@ -58,12 +56,10 @@
       },
       "devices": {
         "title": "Geräte Konfiguration",
-        "description": "Ladegeräte und Wechselrichter-Einstellungen anpassen.",
+        "description": "Ladegeräte und Wechselrichter-Einstellungen anpassen. Die Leistung gilt für neu hinzugefügte Ladegeräte; bestehende behalten ihre Leistung.",
         "data": {
-          "charger_1_switch": "Ladegerät 1 Schalter",
-          "charger_1_power": "Ladegerät 1 Leistung (W)",
-          "charger_2_switch": "Ladegerät 2 Schalter",
-          "charger_2_power": "Ladegerät 2 Leistung (W)",
+          "charger_entities": "Ladegeräte Schalter",
+          "charger_power_default": "Standard-Leistung pro Ladegerät (W)",
           "inverter_feed_switch": "Einspeise-Wechselrichter Schalter (optional)",
           "inverter_feed_power_entity": "Einspeise-Wechselrichter Leistungs-Entity (optional)",
           "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)",

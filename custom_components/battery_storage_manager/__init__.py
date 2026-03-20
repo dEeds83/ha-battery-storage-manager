@@ -10,7 +10,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, PLATFORMS
+from .const import CONF_CHARGERS, DOMAIN, PLATFORMS
 from .coordinator import BatteryStorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,9 +35,45 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             StaticPathConfig(url_path, file_path, cache_headers=False)
         )
         # Add version query param to bust browser cache on updates
-        add_extra_js_url(hass, f"{url_path}?v=1.1.3")
+        add_extra_js_url(hass, f"{url_path}?v=1.3.0")
         _LOGGER.debug("Registered frontend card: %s", url_path)
     await hass.http.async_register_static_paths(static_paths)
+
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate config entry from old format to new format."""
+    if entry.version < 2:
+        _LOGGER.info("Migrating config entry from version %s to 2", entry.version)
+        new_data = dict(entry.data)
+
+        # Migrate charger_1/charger_2 fields to chargers list
+        chargers = []
+        for i in (1, 2):
+            switch = new_data.pop(f"charger_{i}_switch", "")
+            power = new_data.pop(f"charger_{i}_power", 800)
+            if switch:
+                chargers.append({"switch": switch, "power": int(power)})
+        new_data[CONF_CHARGERS] = chargers
+
+        # Also migrate options if present
+        new_options = dict(entry.options)
+        if any(k.startswith("charger_") for k in new_options):
+            opt_chargers = []
+            for i in (1, 2):
+                switch = new_options.pop(f"charger_{i}_switch", "")
+                power = new_options.pop(f"charger_{i}_power", 800)
+                if switch:
+                    opt_chargers.append({"switch": switch, "power": int(power)})
+            new_options[CONF_CHARGERS] = opt_chargers
+
+        hass.config_entries.async_update_entry(
+            entry, data=new_data, options=new_options, version=2
+        )
+        _LOGGER.info(
+            "Migration complete: %d chargers configured", len(chargers)
+        )
 
     return True
 

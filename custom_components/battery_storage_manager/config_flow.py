@@ -11,10 +11,9 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_SOC_ENTITY,
-    CONF_CHARGER_1_POWER,
-    CONF_CHARGER_1_SWITCH,
-    CONF_CHARGER_2_POWER,
-    CONF_CHARGER_2_SWITCH,
+    CONF_CHARGER_ENTITIES,
+    CONF_CHARGER_POWER_DEFAULT,
+    CONF_CHARGERS,
     CONF_HOUSE_CONSUMPTION_W,
     CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
     CONF_INVERTER_FEED_POWER,
@@ -66,18 +65,10 @@ STEP_TIBBER_SCHEMA = vol.Schema(
 
 STEP_DEVICES_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_CHARGER_1_SWITCH): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="switch")
+        vol.Optional(CONF_CHARGER_ENTITIES, default=[]): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch", multiple=True)
         ),
-        vol.Optional(CONF_CHARGER_1_POWER, default=800): selector.NumberSelector(
-            selector.NumberSelectorConfig(
-                min=0, max=5000, step=100, unit_of_measurement="W"
-            )
-        ),
-        vol.Required(CONF_CHARGER_2_SWITCH): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="switch")
-        ),
-        vol.Optional(CONF_CHARGER_2_POWER, default=800): selector.NumberSelector(
+        vol.Optional(CONF_CHARGER_POWER_DEFAULT, default=800): selector.NumberSelector(
             selector.NumberSelectorConfig(
                 min=0, max=5000, step=100, unit_of_measurement="W"
             )
@@ -146,12 +137,29 @@ STEP_BATTERY_SCHEMA = vol.Schema(
 )
 
 
+def _build_chargers_list(
+    entities: list[str],
+    default_power: int,
+    existing_chargers: list[dict] | None = None,
+) -> list[dict]:
+    """Build chargers list, preserving per-charger power for known entities."""
+    existing_map = {}
+    if existing_chargers:
+        existing_map = {c["switch"]: c["power"] for c in existing_chargers}
+
+    return [
+        {"switch": eid, "power": existing_map.get(eid, int(default_power))}
+        for eid in entities
+        if eid  # skip empty strings
+    ]
+
+
 class BatteryStorageManagerConfigFlow(
     config_entries.ConfigFlow, domain=DOMAIN
 ):
     """Handle a config flow for Battery Storage Manager."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -174,6 +182,11 @@ class BatteryStorageManagerConfigFlow(
     async def async_step_devices(self, user_input=None):
         """Handle the second step: Device entities."""
         if user_input is not None:
+            charger_entities = user_input.pop(CONF_CHARGER_ENTITIES, [])
+            default_power = user_input.pop(CONF_CHARGER_POWER_DEFAULT, 800)
+            self._data[CONF_CHARGERS] = _build_chargers_list(
+                charger_entities, default_power
+            )
             self._data.update(user_input)
             return await self.async_step_battery()
 
@@ -210,11 +223,7 @@ class BatteryStorageManagerConfigFlow(
 
 
 class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
-    """Handle options flow for Battery Storage Manager.
-
-    All settings from the initial setup can be changed here,
-    split into the same 3 steps: Tibber, Devices, Battery.
-    """
+    """Handle options flow for Battery Storage Manager."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
@@ -226,6 +235,10 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
         return self._config_entry.options.get(
             key, self._config_entry.data.get(key, default)
         )
+
+    def _current_chargers(self) -> list[dict]:
+        """Get current chargers list."""
+        return self._current(CONF_CHARGERS, [])
 
     async def async_step_init(self, user_input=None):
         """Step 1: Tibber & Solar entities."""
@@ -280,36 +293,37 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
     async def async_step_devices(self, user_input=None):
         """Step 2: Device entities."""
         if user_input is not None:
+            charger_entities = user_input.pop(CONF_CHARGER_ENTITIES, [])
+            default_power = user_input.pop(CONF_CHARGER_POWER_DEFAULT, 800)
+            self._data[CONF_CHARGERS] = _build_chargers_list(
+                charger_entities, default_power, self._current_chargers()
+            )
             self._data.update(user_input)
             return await self.async_step_battery()
+
+        current_chargers = self._current_chargers()
+        current_entities = [c["switch"] for c in current_chargers]
+        # Show average of existing powers as default
+        current_powers = [c["power"] for c in current_chargers]
+        avg_power = (
+            int(sum(current_powers) / len(current_powers))
+            if current_powers
+            else 800
+        )
 
         return self.async_show_form(
             step_id="devices",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
-                        CONF_CHARGER_1_SWITCH,
-                        default=self._current(CONF_CHARGER_1_SWITCH, ""),
+                    vol.Optional(
+                        CONF_CHARGER_ENTITIES,
+                        default=current_entities,
                     ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="switch")
+                        selector.EntitySelectorConfig(domain="switch", multiple=True)
                     ),
                     vol.Optional(
-                        CONF_CHARGER_1_POWER,
-                        default=self._current(CONF_CHARGER_1_POWER, 800),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0, max=5000, step=100, unit_of_measurement="W"
-                        )
-                    ),
-                    vol.Required(
-                        CONF_CHARGER_2_SWITCH,
-                        default=self._current(CONF_CHARGER_2_SWITCH, ""),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="switch")
-                    ),
-                    vol.Optional(
-                        CONF_CHARGER_2_POWER,
-                        default=self._current(CONF_CHARGER_2_POWER, 800),
+                        CONF_CHARGER_POWER_DEFAULT,
+                        default=avg_power,
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0, max=5000, step=100, unit_of_measurement="W"

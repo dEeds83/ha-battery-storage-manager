@@ -31,8 +31,6 @@ async def async_setup_entry(
         CurrentPriceSensor(coordinator, entry),
         BatterySOCSensor(coordinator, entry),
         GridPowerSensor(coordinator, entry),
-        Charger1StatusSensor(coordinator, entry),
-        Charger2StatusSensor(coordinator, entry),
         InverterStatusSensor(coordinator, entry),
         InverterActualPowerSensor(coordinator, entry),
         InverterTargetPowerSensor(coordinator, entry),
@@ -42,6 +40,10 @@ async def async_setup_entry(
         PlannedActionSensor(coordinator, entry),
         ExpectedSolarSensor(coordinator, entry),
     ]
+
+    # Dynamic charger status sensors
+    for i in range(len(coordinator.chargers)):
+        entities.append(ChargerStatusSensor(coordinator, entry, i))
 
     async_add_entities(entities)
 
@@ -91,8 +93,10 @@ class OperatingModeSensor(BatteryStorageBaseSensor):
             return {}
         d = self.coordinator.data
         return {
-            "charger_1_active": d.get("charger_1_active"),
-            "charger_2_active": d.get("charger_2_active"),
+            "chargers": [
+                {"index": c.get("index"), "active": c.get("active"), "power": c.get("power")}
+                for c in d.get("chargers", [])
+            ],
             "inverter_active": d.get("inverter_active"),
             "inverter_target_power": d.get("inverter_target_power"),
             "inverter_actual_power": d.get("inverter_actual_power"),
@@ -210,34 +214,36 @@ class GridPowerSensor(BatteryStorageBaseSensor):
         }
 
 
-class Charger1StatusSensor(BatteryStorageBaseSensor):
-    """Sensor showing charger 1 status."""
+class ChargerStatusSensor(BatteryStorageBaseSensor):
+    """Sensor showing charger N status (dynamically created per charger)."""
 
     _attr_icon = "mdi:battery-charging"
 
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, "charger_1_status", "Ladegerät 1 Status")
+    def __init__(self, coordinator, entry, charger_index: int):
+        self._charger_index = charger_index
+        num = charger_index + 1
+        super().__init__(
+            coordinator, entry,
+            f"charger_{num}_status",
+            f"Ladegerät {num} Status",
+        )
 
     @property
     def native_value(self) -> str:
-        if self.coordinator.data and self.coordinator.data.get("charger_1_active"):
-            return "Aktiv"
+        if self.coordinator.data:
+            chargers = self.coordinator.data.get("chargers", [])
+            if self._charger_index < len(chargers):
+                return "Aktiv" if chargers[self._charger_index].get("active") else "Inaktiv"
         return "Inaktiv"
-
-
-class Charger2StatusSensor(BatteryStorageBaseSensor):
-    """Sensor showing charger 2 status."""
-
-    _attr_icon = "mdi:battery-charging"
-
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, "charger_2_status", "Ladegerät 2 Status")
 
     @property
-    def native_value(self) -> str:
-        if self.coordinator.data and self.coordinator.data.get("charger_2_active"):
-            return "Aktiv"
-        return "Inaktiv"
+    def extra_state_attributes(self):
+        if self.coordinator.data:
+            chargers = self.coordinator.data.get("chargers", [])
+            if self._charger_index < len(chargers):
+                c = chargers[self._charger_index]
+                return {"power_w": c.get("power", 0), "switch": c.get("switch", "")}
+        return {}
 
 
 class InverterStatusSensor(BatteryStorageBaseSensor):
