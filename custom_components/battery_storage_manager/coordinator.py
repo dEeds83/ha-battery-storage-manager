@@ -912,9 +912,21 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Plan action: DISCHARGE")
             await self._start_discharging()
         elif action == "solar_charge":
-            # During solar hours: don't charge from grid, but allow solar to fill battery
-            # If grid is importing, discharge to cover house demand
+            # AC-coupled system: solar surplus flows through the house network
+            # and needs the chargers to be ON to charge the battery
             if (
+                self._grid_power is not None
+                and self._grid_power < -50
+                and self._battery_soc < self._max_soc
+            ):
+                surplus_w = abs(self._grid_power)
+                _LOGGER.debug(
+                    "Plan action: SOLAR_CHARGE - charging from solar surplus "
+                    "(grid_power=%.0fW, surplus=%.0fW)",
+                    self._grid_power, surplus_w,
+                )
+                await self._start_solar_charging(surplus_w)
+            elif (
                 self._allow_discharging
                 and self._grid_power is not None
                 and self._grid_power > 50
@@ -923,7 +935,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Plan action: SOLAR_CHARGE - discharging to cover grid import")
                 await self._start_discharging()
             else:
-                _LOGGER.debug("Plan action: SOLAR_CHARGE - idle (solar filling battery)")
+                _LOGGER.debug("Plan action: SOLAR_CHARGE - idle (no surplus/full)")
                 await self._set_mode_idle()
         elif action == "hold":
             _LOGGER.debug("Plan action: HOLD - keeping charge for later")
@@ -984,6 +996,178 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._inverter_active = False
 
         self._operating_mode = MODE_CHARGING
+
+    async def _start_solar_charging(self, surplus_w: float) -> None:
+        """Activate chargers proportionally to available solar surplus.
+
+        In an AC-coupled system the chargers draw from the house network.
+        Only turn on as many chargers as the current surplus can sustain,
+        so we avoid pulling power from the grid.
+        """
+        c1_power = self._charger_1_power or 0
+        c2_power = self._charger_2_power or 0
+
+        # Determine which chargers to run based on surplus
+        # Use a small margin (80%) to avoid grid import from fluctuations
+        want_c1 = c1_power > 0 and surplus_w >= c1_power * 0.8
+        want_c2 = c2_power > 0 and surplus_w >= c2_power * 0.8
+        want_both = (
+            c1_power > 0
+            and c2_power > 0
+            and surplus_w >= (c1_power + c2_power) * 0.8
+        )
+
+        if want_both:
+            need_c1, need_c2 = True, True
+        elif want_c1 and want_c2:
+            # Surplus covers either but not both – pick the larger one
+            need_c1 = c1_power >= c2_power
+            need_c2 = not need_c1
+        elif want_c1:
+            need_c1, need_c2 = True, False
+        elif want_c2:
+            need_c1, need_c2 = False, True
+        else:
+            # Surplus too small for any single charger – use the smaller
+            # charger combined with the inverter to cover the deficit,
+            # so solar energy is not wasted by feeding it back to the grid.
+            min_charger_power = min(
+                (p for p in (c1_power, c2_power) if p > 0), default=0
+            )
+            deficit_w = min_charger_power - surplus_w
+            if (
+                min_charger_power > 0
+                and surplus_w > deficit_w
+                and self._inverter_power_entity
+            ):
+                need_c1 = c1_power == min_charger_power
+                need_c2 = not need_c1 if c2_power > 0 else False
+                _LOGGER.debug(
+                    "Solar surplus %.0fW < charger – using inverter to cover "
+                    "deficit (charger=%dW, deficit=%.0fW)",
+                    surplus_w, min_charger_power,
+                    min_charger_power - surplus_w,
+                )
+                await self._start_solar_charging_with_inverter(
+                    surplus_w, need_c1, need_c2,
+                )
+                return
+
+            _LOGGER.debug(
+                "Solar surplus %.0fW too low for chargers (C1=%dW, C2=%dW)",
+                surplus_w, c1_power, c2_power,
+            )
+            await self._set_mode_idle()
+            return
+
+        # Apply charger states
+        if self._charger_1_switch:
+            if need_c1 and not self._charger_1_active:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": self._charger_1_switch}
+                )
+                self._charger_1_active = True
+            elif not need_c1 and self._charger_1_active:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": self._charger_1_switch}
+                )
+                self._charger_1_active = False
+
+        if self._charger_2_switch:
+            if need_c2 and not self._charger_2_active:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": self._charger_2_switch}
+                )
+                self._charger_2_active = True
+            elif not need_c2 and self._charger_2_active:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": self._charger_2_switch}
+                )
+                self._charger_2_active = False
+
+        # Turn off inverter
+        if self._inverter_active:
+            if self._inverter_switch:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": self._inverter_switch}
+                )
+            await self._set_inverter_power(0)
+            self._inverter_active = False
+
+        self._operating_mode = MODE_CHARGING
+        _LOGGER.info(
+            "Solar charging: surplus=%.0fW, C1=%s (%dW), C2=%s (%dW)",
+            surplus_w,
+            "ON" if need_c1 else "OFF", c1_power,
+            "ON" if need_c2 else "OFF", c2_power,
+        )
+
+    async def _start_solar_charging_with_inverter(
+        self, surplus_w: float, need_c1: bool, need_c2: bool,
+    ) -> None:
+        """Charge from solar with inverter covering the deficit.
+
+        When the solar surplus is too small for a charger alone, the inverter
+        feeds the difference back into the house network so that the charger
+        can run with minimal grid import.  The net effect is that most of the
+        solar surplus ends up in the battery (minus round-trip losses on the
+        deficit portion).
+        """
+        c1_power = self._charger_1_power or 0
+        c2_power = self._charger_2_power or 0
+        charger_power = (c1_power if need_c1 else 0) + (c2_power if need_c2 else 0)
+        deficit_w = max(0, charger_power - surplus_w)
+
+        # Turn on the chosen charger(s)
+        if self._charger_1_switch:
+            if need_c1 and not self._charger_1_active:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": self._charger_1_switch}
+                )
+                self._charger_1_active = True
+            elif not need_c1 and self._charger_1_active:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": self._charger_1_switch}
+                )
+                self._charger_1_active = False
+
+        if self._charger_2_switch:
+            if need_c2 and not self._charger_2_active:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": self._charger_2_switch}
+                )
+                self._charger_2_active = True
+            elif not need_c2 and self._charger_2_active:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": self._charger_2_switch}
+                )
+                self._charger_2_active = False
+
+        # Turn on inverter and set power to cover the deficit
+        if self._inverter_switch and not self._inverter_active:
+            await self.hass.services.async_call(
+                "switch", "turn_on", {"entity_id": self._inverter_switch}
+            )
+        self._inverter_active = True
+
+        # Set inverter to cover the deficit between charger draw and solar surplus
+        self._inverter_target_power = deficit_w
+        domain = self._inverter_power_entity.split(".")[0]
+        await self.hass.services.async_call(
+            domain,
+            "set_value",
+            {
+                "entity_id": self._inverter_power_entity,
+                "value": round(deficit_w),
+            },
+        )
+
+        self._operating_mode = MODE_CHARGING
+        _LOGGER.info(
+            "Solar+inverter charging: surplus=%.0fW, charger=%dW, "
+            "inverter covers deficit=%.0fW",
+            surplus_w, charger_power, deficit_w,
+        )
 
     async def _start_discharging(self) -> None:
         """Activate inverter to discharge battery into home network.
