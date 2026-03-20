@@ -3,17 +3,29 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![Version](https://img.shields.io/badge/version-1.5.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
-Eine Home Assistant Custom Integration zur intelligenten Steuerung von Batteriespeichern basierend auf Strompreisen (Tibber), Solarprognosen und Eigenverbrauchsoptimierung.
+Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
 ## Features
 
-- **Preisoptimierte Steuerung** – Automatisches Laden bei günstigen Strompreisen und Entladen bei teuren Preisen basierend auf 24-48h Preisprognosen
-- **Solarprognose-Integration** – Berücksichtigung von Solarertragsprognosen (Forecast.Solar, Solcast) inkl. Unterstützung mehrerer Anlagen
-- **Intelligenter Speicherplan** – Stündlicher Aktionsplan mit farbcodierter Visualisierung direkt im Dashboard
-- **Eigenverbrauchsoptimierung** – Batterieentladung zur Deckung des Hausverbrauchs, Laden bei Solarüberschuss
+### Optimierung
+- **Preisarbitrage-Optimierung** – Paart günstigste Lade- mit teuersten Entladezeitpunkten, minimaler Spread 2 ct/kWh für Rundtrip-Verluste
+- **15-Minuten-Preisauflösung** – Nutzt die volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
+- **Effektive Ladekosten** – Solar-unterstützte Stunden werden bevorzugt (z.B. 50% Solar → halber Netzpreis)
+- **Headroom-Reservierung** – Batterie wird nicht per Netz vollgeladen wenn Solar genug liefert
+- **Pre-Solar-Entladung** – Entlädt proaktiv vor Solar-Stunden um Platz für kostenlose Solarenergie zu schaffen
+- **Lernende Verbrauchsprognose** – 14-Tage rollender Durchschnitt pro Tagesstunde ersetzt statischen Hausverbrauch
+
+### Steuerung
+- **Dynamische Ladegeräte-Anzahl** – Beliebig viele Ladegeräte mit individueller Leistung konfigurierbar
+- **Intelligentes Solar-Laden** – Ladegeräte werden proportional zum Solarüberschuss zugeschaltet (AC-gekoppelt)
+- **PID-geregelte Nulleinspeisung** – Wechselrichter-Leistung wird sanft und schwingungsfrei geregelt (P/I/D)
+- **Hysterese-Schaltung** – Mindest-Ein-/Ausschaltzeiten verhindern Ladegeräte-Flackern (120s/60s)
+- **Geräte-Synchronisierung** – Interner Status wird bei jedem Zyklus mit echten Switch-Zuständen abgeglichen
+
+### Weitere Features
+- **Solarprognose-Integration** – Forecast.Solar, Solcast, mehrere Anlagen summierbar
+- **Eigenverbrauchsoptimierung** – Batterieentladung zur Deckung des Hausverbrauchs
 - **Manueller Modus** – Volle manuelle Kontrolle über Laden und Entladen
-- **Zero-Feed-Regelung** – Automatische Wechselrichter-Leistungsanpassung zur Vermeidung von Netzeinspeisung
-- **Dual-Charger-Unterstützung** – Steuerung von zwei Ladegeräten und einem Einspeise-Wechselrichter
 - **Runtime-Toggles** – Netzladen, Entladen und Solarprognose jederzeit ein-/ausschaltbar
 - **Eingebaute Lovelace Cards** – Plan- und Status-Visualisierung ohne zusätzliche Frontend-Plugins
 - **Live-Konfiguration** – Alle Einstellungen nachträglich änderbar, ohne Neustart
@@ -62,14 +74,14 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 
 | Parameter | Beschreibung | Standard |
 |-----------|-------------|----------|
-| Ladegerät 1 Switch | Schalter für erstes Ladegerät | – |
-| Ladegerät 1 Leistung | Nennleistung in Watt | 800 W |
-| Ladegerät 2 Switch | Schalter für zweites Ladegerät | – |
-| Ladegerät 2 Leistung | Nennleistung in Watt | 800 W |
+| Ladegeräte Schalter | Multi-Select aller Ladegerät-Switches | – |
+| Standard-Leistung pro Ladegerät | Nennleistung in Watt (gilt für alle neuen Ladegeräte) | 800 W |
 | Einspeise-Wechselrichter Switch | Schalter für Feed-Inverter (optional) | – |
 | Einspeise-Wechselrichter Power-Entity | Number/Input-Number-Entity für Leistungsregelung (optional) | – |
 | Einspeise-Wechselrichter Leistung | Maximale Nennleistung in Watt | 800 W |
 | Einspeise-Wechselrichter Ist-Leistung | Sensor mit aktueller Wechselrichter-Ausgangsleistung (optional) | – |
+
+> **Hinweis:** Es können beliebig viele Ladegeräte hinzugefügt werden. Im Options Flow behalten bestehende Ladegeräte ihre individuelle Leistung, neue bekommen die Standard-Leistung.
 
 ### Schritt 3: Batterie
 
@@ -79,9 +91,9 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 | Kapazität | Batteriekapazität in kWh | 5.0 kWh |
 | Min SOC | Minimaler Ladezustand | 10% |
 | Max SOC | Maximaler Ladezustand | 95% |
-| Preisschwelle niedrig | Laden unter diesem Preis | 15 ct/kWh |
-| Preisschwelle hoch | Entladen über diesem Preis | 30 ct/kWh |
-| Hausverbrauch | Durchschnittlicher Verbrauch in Watt | 500 W |
+| Preisschwelle niedrig | Laden unter diesem Preis (Fallback ohne Prognose) | 15 ct/kWh |
+| Preisschwelle hoch | Entladen über diesem Preis (Fallback ohne Prognose) | 30 ct/kWh |
+| Hausverbrauch | Durchschnittlicher Verbrauch in Watt (Startwert, wird durch Lernfunktion ersetzt) | 500 W |
 
 ### Nachträgliche Anpassung
 
@@ -89,21 +101,22 @@ Alle Einstellungen können jederzeit nachträglich geändert werden:
 
 **Einstellungen** > **Geräte & Dienste** > **Battery Storage Manager** > **Konfigurieren**
 
-Der Options-Flow durchläuft die gleichen drei Schritte mit vorausgefüllten aktuellen Werten. Änderungen werden **sofort übernommen**, kein Neustart nötig.
+Änderungen werden **sofort übernommen**, kein Neustart nötig.
+
+### Migration
+
+Bestehende Installationen mit der alten Konfiguration (Ladegerät 1/2) werden beim Update **automatisch migriert**. Die Config-Entry-Version wird von 1 auf 2 angehoben.
 
 ## Mehrere Solaranlagen
 
-Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognosen werden **pro Stunde aufsummiert**, verschiedene Formate können gemischt werden:
+Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognosen werden **pro Stunde aufsummiert** und bei 15-Min-Slots gleichmäßig aufgeteilt.
 
 | Anbieter | Format | Erkannt über |
 |----------|--------|-------------|
 | Forecast.Solar | `watt_hours_period` Attribut | `{datetime: Wh}` Dict |
 | Forecast.Solar (kumulativ) | `watt_hours` Attribut | Kumulatives `{datetime: Wh}` Dict |
+| Forecast.Solar (Energy Platform) | `runtime_data.wh_period` | Config Entry Runtime Data |
 | Solcast | `forecast` Attribut | `[{period_start, pv_estimate}]` Liste |
-
-**Beispiel:** Zwei Dachflächen + Garage als separate Solcast-Accounts:
-- `sensor.solcast_dach_sued` → Solar-Forecast-Sensor (Hauptfeld)
-- `sensor.solcast_dach_west` + `sensor.forecast_solar_garage` → Weitere Solar-Sensoren
 
 ## Entitäten
 
@@ -116,16 +129,16 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Aktueller Strompreis | Strompreis in EUR/kWh mit günstigen/teuren Stunden als Attribute |
 | Speicher Ladestand | Ladezustand in Prozent mit dynamischem Batterie-Icon |
 | Netzleistung | Aktueller Netzbezug/-einspeisung in Watt mit Richtungsanzeige |
-| Ladegerät 1 Status | Aktiv / Inaktiv |
-| Ladegerät 2 Status | Aktiv / Inaktiv |
+| Ladegerät N Status | Aktiv/Inaktiv pro konfiguriertem Ladegerät (dynamisch erzeugt) mit Leistung als Attribut |
 | Wechselrichter Status | Aktiv / Inaktiv |
 | Wechselrichter Leistung | Aktuelle Ist-Leistung des Einspeise-Wechselrichters in Watt |
 | Wechselrichter Soll-Leistung | Vom Plugin gesetzter Zielwert für den Wechselrichter in Watt |
 | Nächstes günstiges Fenster | Zeitpunkt der nächsten günstigen Preisperiode |
 | Nächstes teures Fenster | Zeitpunkt der nächsten teuren Preisperiode |
-| Speicherplan | Tagesplan-Zusammenfassung mit vollständigem stündlichen Plan als Attribut |
-| Geplante Aktion | Aktuelle Aktion dieser Stunde (Laden/Entladen/Solar/Halten/Inaktiv) |
+| Speicherplan | Tagesplan-Zusammenfassung mit vollständigem Plan als Attribut |
+| Geplante Aktion | Aktuelle Aktion dieses Zeitslots (Laden/Entladen/Solar/Halten/Inaktiv) |
 | Erwartete Solarproduktion | Verbleibende erwartete Solarproduktion heute in kWh |
+| Verbrauchsprognose | Vorhergesagter Hausverbrauch der aktuellen Stunde (W), 24h-Forecast als Attribut |
 
 ### Schalter
 
@@ -138,8 +151,6 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Entladen erlauben | Batterieentladung erlauben/verbieten |
 | Solarprognose nutzen | Solarbasierte Planung ein-/ausschalten |
 
-Die drei **Runtime-Toggles** (Netzladen, Entladen, Solarprognose) können jederzeit geschaltet werden und wirken sofort auf die Planungslogik.
-
 ### Zahlenwerte (Slider)
 
 | Slider | Bereich | Schrittweite |
@@ -151,11 +162,11 @@ Die drei **Runtime-Toggles** (Netzladen, Entladen, Solarprognose) können jederz
 
 ## Eingebaute Dashboard-Cards
 
-Die Integration liefert zwei Custom Lovelace Cards mit, die **automatisch geladen** werden (kein manuelles Hinzufügen von Ressourcen oder HACS-Frontend-Plugins nötig). Die Cards erscheinen im Card-Picker und unterstützen den visuellen Editor.
+Die Integration liefert zwei Custom Lovelace Cards mit, die **automatisch geladen** werden. Die Cards erscheinen im Card-Picker und unterstützen den visuellen Editor.
 
 ### Battery Plan Card
 
-Visualisiert den stündlichen Speicherplan als farbcodiertes Balkendiagramm:
+Visualisiert den Speicherplan als farbcodiertes Balkendiagramm mit 15-Minuten-Auflösung:
 
 ```yaml
 type: custom:battery-plan-card
@@ -166,13 +177,13 @@ show_solar: true     # optional, Standard: true
 ```
 
 **Funktionen:**
-- Farbige Balken pro Stunde nach Aktionstyp (Grün = Laden, Orange = Entladen, Gold = Solar, Blau = Halten, Grau = Idle)
+- Farbige Balken pro Zeitslot (Grün = Laden, Orange = Entladen, Gold = Solar, Blau = Halten, Grau = Idle)
 - Preisachse links in ct/kWh
-- Solarproduktion als goldene Linie im Overlay
-- Aktuelle Stunde hervorgehoben mit blauem Rahmen und Jetzt-Marker
-- Legende mit Stundenzählung pro Aktionstyp
-- Aufklappbare Detailtabelle (Zeit, Preis, Solar, erwarteter SOC, Aktion, Grund)
-- Tooltip mit Details bei Hover auf Balken
+- Solarproduktion als goldene Linie
+- Aktueller Zeitslot hervorgehoben mit blauem Jetzt-Marker
+- Legende mit Dauer pro Aktionstyp (z.B. "Laden (2h15)", "Solar (1h30)")
+- Aufklappbare Detailtabelle mit Preis, Solar, erwartetem SOC, Aktion und Begründung
+- Tooltip mit Details bei Hover
 
 ### Battery Status Card
 
@@ -182,10 +193,6 @@ Kompakte Statusübersicht mit SOC-Ring und Live-Daten:
 type: custom:battery-status-card
 entity: sensor.battery_storage_manager_betriebsmodus
 title: Batteriespeicher
-toggle_entities:                                                    # optional
-  - switch.battery_storage_manager_netzladen_erlauben
-  - switch.battery_storage_manager_entladen_erlauben
-  - switch.battery_storage_manager_solarprognose_nutzen
 ```
 
 **Funktionen:**
@@ -194,8 +201,8 @@ toggle_entities:                                                    # optional
 - Betriebsmodus mit farbigem Icon
 - Netzbezug/-einspeisung mit Richtung und Wattzahl
 - Wechselrichter-Leistung (wenn aktiv)
-- Strategie-Badge (Preisoptimiert / Eigenverbrauch / Manuell)
-- Integrierte Toggle-Switches direkt in der Card
+- Strategie-Badge
+- Integrierte Toggle-Switches
 
 ## Services
 
@@ -208,52 +215,78 @@ toggle_entities:                                                    # optional
 
 ## Funktionsweise
 
-### Planungszyklus
+### Planungszyklus (alle 30 Sekunden)
 
-Der Battery Storage Manager analysiert alle 30 Sekunden die Situation und erstellt einen stündlichen Aktionsplan:
+1. **Sensoren lesen** – SOC, Netzleistung, Strompreis, Switch-Zustände
+2. **Geräte synchronisieren** – Interne Flags mit echten Switch-Zuständen abgleichen
+3. **Verbrauch erfassen** – Aktuellen Hausverbrauch für rollende Statistik aufzeichnen
+4. **Preise laden** – 15-Min-Preise via `tibber.get_prices` Action (oder Fallback auf Attribute)
+5. **Solarprognose lesen** – Alle konfigurierten Solar-Sensoren aufsummieren
+6. **Batterieplan erstellen:**
+   - Solar-Budget berechnen und Headroom reservieren
+   - Pre-Solar-Entladung planen wenn nötig (Platz für Solar schaffen)
+   - Effektive Ladekosten pro Slot (Netzpreis × Grid-Anteil)
+   - Arbitrage-Paare bilden (günstigste Ladeslots ↔ teuerste Entladeslots)
+   - Restliche Solar-Stunden als kostenlose Ladeslots markieren
+   - SOC vorwärts simulieren und Aktionen gegen Limits validieren
+7. **Aktion ausführen** – Ladegeräte/Wechselrichter entsprechend schalten
 
-1. **Solarprognose lesen** – Alle konfigurierten Solar-Sensoren werden gelesen und pro Stunde aufsummiert
-2. **Solarüberschuss berechnen** – Erwarteter Solarertrag minus Hausverbrauch pro Stunde
-3. **Ladebedarf ermitteln** – Wie viele Stunden Netzladen nötig, um die Batterie zu füllen (nach Abzug von Solar)
-4. **Entladekapazität berechnen** – Wie viele Stunden Entladung möglich basierend auf aktuellem SOC
-5. **Aktionen zuweisen:**
-   - **Solar-Laden** – Stunden mit Solarüberschuss (> 50 Wh nach Hausverbrauch)
-   - **Netzladen** – Günstigste Stunden ohne nennenswerte Solarproduktion
-   - **Entladen** – Teuerste Stunden (über Durchschnittspreis)
-   - **Halten** – Ladung für kommende teure Stunden aufbewahren (keine Entladung)
-   - **Inaktiv** – Keine Aktion nötig
+### Arbitrage-Optimierung
+
+Der Algorithmus paart die günstigsten Lade-Zeitslots mit den teuersten Entlade-Zeitslots:
+
+- **Effektive Ladekosten** = Netzanteil × Strompreis (Solar reduziert den Preis)
+- **Minimaler Spread** = 2 ct/kWh (deckt Rundtrip-Verluste)
+- **Headroom-Reservierung** = Kapazität die Solar füllen kann wird nicht per Netz belegt
+- **Geschätzte Ersparnis** wird pro Arbitrage-Paar berechnet
+
+### Solar-Laden (AC-gekoppelt)
+
+Das System ist auf AC-gekoppelte Speicher ausgelegt: Solarüberschuss fließt durchs Hausnetz und braucht die Ladegeräte, um in die Batterie zu kommen.
+
+| Solarüberschuss | Aktion |
+|---|---|
+| ≥ 80% aller Ladegeräte | Alle Ladegeräte an |
+| ≥ 80% eines Ladegeräts | Größtes passendes an |
+| > 50% des kleinsten | Kleinstes + Wechselrichter deckt Defizit |
+| < 50% | Idle (Kreislaufverluste nicht lohnend) |
+
+Der **wahre Solarüberschuss** wird bei jedem Zyklus berechnet: gemessener Export + Leistung aktiver Ladegeräte + Wechselrichter-Einspeisung. So wird Oszillation verhindert.
+
+### PID-geregelte Nulleinspeisung
+
+Statt einfacher additiver Anpassung nutzt der Wechselrichter einen PID-Regler:
+- **P** (proportional, Kp=0.6): Sofortige Reaktion auf Abweichung
+- **I** (integral, Ki=0.15): Gleicht dauerhafte Offsets aus
+- **D** (derivative, Kd=0.1): Dämpft schnelle Schwankungen
+- **Anti-Windup**: Begrenzt den Integralterm
+- **Setpoint**: 10W leichter Netzbezug (verhindert Einspeisung)
+
+### Lernende Verbrauchsprognose
+
+Der konfigurierte Hausverbrauch (z.B. 500W) dient nur als Startwert. Die Integration lernt den tatsächlichen Verbrauch:
+
+- **Erfassung** alle 30 Sekunden, Durchschnitt beim Stundenwechsel gespeichert
+- **14-Tage rollender Durchschnitt** pro Tagesstunde (0-23)
+- **Persistent** (überlebt Neustarts)
+- **Charger/Inverter herausgerechnet** → reiner Hausverbrauch
+- Beispiel: 200W nachts, 400W morgens, 800W abends
 
 ### Strategien
 
 | Strategie | Verhalten |
 |-----------|-----------|
-| **Preisoptimiert** | Folgt dem berechneten Speicherplan basierend auf Preisen und Solar |
+| **Preisoptimiert** | Folgt dem Arbitrage-optimierten Speicherplan |
 | **Eigenverbrauch** | Entlädt bei Netzbezug, lädt bei Überschuss – unabhängig vom Preis |
 | **Manuell** | Keine automatische Steuerung, nur manuelle Aktionen über Schalter/Services |
 
-### Zero-Feed-Regelung
-
-Wenn ein Wechselrichter-Power-Entity konfiguriert ist, regelt der Manager die Ausgangsleistung automatisch so, dass der Netzbezug gegen null geht, ohne Strom ins Netz einzuspeisen. Die Regelung passt sich alle 30 Sekunden an den aktuellen Netzbezug an.
-
 ### Runtime-Toggles
-
-Die drei Laufzeit-Schalter beeinflussen die Planausführung sofort:
 
 | Toggle | Wenn AUS |
 |--------|----------|
 | Netzladen erlauben | Plan-Aktionen "charge" werden übersprungen (idle stattdessen) |
 | Entladen erlauben | Plan-Aktionen "discharge" werden übersprungen |
 | Solarprognose nutzen | Solarprognosen werden nicht gelesen, Plan basiert nur auf Preisen |
-
-## Weitere Dashboard-Beispiele
-
-Im Ordner `examples/dashboard.yaml` finden sich zusätzliche Lovelace-Card-Konfigurationen:
-
-- Entities-Card mit allen Sensoren
-- Entities-Card mit allen Schaltern und Slidern
-- Markdown-Card mit farbiger Plantabelle (Jinja2-Template)
-- ApexCharts-Card mit Preisdiagramm (benötigt `apexcharts-card` via HACS)
-- ApexCharts-Card mit Aktions-Timeline
 
 ## Lizenz
 
