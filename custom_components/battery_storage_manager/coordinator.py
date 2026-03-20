@@ -862,10 +862,52 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         solar_fills_kwh = min(total_solar_kwh, headroom_kwh)
         grid_headroom_kwh = max(0, headroom_kwh - solar_fills_kwh)
 
+        # Calculate how much solar would be wasted (more solar than headroom)
+        solar_wasted_kwh = max(0, total_solar_kwh - headroom_kwh)
+
+        # Pre-solar discharge: if solar exceeds headroom, discharge BEFORE
+        # solar hours to create room.  Pick the most expensive pre-solar hours.
+        presolar_discharge_hours: set[int] = set()
+        if solar_wasted_kwh > 0.1 and discharge_kwh_h > 0:
+            # Find the first solar hour
+            first_solar_idx = next(
+                (i for i, h in enumerate(hourly_data) if h["solar_surplus_kwh"] > 0.05),
+                n,
+            )
+            # Candidate hours: before first solar, sorted by price (most expensive first)
+            presolar_cands = [
+                (i, hourly_data[i]["price"])
+                for i in range(first_solar_idx)
+                if hourly_data[i]["solar_surplus_kwh"] < 0.05
+            ]
+            presolar_cands.sort(key=lambda x: x[1], reverse=True)
+
+            discharge_needed = solar_wasted_kwh
+            for idx, price in presolar_cands:
+                if discharge_needed <= 0:
+                    break
+                # Only discharge if stored energy is available
+                presolar_discharge_hours.add(idx)
+                discharge_needed -= discharge_kwh_h
+                actions[idx] = "discharge"
+
+            if presolar_discharge_hours:
+                # Recalculate headroom after pre-solar discharge
+                extra_headroom = len(presolar_discharge_hours) * discharge_kwh_h
+                headroom_kwh += extra_headroom
+                solar_fills_kwh = min(total_solar_kwh, headroom_kwh)
+                grid_headroom_kwh = max(0, headroom_kwh - solar_fills_kwh)
+                _LOGGER.info(
+                    "Pre-solar discharge: %d hours to free %.1f kWh for solar "
+                    "(was wasting %.1f kWh)",
+                    len(presolar_discharge_hours), extra_headroom, solar_wasted_kwh,
+                )
+
         _LOGGER.debug(
             "Plan budget: headroom=%.1f kWh, solar=%.1f kWh, "
-            "grid_needed=%.1f kWh",
+            "grid_needed=%.1f kWh, pre-solar_discharge=%d hours",
             headroom_kwh, solar_fills_kwh, grid_headroom_kwh,
+            len(presolar_discharge_hours),
         )
 
         # Step 2: Find profitable arbitrage pairs
@@ -875,6 +917,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         charge_cands = []   # (index, sort_cost)
         discharge_cands = []  # (index, price)
         for i, h in enumerate(hourly_data):
+            if i in presolar_discharge_hours:
+                continue  # already assigned
             # Charge candidate: effective cost (solar reduces it)
             charge_cands.append((i, h["effective_charge_cost"]))
             # Discharge candidate: only hours with low solar surplus
@@ -986,20 +1030,26 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             elif action == "solar_charge":
                 reason = f"Solar {h['solar_surplus_kwh']:.1f} kWh (kostenlos)"
             elif action == "discharge":
-                # Find the paired charge hour for context
-                paired_charge = None
-                for c_idx, d_idx, spread in pairs:
-                    if d_idx == i:
-                        ch = hourly_data[c_idx]
-                        paired_charge = ch
-                        break
-                if paired_charge:
+                if i in presolar_discharge_hours:
                     reason = (
-                        f"Entladen ({h['price']*100:.1f} ct, "
-                        f"Spread {(h['price'] - paired_charge['effective_charge_cost'])*100:.0f} ct)"
+                        f"Platz für Solar schaffen "
+                        f"({h['price']*100:.1f} ct/kWh)"
                     )
                 else:
-                    reason = f"Entladen ({h['price']*100:.1f} ct/kWh)"
+                    # Find the paired charge hour for context
+                    paired_charge = None
+                    for c_idx, d_idx, spread in pairs:
+                        if d_idx == i:
+                            ch = hourly_data[c_idx]
+                            paired_charge = ch
+                            break
+                    if paired_charge:
+                        reason = (
+                            f"Entladen ({h['price']*100:.1f} ct, "
+                            f"Spread {(h['price'] - paired_charge['effective_charge_cost'])*100:.0f} ct)"
+                        )
+                    else:
+                        reason = f"Entladen ({h['price']*100:.1f} ct/kWh)"
             elif action == "hold":
                 reason = "Halten für teure Stunden"
             else:
