@@ -329,42 +329,92 @@ display:
         it.print(c3_x + 8, row1_y + 22, id(font_medium), "-- kWh");
       }
 
-      // ── Row 2: Plan Summary ──
+      // ── Row 2: Plan + Action + Verbrauch ──
       int row2_y = row1_y + card_h + 12;
-      draw_card(card_x, row2_y, W - card_x - PAD, card_h);
+      int r2w = (W - card_x - PAD * 2) / 3;
+
+      // Plan summary
+      draw_card(card_x, row2_y, r2w * 2 - 4, card_h);
       it.print(card_x + 8, row2_y + 6, id(font_tiny), "Speicherplan");
       if (id(plan_summary).has_state()) {
         it.print(card_x + 8, row2_y + 22, id(font_medium), id(plan_summary).state.c_str());
       }
 
-      // ── Row 3: Action + Verbrauch + Inverter ──
-      int row3_y = row2_y + card_h + 8;
-      int r3w = (W - card_x - PAD * 2) / 3;
-
-      draw_card(card_x, row3_y, r3w - 4, card_h);
-      it.print(card_x + 8, row3_y + 6, id(font_tiny), "Aktion");
+      // Action
+      int r2c3 = card_x + r2w * 2;
+      draw_card(r2c3, row2_y, r2w - 4, card_h);
+      it.print(r2c3 + 8, row2_y + 6, id(font_tiny), "Aktion");
       if (id(planned_action).has_state()) {
-        it.print(card_x + 8, row3_y + 22, id(font_medium), id(planned_action).state.c_str());
+        it.print(r2c3 + 8, row2_y + 22, id(font_medium), id(planned_action).state.c_str());
       }
 
-      int r3c2 = card_x + r3w;
-      draw_card(r3c2, row3_y, r3w - 4, card_h);
-      it.print(r3c2 + 8, row3_y + 6, id(font_tiny), "Verbrauch");
+      // ── Row 3: Prominent "Günstigster Strom" Banner ──
+      int row3_y = row2_y + card_h + 8;
+      int banner_h = 72;
+
+      // Inverted banner (black background, white text) for visibility
+      it.filled_rectangle(card_x, row3_y, W - card_x - PAD, banner_h);
+
+      it.print(card_x + 12, row3_y + 6, id(font_tiny), COLOR_OFF,
+               "Spuel-/Waschmaschine starten um:");
+
+      if (id(next_cheap).has_state() && id(next_cheap).state.length() > 10) {
+        // Parse time from ISO timestamp (e.g. "2026-03-21T12:30:00.000+01:00")
+        std::string ts = id(next_cheap).state;
+        std::string time_str = "--:--";
+        std::string date_hint = "";
+        if (ts.length() >= 16) {
+          time_str = ts.substr(11, 5);  // "12:30"
+          // Check if it's today or tomorrow
+          if (id(ha_time).now().is_valid()) {
+            int cheap_day = atoi(ts.substr(8, 2).c_str());
+            int today = id(ha_time).now().day_of_month;
+            if (cheap_day != today) date_hint = " (morgen)";
+          }
+        }
+        char cheap_buf[32];
+        snprintf(cheap_buf, sizeof(cheap_buf), "%s Uhr%s",
+                 time_str.c_str(), date_hint.c_str());
+        it.print(card_x + 12, row3_y + 24, id(font_big), COLOR_OFF, cheap_buf);
+      } else {
+        it.print(card_x + 12, row3_y + 24, id(font_big), COLOR_OFF, "--:-- Uhr");
+      }
+
+      // Small info cards below banner
+      int row4_y = row3_y + banner_h + 6;
+      int r4w = (W - card_x - PAD * 2) / 3;
+      int r4h = 44;
+
+      // Verbrauchsprognose
+      draw_card(card_x, row4_y, r4w - 4, r4h);
+      it.print(card_x + 8, row4_y + 4, id(font_tiny), "Verbrauch");
       if (!isnan(id(consumption_forecast).state)) {
         char cons_buf[16];
         snprintf(cons_buf, sizeof(cons_buf), "%.0f W", id(consumption_forecast).state);
-        it.print(r3c2 + 8, row3_y + 22, id(font_medium), cons_buf);
+        it.print(card_x + 8, row4_y + 18, id(font_small), cons_buf);
       }
 
-      int r3c3 = card_x + r3w * 2;
-      draw_card(r3c3, row3_y, r3w - 4, card_h);
-      it.print(r3c3 + 8, row3_y + 6, id(font_tiny), "Wechselrichter");
+      // Wechselrichter
+      int r4c2 = card_x + r4w;
+      draw_card(r4c2, row4_y, r4w - 4, r4h);
+      it.print(r4c2 + 8, row4_y + 4, id(font_tiny), "Wechselrichter");
       if (!isnan(id(inverter_power).state)) {
         char inv_buf[16];
         snprintf(inv_buf, sizeof(inv_buf), "%.0f W", id(inverter_power).state);
-        it.print(r3c3 + 8, row3_y + 22, id(font_medium), inv_buf);
+        it.print(r4c2 + 8, row4_y + 18, id(font_small), inv_buf);
       } else {
-        it.print(r3c3 + 8, row3_y + 22, id(font_medium), "0 W");
+        it.print(r4c2 + 8, row4_y + 18, id(font_small), "0 W");
+      }
+
+      // Aktueller Preis vs günstigster Preis
+      int r4c3 = card_x + r4w * 2;
+      draw_card(r4c3, row4_y, r4w - 4, r4h);
+      it.print(r4c3 + 8, row4_y + 4, id(font_tiny), "Aktuell vs. guenstig");
+      if (!isnan(id(current_price).state)) {
+        char cmp_buf[24];
+        snprintf(cmp_buf, sizeof(cmp_buf), "%.1f ct jetzt",
+                 id(current_price).state * 100);
+        it.print(r4c3 + 8, row4_y + 18, id(font_small), cmp_buf);
       }
 
       // ── Divider ──
