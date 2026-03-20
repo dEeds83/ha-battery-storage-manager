@@ -1068,12 +1068,21 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         # Summary
         parts = []
+        def _fmt_duration(slots: int) -> str:
+            """Format slot count as human-readable duration."""
+            total_min = round(slots * slot_h * 60)
+            if total_min >= 60 and total_min % 60 == 0:
+                return f"{total_min // 60}h"
+            if total_min >= 60:
+                return f"{total_min // 60}h{total_min % 60:02d}"
+            return f"{total_min}min"
+
         if solar_count:
-            parts.append(f"{solar_count}h Solar")
+            parts.append(f"{_fmt_duration(solar_count)} Solar")
         if charge_count:
-            parts.append(f"{charge_count}h Laden ({grid_charge_kwh:.1f} kWh)")
+            parts.append(f"{_fmt_duration(charge_count)} Laden ({grid_charge_kwh:.1f} kWh)")
         if discharge_count:
-            parts.append(f"{discharge_count}h Entladen")
+            parts.append(f"{_fmt_duration(discharge_count)} Entladen")
         self._plan_summary = " | ".join(parts) if parts else "Kein Plan erstellt"
 
         savings = sum(

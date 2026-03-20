@@ -81,10 +81,13 @@ class BatteryPlanCard extends HTMLElement {
     }
 
     const now = new Date();
-    const nowHour = now.getFullYear() + "-"
+    // Round down to nearest slot boundary for current-slot matching
+    const roundedMin = Math.floor(now.getMinutes() / 15) * 15;
+    const nowSlot = now.getFullYear() + "-"
       + String(now.getMonth() + 1).padStart(2, "0") + "-"
       + String(now.getDate()).padStart(2, "0") + "T"
-      + String(now.getHours()).padStart(2, "0");
+      + String(now.getHours()).padStart(2, "0") + ":"
+      + String(roundedMin).padStart(2, "0");
 
     // Find price range for scaling
     const prices = plan.map(e => e.price);
@@ -92,7 +95,17 @@ class BatteryPlanCard extends HTMLElement {
     const maxPrice = Math.max(...prices);
     const priceRange = maxPrice - minPrice || 1;
 
-    // Count actions
+    // Detect slot duration and count actions
+    let slotMinutes = 60;
+    if (plan.length >= 2) {
+      try {
+        const t1 = new Date(plan[0].hour).getTime();
+        const t2 = new Date(plan[1].hour).getTime();
+        const diff = (t2 - t1) / 60000;
+        if (diff > 0 && diff <= 60) slotMinutes = diff;
+      } catch (e) { /* keep default */ }
+    }
+
     const counts = {};
     plan.forEach(e => {
       counts[e.action] = (counts[e.action] || 0) + 1;
@@ -112,7 +125,7 @@ class BatteryPlanCard extends HTMLElement {
           ${this._getStyles()}
         </style>
         <div class="card-content">
-          ${showLegend ? this._renderLegend(counts) : ""}
+          ${showLegend ? this._renderLegend(counts, slotMinutes) : ""}
           <div class="summary">${stateObj.state || ""}</div>
           <div class="chart-container">
             ${this._renderChart(plan, nowHour, minPrice, maxPrice, priceRange, showSolar)}
@@ -160,7 +173,14 @@ class BatteryPlanCard extends HTMLElement {
     `;
   }
 
-  _renderLegend(counts) {
+  _formatDuration(slots, slotMinutes) {
+    const totalMin = slots * slotMinutes;
+    if (totalMin >= 60 && totalMin % 60 === 0) return `${totalMin / 60}h`;
+    if (totalMin >= 60) return `${Math.floor(totalMin / 60)}h${String(totalMin % 60).padStart(2, "0")}`;
+    return `${totalMin}min`;
+  }
+
+  _renderLegend(counts, slotMinutes) {
     let html = '<div class="legend">';
     for (const [action, cfg] of Object.entries(ACTION_CONFIG)) {
       const count = counts[action] || 0;
@@ -168,7 +188,7 @@ class BatteryPlanCard extends HTMLElement {
       html += `
         <span class="legend-item">
           <span class="legend-dot" style="background:${cfg.color}"></span>
-          ${cfg.short} (${count}h)
+          ${cfg.short} (${this._formatDuration(count, slotMinutes)})
         </span>
       `;
     }
@@ -191,7 +211,7 @@ class BatteryPlanCard extends HTMLElement {
       const cfg = ACTION_CONFIG[entry.action] || ACTION_CONFIG.idle;
       const pricePct = ((entry.price - minPrice) / priceRange) * 80 + 15;
       const left = (i / plan.length) * 100;
-      const isCurrent = entry.hour && entry.hour.startsWith(nowHour);
+      const isCurrent = entry.hour && entry.hour === nowSlot;
 
       // Price bar
       barsHtml += `
@@ -209,15 +229,20 @@ class BatteryPlanCard extends HTMLElement {
         solarPoints.push({ x: centerX, y: 100 - solarPct });
       }
 
-      // Time labels (every 3 hours or if current)
-      const hourNum = parseInt(entry.hour.slice(-5, -3), 10);
-      if (hourNum % 3 === 0 || isCurrent) {
-        labelsHtml += `
-          <span class="time-label${isCurrent ? " current" : ""}"
-                style="left:${left + barWidth / 2}%">
-            ${String(hourNum).padStart(2, "0")}
-          </span>
-        `;
+      // Time labels: show only at full hours, every 3 hours (or current)
+      const hourMatch = entry.hour.match(/T(\d{2}):(\d{2})/);
+      if (hourMatch) {
+        const hourNum = parseInt(hourMatch[1], 10);
+        const minuteNum = parseInt(hourMatch[2], 10);
+        const isFullHour = minuteNum === 0;
+        if (isFullHour && (hourNum % 3 === 0 || isCurrent)) {
+          labelsHtml += `
+            <span class="time-label${isCurrent ? " current" : ""}"
+                  style="left:${left + barWidth / 2}%">
+              ${String(hourNum).padStart(2, "0")}
+            </span>
+          `;
+        }
       }
     });
 
@@ -268,7 +293,7 @@ class BatteryPlanCard extends HTMLElement {
     let rows = "";
     plan.forEach(entry => {
       const cfg = ACTION_CONFIG[entry.action] || ACTION_CONFIG.idle;
-      const isCurrent = entry.hour && entry.hour.startsWith(nowHour);
+      const isCurrent = entry.hour && entry.hour === nowSlot;
       const soc = entry.expected_soc != null ? entry.expected_soc.toFixed(0) + " %" : "-";
       rows += `
         <tr class="${isCurrent ? "current-row" : ""}">
