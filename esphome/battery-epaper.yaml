@@ -157,6 +157,18 @@ sensor:
     entity_id: sensor.electricity_price_walchenseestrasse_8
     attribute: avg_price
 
+  # Next 8h prices as comma-separated string from HA template sensor
+  # Create this template sensor in HA (see esphome/README.md)
+  - platform: homeassistant
+    id: price_min_today
+    entity_id: sensor.electricity_price_walchenseestrasse_8
+    attribute: min_price
+
+  - platform: homeassistant
+    id: price_max_today
+    entity_id: sensor.electricity_price_walchenseestrasse_8
+    attribute: max_price
+
 text_sensor:
   - platform: homeassistant
     id: operating_mode
@@ -270,10 +282,10 @@ display:
         }
       }
 
-      // SOC value
+      // SOC value (centered, smaller font)
       char soc_buf[8];
       snprintf(soc_buf, sizeof(soc_buf), "%.0f%%", soc);
-      it.print(soc_cx, soc_cy - 10, id(font_big), TextAlign::CENTER, soc_buf);
+      it.print(soc_cx, soc_cy, id(font_title), TextAlign::CENTER, soc_buf);
 
       // Mode label
       std::string mode = "-";
@@ -354,72 +366,135 @@ display:
       it.line(rx, r2y + r2h, rx + rw, r2y + r2h);
 
       // ══════════════════════════════════════════════════════════
-      // ── BOTTOM HALF: Two prominent time windows ──
+      // ── MID: Time windows side by side ──
       // ══════════════════════════════════════════════════════════
-      int bot_y = r2y + r2h + 8;
+      int bot_y = r2y + r2h + 6;
       int box_w = rw / 2 - 6;
-      int box_h = 110;
+      int box_h = 76;
 
-      // ── Günstigstes Zeitfenster (inverted) ──
+      // ── Günstigstes Zeitfenster (inverted, nur heute) ──
       it.filled_rectangle(rx, bot_y, box_w, box_h);
-      it.print(rx + 10, bot_y + 8, id(font_small), COLOR_OFF, "Guenstigstes Fenster");
+      it.print(rx + 10, bot_y + 6, id(font_tiny), COLOR_OFF, "Guenstigstes Fenster heute");
 
       if (id(next_cheap).has_state() && id(next_cheap).state.length() > 10) {
         std::string cheap_time, cheap_day;
         parse_time(id(next_cheap).state, cheap_time, cheap_day);
-        it.print(rx + 10, bot_y + 34, id(font_big), COLOR_OFF, cheap_time.c_str());
-        it.print(rx + 10, bot_y + 84, id(font_small), COLOR_OFF, cheap_day.c_str());
+        if (cheap_day == "heute") {
+          it.print(rx + 10, bot_y + 24, id(font_big), COLOR_OFF, cheap_time.c_str());
+        } else {
+          it.print(rx + 10, bot_y + 24, id(font_medium), COLOR_OFF, "Heute kein guenstiges");
+          it.print(rx + 10, bot_y + 48, id(font_medium), COLOR_OFF, "Fenster mehr");
+        }
       } else {
-        it.print(rx + 10, bot_y + 34, id(font_big), COLOR_OFF, "--:--");
+        it.print(rx + 10, bot_y + 28, id(font_medium), COLOR_OFF, "--:--");
       }
 
-      // ── Teuerstes Zeitfenster (outline, hatched) ──
+      // ── Teuerstes Zeitfenster (double border) ──
       int exp_x = rx + box_w + 12;
       it.rectangle(exp_x, bot_y, box_w, box_h);
-      it.rectangle(exp_x + 1, bot_y + 1, box_w - 2, box_h - 2);
-      // Diagonal hatching for "danger" feel
-      for (int i = 0; i < box_w + box_h; i += 8) {
-        int x1 = exp_x + std::min(i, box_w);
-        int y1 = bot_y + std::max(0, i - box_w);
-        int x2 = exp_x + std::max(0, i - box_h);
-        int y2 = bot_y + std::min(i, box_h);
-        it.line(x1, y1, x2, y2);
-      }
-      // White box for text
-      it.filled_rectangle(exp_x + 6, bot_y + 4, box_w - 12, box_h - 8, COLOR_OFF);
-
-      it.print(exp_x + 12, bot_y + 8, id(font_small), "Teuerstes Fenster");
+      it.rectangle(exp_x + 2, bot_y + 2, box_w - 4, box_h - 4);
+      it.print(exp_x + 10, bot_y + 6, id(font_tiny), "Teuerstes Fenster");
 
       if (id(next_expensive).has_state() && id(next_expensive).state.length() > 10) {
         std::string exp_time, exp_day;
         parse_time(id(next_expensive).state, exp_time, exp_day);
-        it.print(exp_x + 12, bot_y + 34, id(font_big), exp_time.c_str());
-        it.print(exp_x + 12, bot_y + 84, id(font_small), exp_day.c_str());
+        char exp_buf[20];
+        snprintf(exp_buf, sizeof(exp_buf), "%s (%s)",
+                 exp_time.c_str(), exp_day.c_str());
+        it.print(exp_x + 10, bot_y + 24, id(font_big), exp_time.c_str());
+        it.print(exp_x + 10, bot_y + 58, id(font_tiny), exp_day.c_str());
       } else {
-        it.print(exp_x + 12, bot_y + 34, id(font_big), "--:--");
+        it.print(exp_x + 10, bot_y + 28, id(font_medium), "--:--");
+      }
+
+      // ══════════════════════════════════════════════════════════
+      // ── BOTTOM: 8h Price Bar Chart ──
+      // ══════════════════════════════════════════════════════════
+      int chart_y = bot_y + box_h + 10;
+      int chart_h = H - chart_y - 28;  // leave room for footer
+      int chart_x = rx;
+      int chart_w = rw;
+
+      it.print(rx, chart_y - 2, id(font_tiny), "Preisverlauf naechste 8 Stunden");
+      chart_y += 12;
+      chart_h -= 12;
+
+      // Get price range for scaling
+      float p_min = 999, p_max = 0;
+      if (!isnan(id(price_min_today).state)) p_min = id(price_min_today).state;
+      if (!isnan(id(price_max_today).state)) p_max = id(price_max_today).state;
+      if (!isnan(id(current_price).state)) {
+        if (id(current_price).state < p_min) p_min = id(current_price).state;
+        if (id(current_price).state > p_max) p_max = id(current_price).state;
+      }
+      float p_range = p_max - p_min;
+      if (p_range < 0.01) p_range = 0.10;
+
+      // Y-axis labels
+      char p_hi[8], p_lo[8];
+      snprintf(p_hi, sizeof(p_hi), "%.0f", p_max * 100);
+      snprintf(p_lo, sizeof(p_lo), "%.0f", p_min * 100);
+      it.print(rx - 2, chart_y, id(font_tiny), TextAlign::TOP_RIGHT, p_hi);
+      it.print(rx - 2, chart_y + chart_h - 10, id(font_tiny), TextAlign::TOP_RIGHT, p_lo);
+
+      // Draw current price as a reference line
+      if (!isnan(id(current_price).state)) {
+        float cur_pct = (id(current_price).state - p_min) / p_range;
+        int cur_y = chart_y + chart_h - (int)(cur_pct * chart_h);
+        // Dashed line
+        for (int dx = chart_x; dx < chart_x + chart_w; dx += 6) {
+          it.line(dx, cur_y, std::min(dx + 3, chart_x + chart_w), cur_y);
+        }
+        char cur_lbl[10];
+        snprintf(cur_lbl, sizeof(cur_lbl), "%.0f ct", id(current_price).state * 100);
+        it.print(chart_x + chart_w + 2, cur_y - 6, id(font_tiny), cur_lbl);
+      }
+
+      // Draw 8 bars (one per hour from now)
+      // We only have current price + min/max, so we draw a placeholder
+      // showing the current price bar and the range
+      if (id(ha_time).now().is_valid() && !isnan(id(current_price).state)) {
+        int bar_count = 8;
+        int bar_w = (chart_w - 4) / bar_count - 2;
+        int cur_hour = id(ha_time).now().hour;
+
+        // Current hour bar (filled, we know the exact price)
+        float pct = (id(current_price).state - p_min) / p_range;
+        int bar_h = std::max(4, (int)(pct * chart_h));
+        int bx = chart_x + 2;
+        int by = chart_y + chart_h - bar_h;
+        it.filled_rectangle(bx, by, bar_w, bar_h);
+
+        // Hour label
+        char hlbl[4];
+        snprintf(hlbl, sizeof(hlbl), "%02d", cur_hour);
+        it.print(bx + bar_w / 2, chart_y + chart_h + 2, id(font_tiny), TextAlign::TOP_CENTER, hlbl);
+
+        // Future hours: draw range indicator (empty bar from min to max)
+        for (int i = 1; i < bar_count; i++) {
+          int fbx = chart_x + 2 + i * (bar_w + 2);
+          int fhour = (cur_hour + i) % 24;
+
+          // Outline bar showing possible range
+          it.rectangle(fbx, chart_y, bar_w, chart_h);
+
+          // Hour label
+          snprintf(hlbl, sizeof(hlbl), "%02d", fhour);
+          it.print(fbx + bar_w / 2, chart_y + chart_h + 2, id(font_tiny), TextAlign::TOP_CENTER, hlbl);
+        }
       }
 
       // ══════════════════════════════════════════════════════════
       // ── FOOTER ──
       // ══════════════════════════════════════════════════════════
-      int foot_y = H - 24;
+      int foot_y = H - 18;
       it.line(P, foot_y, W - P, foot_y);
 
-      // Strategy
       if (id(strategy).has_state()) {
         std::string s = id(strategy).state;
         if (s == "price_optimized") s = "Preisoptimiert";
         else if (s == "self_consumption") s = "Eigenverbrauch";
         else if (s == "manual") s = "Manuell";
-        it.print(P, foot_y + 4, id(font_tiny), s.c_str());
+        it.print(P, foot_y + 2, id(font_tiny), s.c_str());
       }
-
-      // Inverter
-      if (!isnan(id(inverter_power).state) && id(inverter_power).state > 0) {
-        char inv[20];
-        snprintf(inv, sizeof(inv), "WR: %.0f W", id(inverter_power).state);
-        it.print(W / 2, foot_y + 4, id(font_tiny), TextAlign::TOP_CENTER, inv);
-      }
-
-      // Update hint
-      it.print(W - P, foot_y + 4, id(font_tiny), TextAlign::TOP_RIGHT, "Aktualisierung alle 30 min");
+      it.print(W - P, foot_y + 2, id(font_tiny), TextAlign::TOP_RIGHT, "Alle 30 min");
