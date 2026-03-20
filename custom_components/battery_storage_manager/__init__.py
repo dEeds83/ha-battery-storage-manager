@@ -37,7 +37,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         static_paths.append(
             StaticPathConfig(url_path, file_path, cache_headers=False)
         )
-        add_extra_js_url(hass, f"{url_path}?v=1.5.1")
+        add_extra_js_url(hass, f"{url_path}?v=1.5.3")
         _LOGGER.debug("Registered frontend card: %s", url_path)
 
     try:
