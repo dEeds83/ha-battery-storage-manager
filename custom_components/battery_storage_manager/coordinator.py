@@ -803,48 +803,46 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         """
         now = dt_util.now()
 
-        hourly_data = self._build_hourly_data(now)
-        if not hourly_data:
+        slot_data, slot_h = self._build_slot_data(now)
+        if not slot_data:
             self._battery_plan = []
             self._plan_summary = "Keine Preisdaten verfügbar"
             return
 
-        # Battery parameters
+        # Battery parameters scaled to slot duration
         current_soc = self._battery_soc if self._battery_soc is not None else 50.0
         charge_power_w = sum(c["power"] for c in self._chargers)
-        charge_kwh_h = charge_power_w / 1000
+        charge_kwh_slot = charge_power_w / 1000 * slot_h
         discharge_power_w = self._inverter_power or 800
-        discharge_kwh_h = discharge_power_w / 1000
+        discharge_kwh_slot = discharge_power_w / 1000 * slot_h
         cap = self._battery_capacity
 
         # Per-hour consumption forecast (rolling average or fallback)
         consumption_forecast = self.get_hourly_consumption_forecast()
 
-        # Enrich hourly data with solar info and effective charge cost
-        for h in hourly_data:
-            # Extract hour-of-day from hour_key (format: "2024-01-15T14")
-            try:
-                hour_of_day = int(h["hour_key"].split("T")[1])
-            except (IndexError, ValueError):
-                hour_of_day = 12  # fallback
+        # Enrich slot data with solar info and effective charge cost
+        # Solar forecast is hourly → split evenly across sub-hour slots
+        slots_per_hour = max(1, round(1.0 / slot_h))
+        for h in slot_data:
+            hour_of_day = h.get("hour_of_day", 12)
             h["house_w"] = consumption_forecast.get(hour_of_day, self._house_consumption_w)
-            house_kwh_h = h["house_w"] / 1000
+            house_kwh_slot = h["house_w"] / 1000 * slot_h
 
-            solar_wh = self._solar_forecast.get(h["hour_key"], 0)
-            h["solar_kwh"] = solar_wh / 1000
-            h["solar_surplus_kwh"] = max(0, h["solar_kwh"] - house_kwh_h)
+            # Solar: hourly forecast divided by slots per hour
+            solar_wh_hour = self._solar_forecast.get(h["hour_key"], 0)
+            h["solar_kwh"] = (solar_wh_hour / 1000) / slots_per_hour
+            h["solar_surplus_kwh"] = max(0, h["solar_kwh"] - house_kwh_slot)
 
-            # Effective charge cost: only the grid portion costs money
-            # e.g. charger=0.8kWh, solar_surplus=0.3kWh → grid=0.5kWh
-            # effective_cost = (0.5/0.8) * price = 62.5% of grid price
-            if charge_kwh_h > 0:
-                grid_fraction = max(0, charge_kwh_h - h["solar_surplus_kwh"]) / charge_kwh_h
+            if charge_kwh_slot > 0:
+                grid_fraction = max(0, charge_kwh_slot - h["solar_surplus_kwh"]) / charge_kwh_slot
             else:
                 grid_fraction = 1.0
             h["effective_charge_cost"] = grid_fraction * h["price"]
             h["grid_fraction"] = grid_fraction
 
-        n = len(hourly_data)
+        n = len(slot_data)
+        # Alias for readability in the rest of the method
+        hourly_data = slot_data
         actions = ["idle"] * n
         headroom_kwh = (self._max_soc - current_soc) / 100 * cap
 
@@ -854,7 +852,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         total_solar_kwh = 0.0
         solar_hours_end_idx = -1  # last hour with significant solar
         for i, h in enumerate(hourly_data):
-            solar_charge = min(h["solar_surplus_kwh"], charge_kwh_h)
+            solar_charge = min(h["solar_surplus_kwh"], charge_kwh_slot)
             if solar_charge > 0.05:
                 total_solar_kwh += solar_charge
                 solar_hours_end_idx = i
@@ -868,7 +866,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Pre-solar discharge: if solar exceeds headroom, discharge BEFORE
         # solar hours to create room.  Pick the most expensive pre-solar hours.
         presolar_discharge_hours: set[int] = set()
-        if solar_wasted_kwh > 0.1 and discharge_kwh_h > 0:
+        if solar_wasted_kwh > 0.1 and discharge_kwh_slot > 0:
             # Find the first solar hour
             first_solar_idx = next(
                 (i for i, h in enumerate(hourly_data) if h["solar_surplus_kwh"] > 0.05),
@@ -888,12 +886,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     break
                 # Only discharge if stored energy is available
                 presolar_discharge_hours.add(idx)
-                discharge_needed -= discharge_kwh_h
+                discharge_needed -= discharge_kwh_slot
                 actions[idx] = "discharge"
 
             if presolar_discharge_hours:
                 # Recalculate headroom after pre-solar discharge
-                extra_headroom = len(presolar_discharge_hours) * discharge_kwh_h
+                extra_headroom = len(presolar_discharge_hours) * discharge_kwh_slot
                 headroom_kwh += extra_headroom
                 solar_fills_kwh = min(total_solar_kwh, headroom_kwh)
                 grid_headroom_kwh = max(0, headroom_kwh - solar_fills_kwh)
@@ -955,7 +953,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             used.add(c_idx)
             used.add(d_idx)
             # Track how much grid energy this charge slot uses
-            grid_kwh_planned += charge_kwh_h * hourly_data[c_idx]["grid_fraction"]
+            grid_kwh_planned += charge_kwh_slot * hourly_data[c_idx]["grid_fraction"]
             ci += 1
             di += 1
 
@@ -981,7 +979,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             delta_kwh = 0.0
 
             if action == "solar_charge":
-                delta_kwh = min(h["solar_surplus_kwh"], charge_kwh_h)
+                delta_kwh = min(h["solar_surplus_kwh"], charge_kwh_slot)
                 if estimated_soc + delta_kwh / cap * 100 > self._max_soc:
                     delta_kwh = max(0, (self._max_soc - estimated_soc) / 100 * cap)
                     if delta_kwh < 0.05:
@@ -990,14 +988,14 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 if estimated_soc >= self._max_soc:
                     action = "idle"
                 else:
-                    delta_kwh = min(charge_kwh_h, (self._max_soc - estimated_soc) / 100 * cap)
+                    delta_kwh = min(charge_kwh_slot, (self._max_soc - estimated_soc) / 100 * cap)
                     # Only grid portion counts as grid charge
                     grid_charge_kwh += delta_kwh * h["grid_fraction"]
             elif action == "discharge":
                 if estimated_soc <= self._min_soc:
                     action = "idle"
                 else:
-                    delta_kwh = min(discharge_kwh_h, (estimated_soc - self._min_soc) / 100 * cap)
+                    delta_kwh = min(discharge_kwh_slot, (estimated_soc - self._min_soc) / 100 * cap)
 
             if action in ("solar_charge", "charge"):
                 estimated_soc += delta_kwh / cap * 100
@@ -1056,7 +1054,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 reason = "Keine Aktion"
 
             self._battery_plan.append({
-                "hour": h["hour_key"] + ":00",
+                "hour": h.get("slot_key", h["hour_key"] + ":00"),
                 "price": round(h["price"], 4),
                 "solar_kwh": round(h["solar_kwh"], 2),
                 "solar_surplus_kwh": round(h["solar_surplus_kwh"], 2),
@@ -1076,7 +1074,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._plan_summary = " | ".join(parts) if parts else "Kein Plan erstellt"
 
         savings = sum(
-            p[2] * min(charge_kwh_h, discharge_kwh_h)
+            p[2] * min(charge_kwh_slot, discharge_kwh_slot)
             for p in pairs
         )
         self._estimated_savings = round(savings, 2)
@@ -1091,21 +1089,28 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             len(pairs),
         )
 
-    def _build_hourly_data(self, now: datetime) -> list[dict]:
-        """Build list of hourly data combining price and solar forecasts."""
-        now_key = now.strftime("%Y-%m-%dT%H")
-        hourly = []
+    def _build_slot_data(self, now: datetime) -> tuple[list[dict], float]:
+        """Build list of time slots from price forecast.
+
+        Supports both hourly and sub-hourly (e.g. 15-min) price data.
+        Returns (slots, slot_duration_hours).
+        """
+        now_str = now.strftime("%Y-%m-%dT%H:%M")
+        slots = []
 
         for p in self._price_forecast:
             try:
                 start = datetime.fromisoformat(p["start"])
                 if start.tzinfo is not None:
                     start = dt_util.as_local(start)
-                hour_key = start.strftime("%Y-%m-%dT%H")
-                if hour_key >= now_key:
-                    hourly.append({
-                        "hour_key": hour_key,
+                slot_key = start.strftime("%Y-%m-%dT%H:%M")
+                if slot_key >= now_str:
+                    slots.append({
+                        "slot_key": slot_key,
+                        "hour_key": start.strftime("%Y-%m-%dT%H"),
+                        "hour_of_day": start.hour,
                         "price": p.get("total", 0),
+                        "start_dt": start,
                     })
             except (ValueError, TypeError):
                 continue
@@ -1113,22 +1118,70 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Deduplicate (keep first occurrence)
         seen = set()
         unique = []
-        for h in hourly:
-            if h["hour_key"] not in seen:
-                seen.add(h["hour_key"])
-                unique.append(h)
+        for s in slots:
+            if s["slot_key"] not in seen:
+                seen.add(s["slot_key"])
+                unique.append(s)
 
-        return unique
+        # Detect slot duration from data (15min, 30min, or 60min)
+        slot_duration_h = 1.0
+        if len(unique) >= 2:
+            dt1 = unique[0]["start_dt"]
+            dt2 = unique[1]["start_dt"]
+            delta_min = (dt2 - dt1).total_seconds() / 60
+            if 10 <= delta_min <= 20:
+                slot_duration_h = 0.25  # 15 min
+            elif 25 <= delta_min <= 35:
+                slot_duration_h = 0.5   # 30 min
+            # else: default 1h
+
+        _LOGGER.debug(
+            "Price slots: %d entries, %.0f min resolution",
+            len(unique), slot_duration_h * 60,
+        )
+
+        return unique, slot_duration_h
 
     def _get_current_plan_action(self) -> str | None:
-        """Get the planned action for the current hour."""
+        """Get the planned action for the current time slot.
+
+        Supports both hourly ("2024-01-15T14:00") and sub-hourly
+        ("2024-01-15T14:15") plan entries.  For sub-hourly plans, finds
+        the slot that contains the current time.
+        """
         if not self._battery_plan:
             return None
 
-        now_key = dt_util.now().strftime("%Y-%m-%dT%H")
+        now = dt_util.now()
+
+        # Try exact slot match first (for 15-min plans)
+        # Round down to nearest slot boundary
         for entry in self._battery_plan:
-            if entry["hour"].startswith(now_key):
+            try:
+                entry_dt = datetime.fromisoformat(entry["hour"])
+                if entry_dt.tzinfo is None:
+                    entry_dt = entry_dt.replace(tzinfo=now.tzinfo)
+            except (ValueError, TypeError):
+                continue
+
+            # Find the slot that contains "now"
+            # Check if next entry exists to determine slot end
+            entry_idx = self._battery_plan.index(entry)
+            if entry_idx + 1 < len(self._battery_plan):
+                try:
+                    next_dt = datetime.fromisoformat(
+                        self._battery_plan[entry_idx + 1]["hour"]
+                    )
+                    if next_dt.tzinfo is None:
+                        next_dt = next_dt.replace(tzinfo=now.tzinfo)
+                except (ValueError, TypeError):
+                    next_dt = entry_dt + timedelta(hours=1)
+            else:
+                next_dt = entry_dt + timedelta(hours=1)
+
+            if entry_dt <= now < next_dt:
                 return entry["action"]
+
         return None
 
     def _find_cheap_hours(self, count: int = 4) -> list[dict]:
