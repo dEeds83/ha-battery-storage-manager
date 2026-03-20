@@ -4,6 +4,10 @@
 
 - Nach jedem `git tag` + `git push --tags` immer auch ein GitHub Release mit `gh release create` erstellen
 - Release Notes auf Deutsch, mit Zusammenfassung der Änderungen seit dem letzten Tag
+- Bei jedem neuen Release **alle Versionsnummern** aktualisieren:
+  - `manifest.json` → `"version": "x.y.z"`
+  - `__init__.py` → `?v=x.y.z` (Frontend Cache-Busting)
+  - `README.md` → Version-Badge `version-x.y.z-blue`
 
 ## Projekt
 
