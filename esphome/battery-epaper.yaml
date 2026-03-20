@@ -1,18 +1,32 @@
-# Battery Storage Manager – ePaper Dashboard
+# Battery Storage Manager – ePaper Dashboard (Deep Sleep)
 # For: Seeed Studio XIAO 7.5" ePaper Panel (800x480, ESP32-C3)
 #
-# Shows: Battery SOC, current price, operating mode, solar forecast,
-#        grid power, plan summary, and a 24h price/action timeline.
+# Cycle: Wake → WiFi → fetch HA data → render display → deep sleep (30 min)
+# Power: ~10mA during wake (~15s), ~10µA during sleep
+# Battery life: ~6+ months with 2000mAh battery at 30min interval
 #
 # Setup:
 #   1. Copy this file to your ESPHome config directory
 #   2. Create/update secrets.yaml with wifi_ssid, wifi_password, api_key, ota_password
 #   3. Adjust entity IDs below to match your Battery Storage Manager instance
-#   4. Flash via ESPHome dashboard
+#   4. Flash via ESPHome dashboard (first flash via USB, then OTA during wake window)
 
 esphome:
   name: battery-epaper
   friendly_name: "Batterie ePaper Display"
+  on_boot:
+    priority: -100  # Run after everything is initialized
+    then:
+      - wait_until:
+          condition:
+            api.connected:
+          timeout: 30s
+      # Wait for sensor data to arrive from HA
+      - delay: 5s
+      - component.update: eink
+      # Wait for display to finish rendering
+      - delay: 10s
+      - deep_sleep.enter: deep_sleep_ctrl
 
 esp32:
   board: seeed_xiao_esp32c3
@@ -34,11 +48,18 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  fast_connect: true    # Skip scanning, connect directly (saves ~3s)
   ap:
     ssid: "Battery-ePaper"
     password: "fallback123"
 
-captive_portal:
+# No captive_portal – wastes power in deep sleep mode
+
+# ── Deep Sleep ─────────────────────────────────────────────
+deep_sleep:
+  id: deep_sleep_ctrl
+  run_duration: 60s       # Max awake time (safety fallback)
+  sleep_duration: 30min   # Sleep between updates
 
 time:
   - platform: homeassistant
@@ -66,31 +87,14 @@ font:
     id: font_tiny
     size: 12
 
-  - file: "gfonts://Material+Symbols+Outlined"
-    id: icon_font
-    size: 36
-    glyphs:
-      - "\U0000e1a3"  # battery_full
-      - "\U0000e19c"  # battery_charging_full
-      - "\U0000ebf7"  # solar_power
-      - "\U0000e1a6"  # bolt (electricity)
-      - "\U0000ef63"  # euro
-      - "\U0000e8b5"  # timeline
-      - "\U0000e425"  # trending_up
-      - "\U0000e5d5"  # arrow_upward
-      - "\U0000e5db"  # arrow_downward
-      - "\U0000e002"  # home
-
 # ── Home Assistant Sensors ─────────────────────────────────
-# Adjust entity_id values to match your installation
+# Adjust entity_id values to match your installation.
+# No on_value triggers needed – we fetch once per wake cycle.
 
 sensor:
   - platform: homeassistant
     id: battery_soc
     entity_id: sensor.battery_storage_manager_speicher_ladestand
-    on_value:
-      then:
-        - component.update: eink
 
   - platform: homeassistant
     id: current_price
@@ -116,9 +120,6 @@ text_sensor:
   - platform: homeassistant
     id: operating_mode
     entity_id: sensor.battery_storage_manager_betriebsmodus
-    on_value:
-      then:
-        - component.update: eink
 
   - platform: homeassistant
     id: strategy
@@ -156,13 +157,12 @@ display:
       inverted: true
     model: 7.50inV2
     auto_clear_enabled: false
-    update_interval: 60s
+    update_interval: never   # Only update via on_boot sequence
     lambda: |-
       // ── Layout Constants ──
       const int W = 800;
       const int H = 480;
       const int PAD = 12;
-      const int CARD_R = 8;
 
       // ── Helper: Draw Card Background ──
       auto draw_card = [&](int x, int y, int w, int h) {
@@ -190,14 +190,14 @@ display:
       // ── Row 1: SOC Ring + Status Cards ──
       int row1_y = 62;
 
-      // SOC Circle (large, left side)
+      // SOC Circle
       int soc_cx = 80;
       int soc_cy = row1_y + 70;
       int soc_r = 55;
       float soc = 0;
       if (!isnan(id(battery_soc).state)) soc = id(battery_soc).state;
 
-      // Draw SOC arc (simplified as filled/empty segments)
+      // Draw SOC arc rings
       it.circle(soc_cx, soc_cy, soc_r);
       it.circle(soc_cx, soc_cy, soc_r - 1);
       it.circle(soc_cx, soc_cy, soc_r - 8);
@@ -214,13 +214,13 @@ display:
         }
       }
 
-      // SOC text
+      // SOC percentage
       char soc_buf[8];
       snprintf(soc_buf, sizeof(soc_buf), "%.0f%%", soc);
       it.print(soc_cx, soc_cy - 8, id(font_big), TextAlign::CENTER, soc_buf);
 
-      // Mode under SOC circle
-      std::string mode_text = "—";
+      // Operating mode under SOC
+      std::string mode_text = "-";
       if (id(operating_mode).has_state()) {
         std::string m = id(operating_mode).state;
         if (m == "idle") mode_text = "Idle";
@@ -253,11 +253,8 @@ display:
       if (!isnan(id(grid_power).state)) {
         char grid_buf[16];
         float gp = id(grid_power).state;
-        if (gp >= 0) {
-          snprintf(grid_buf, sizeof(grid_buf), "+%.0f W", gp);
-        } else {
-          snprintf(grid_buf, sizeof(grid_buf), "%.0f W", gp);
-        }
+        if (gp >= 0) snprintf(grid_buf, sizeof(grid_buf), "+%.0f W", gp);
+        else snprintf(grid_buf, sizeof(grid_buf), "%.0f W", gp);
         it.print(c2_x + 8, row1_y + 22, id(font_medium), grid_buf);
       } else {
         it.print(c2_x + 8, row1_y + 22, id(font_medium), "-- W");
@@ -275,59 +272,49 @@ display:
         it.print(c3_x + 8, row1_y + 22, id(font_medium), "-- kWh");
       }
 
-      // ── Row 2: Plan Summary + Action + Forecast ──
+      // ── Row 2: Plan Summary ──
       int row2_y = row1_y + card_h + 12;
-
-      // Plan summary (full width)
       draw_card(card_x, row2_y, W - card_x - PAD, card_h);
       it.print(card_x + 8, row2_y + 6, id(font_tiny), "Speicherplan");
       if (id(plan_summary).has_state()) {
         it.print(card_x + 8, row2_y + 22, id(font_medium), id(plan_summary).state.c_str());
       }
 
-      // ── Row 3: Current Action + Verbrauch + Next Windows ──
+      // ── Row 3: Action + Verbrauch + Inverter ──
       int row3_y = row2_y + card_h + 8;
-      int row3_card_w = (W - card_x - PAD * 2) / 3;
+      int r3w = (W - card_x - PAD * 2) / 3;
 
-      // Current action
-      draw_card(card_x, row3_y, row3_card_w - 4, card_h);
+      draw_card(card_x, row3_y, r3w - 4, card_h);
       it.print(card_x + 8, row3_y + 6, id(font_tiny), "Aktion");
       if (id(planned_action).has_state()) {
         it.print(card_x + 8, row3_y + 22, id(font_medium), id(planned_action).state.c_str());
       }
 
-      // Consumption forecast
-      int r3c2_x = card_x + row3_card_w;
-      draw_card(r3c2_x, row3_y, row3_card_w - 4, card_h);
-      it.print(r3c2_x + 8, row3_y + 6, id(font_tiny), "Verbrauch");
+      int r3c2 = card_x + r3w;
+      draw_card(r3c2, row3_y, r3w - 4, card_h);
+      it.print(r3c2 + 8, row3_y + 6, id(font_tiny), "Verbrauch");
       if (!isnan(id(consumption_forecast).state)) {
         char cons_buf[16];
         snprintf(cons_buf, sizeof(cons_buf), "%.0f W", id(consumption_forecast).state);
-        it.print(r3c2_x + 8, row3_y + 22, id(font_medium), cons_buf);
+        it.print(r3c2 + 8, row3_y + 22, id(font_medium), cons_buf);
       }
 
-      // Inverter power
-      int r3c3_x = card_x + row3_card_w * 2;
-      draw_card(r3c3_x, row3_y, row3_card_w - 4, card_h);
-      it.print(r3c3_x + 8, row3_y + 6, id(font_tiny), "Wechselrichter");
+      int r3c3 = card_x + r3w * 2;
+      draw_card(r3c3, row3_y, r3w - 4, card_h);
+      it.print(r3c3 + 8, row3_y + 6, id(font_tiny), "Wechselrichter");
       if (!isnan(id(inverter_power).state)) {
         char inv_buf[16];
         snprintf(inv_buf, sizeof(inv_buf), "%.0f W", id(inverter_power).state);
-        it.print(r3c3_x + 8, row3_y + 22, id(font_medium), inv_buf);
+        it.print(r3c3 + 8, row3_y + 22, id(font_medium), inv_buf);
       } else {
-        it.print(r3c3_x + 8, row3_y + 22, id(font_medium), "0 W");
+        it.print(r3c3 + 8, row3_y + 22, id(font_medium), "0 W");
       }
 
       // ── Divider ──
       int chart_top = row3_y + card_h + 16;
       it.line(PAD, chart_top - 4, W - PAD, chart_top - 4);
 
-      // ── Price Timeline Chart (bottom half) ──
-      // This section draws a simplified 24h price bar chart
-      // The actual plan data with actions would require JSON parsing
-      // which is complex in ESPHome lambda. Instead we show a
-      // visual indicator based on next cheap/expensive windows.
-
+      // ── 24h Price Timeline ──
       int chart_x = PAD + 30;
       int chart_w = W - chart_x - PAD;
       int chart_h = H - chart_top - 40;
@@ -335,11 +322,11 @@ display:
 
       it.print(PAD, chart_top, id(font_small), "24h Preisverlauf");
 
-      // Chart frame
+      // Axes
       it.line(chart_x, chart_top + 24, chart_x, chart_bottom);
       it.line(chart_x, chart_bottom, chart_x + chart_w, chart_bottom);
 
-      // Time labels (every 3 hours)
+      // Time labels
       if (id(ha_time).now().is_valid()) {
         int current_hour = id(ha_time).now().hour;
         for (int h = 0; h < 24; h += 3) {
@@ -348,8 +335,6 @@ display:
           char hlbl[4];
           snprintf(hlbl, sizeof(hlbl), "%02d", display_hour);
           it.print((int)x_pos, chart_bottom + 4, id(font_tiny), TextAlign::TOP_CENTER, hlbl);
-
-          // Tick mark
           it.line((int)x_pos, chart_bottom, (int)x_pos, chart_bottom + 3);
         }
 
@@ -358,27 +343,21 @@ display:
         it.print(chart_x + 6, chart_top + 24, id(font_tiny), "Jetzt");
       }
 
-      // Price range labels
+      // Current price label
       if (!isnan(id(current_price).state)) {
         char cur_price[12];
         snprintf(cur_price, sizeof(cur_price), "%.0f ct", id(current_price).state * 100);
         it.print(PAD, chart_top + chart_h / 2, id(font_tiny), TextAlign::CENTER_LEFT, cur_price);
       }
 
-      // Next cheap window indicator
+      // Cheap window zone
       if (id(next_cheap).has_state() && id(next_cheap).state.length() > 10) {
-        // Parse hour from ISO timestamp
         std::string ts = id(next_cheap).state;
-        int cheap_hour = 0;
-        if (ts.length() >= 13) {
-          cheap_hour = atoi(ts.substr(11, 2).c_str());
-        }
+        int cheap_hour = atoi(ts.substr(11, 2).c_str());
         int current_h = id(ha_time).now().is_valid() ? id(ha_time).now().hour : 0;
         int hours_until = (cheap_hour - current_h + 24) % 24;
         float x_cheap = chart_x + (float)hours_until / 24.0 * chart_w;
-
-        // Draw green zone indicator
-        int zone_w = chart_w / 12;  // ~2h wide
+        int zone_w = chart_w / 12;
         int zone_y = chart_top + 28;
         int zone_h = chart_h - 32;
         for (int i = 0; i < zone_w; i += 3) {
@@ -387,18 +366,13 @@ display:
         it.print((int)x_cheap + zone_w / 2, zone_y - 2, id(font_tiny), TextAlign::BOTTOM_CENTER, "guenstig");
       }
 
-      // Next expensive window indicator
+      // Expensive window zone
       if (id(next_expensive).has_state() && id(next_expensive).state.length() > 10) {
         std::string ts = id(next_expensive).state;
-        int exp_hour = 0;
-        if (ts.length() >= 13) {
-          exp_hour = atoi(ts.substr(11, 2).c_str());
-        }
+        int exp_hour = atoi(ts.substr(11, 2).c_str());
         int current_h = id(ha_time).now().is_valid() ? id(ha_time).now().hour : 0;
         int hours_until = (exp_hour - current_h + 24) % 24;
         float x_exp = chart_x + (float)hours_until / 24.0 * chart_w;
-
-        // Draw striped zone indicator (expensive)
         int zone_w = chart_w / 12;
         int zone_y = chart_top + 28;
         int zone_h = chart_h - 32;
@@ -408,12 +382,14 @@ display:
         it.print((int)x_exp + zone_w / 2, zone_y - 2, id(font_tiny), TextAlign::BOTTOM_CENTER, "teuer");
       }
 
-      // Strategy badge (bottom right)
+      // Strategy + update time (bottom right)
       if (id(strategy).has_state()) {
         std::string strat = id(strategy).state;
-        std::string strat_label = strat;
-        if (strat == "price_optimized") strat_label = "Preisoptimiert";
-        else if (strat == "self_consumption") strat_label = "Eigenverbrauch";
-        else if (strat == "manual") strat_label = "Manuell";
-        it.print(W - PAD, H - PAD, id(font_tiny), TextAlign::BOTTOM_RIGHT, strat_label.c_str());
+        if (strat == "price_optimized") strat = "Preisoptimiert";
+        else if (strat == "self_consumption") strat = "Eigenverbrauch";
+        else if (strat == "manual") strat = "Manuell";
+        it.print(W - PAD, H - PAD, id(font_tiny), TextAlign::BOTTOM_RIGHT, strat.c_str());
       }
+
+      // Next update hint (bottom left)
+      it.print(PAD, H - PAD, id(font_tiny), TextAlign::BOTTOM_LEFT, "Aktualisierung alle 30 min");
