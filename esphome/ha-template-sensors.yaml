@@ -1,0 +1,28 @@
+# Template-Sensoren für das ePaper Display
+# Füge diesen Inhalt in deine HA configuration.yaml ein (oder als Package)
+#
+# Pfad in configuration.yaml:
+#   template: !include esphome/ha-template-sensors.yaml
+#
+# Oder direkt in configuration.yaml unter "template:":
+
+- sensor:
+    - name: "Strompreise 16h"
+      unique_id: strompreise_16h_csv
+      unit_of_measurement: "csv"
+      state: >
+        {% set ns = namespace(prices=[]) %}
+        {% set now_ts = now().timestamp() %}
+        {% set prices_attr = state_attr('sensor.electricity_price_walchenseestrasse_8', 'today') or [] %}
+        {% set tomorrow_attr = state_attr('sensor.electricity_price_walchenseestrasse_8', 'tomorrow') or [] %}
+        {% set all_prices = prices_attr + tomorrow_attr %}
+        {% for p in all_prices %}
+          {% set start = as_timestamp(p.startsAt) if p.startsAt is defined else 0 %}
+          {% if start >= now_ts and ns.prices | length < 16 %}
+            {% set ns.prices = ns.prices + [p.total | round(4) | string] %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.prices | join(',') }}
+      attributes:
+        count: >
+          {{ state_attr('sensor.electricity_price_walchenseestrasse_8', 'today') | length if state_attr('sensor.electricity_price_walchenseestrasse_8', 'today') else 0 }}
