@@ -143,6 +143,12 @@ sensor:
     id: expected_solar
     entity_id: sensor.battery_storage_manager_erwartete_solarproduktion
 
+  # Actual solar production today (from HA energy dashboard / utility meter)
+  # Adjust entity_id to your solar production energy sensor
+  - platform: homeassistant
+    id: solar_today
+    entity_id: sensor.pv_gesamt_daily  # ← ANPASSEN an deinen PV-Tages-Sensor
+
   - platform: homeassistant
     id: inverter_power
     entity_id: sensor.battery_storage_manager_wechselrichter_leistung
@@ -150,6 +156,12 @@ sensor:
   - platform: homeassistant
     id: consumption_forecast
     entity_id: sensor.battery_storage_manager_verbrauchsprognose
+
+  # Average price today (from Tibber)
+  - platform: homeassistant
+    id: avg_price
+    entity_id: sensor.electricity_price  # ← ANPASSEN: Tibber Preis-Sensor
+    attribute: avg_price                  # Tibber stellt avg_price als Attribut bereit
 
 text_sensor:
   - platform: homeassistant
@@ -214,7 +226,8 @@ display:
 
       // ── Night Mode ──
       if (id(night_mode)) {
-        it.print(W / 2, H / 2 - 50, id(font_title), TextAlign::CENTER, "Schlafmodus");
+        it.print(W / 2, H / 2 - 80, id(font_medium), TextAlign::CENTER, "Strom-Dashboard @Familie Dietz");
+        it.print(W / 2, H / 2 - 40, id(font_title), TextAlign::CENTER, "Schlafmodus");
         it.print(W / 2, H / 2, id(font_small), TextAlign::CENTER, "Naechste Aktualisierung um 06:00");
         if (!isnan(id(battery_soc).state)) {
           char buf[16];
@@ -227,7 +240,7 @@ display:
       // ══════════════════════════════════════════════════════════
       // ── HEADER ──
       // ══════════════════════════════════════════════════════════
-      it.print(P, P, id(font_title), "Batteriespeicher");
+      it.print(P, P, id(font_title), "Strom-Dashboard @Familie Dietz");
       if (id(ha_time).now().is_valid()) {
         auto now = id(ha_time).now();
         char tbuf[6], dbuf[12];
@@ -288,45 +301,42 @@ display:
       int rx = col_left_w + P;  // right area x start
       int rw = W - rx - P;      // right area width
 
-      // ── Row 1: 4 metric cards ──
+      // ── Row 1: 3 metric cards ──
       int r1y = 58;
-      int cw = rw / 4;
-      int ch = 52;
+      int cw = rw / 3;
+      int ch = 56;
 
-      // Strompreis
-      it.print(rx + 6, r1y + 2, id(font_tiny), "Strompreis");
+      // Strompreis + Tagesdurchschnitt
+      it.print(rx + 8, r1y + 4, id(font_tiny), "Strompreis");
       if (!isnan(id(current_price).state)) {
-        char buf[12];
-        snprintf(buf, sizeof(buf), "%.1f ct", id(current_price).state * 100);
-        it.print(rx + 6, r1y + 16, id(font_medium), buf);
+        char buf[24];
+        if (!isnan(id(avg_price).state)) {
+          snprintf(buf, sizeof(buf), "%.1f ct (Ø %.0f)",
+                   id(current_price).state * 100, id(avg_price).state * 100);
+        } else {
+          snprintf(buf, sizeof(buf), "%.1f ct", id(current_price).state * 100);
+        }
+        it.print(rx + 8, r1y + 20, id(font_medium), buf);
       }
       it.line(rx + cw, r1y, rx + cw, r1y + ch);
 
       // Netzleistung
-      it.print(rx + cw + 6, r1y + 2, id(font_tiny), "Netz");
+      it.print(rx + cw + 8, r1y + 4, id(font_tiny), "Netzleistung");
       if (!isnan(id(grid_power).state)) {
-        char buf[12];
+        char buf[16];
         float gp = id(grid_power).state;
-        snprintf(buf, sizeof(buf), "%s%.0f W", gp >= 0 ? "+" : "", gp);
-        it.print(rx + cw + 6, r1y + 16, id(font_medium), buf);
+        if (gp >= 0) snprintf(buf, sizeof(buf), "+%.0f W Bezug", gp);
+        else snprintf(buf, sizeof(buf), "%.0f W Einsp.", gp);
+        it.print(rx + cw + 8, r1y + 20, id(font_medium), buf);
       }
       it.line(rx + cw * 2, r1y, rx + cw * 2, r1y + ch);
 
-      // Solar
-      it.print(rx + cw * 2 + 6, r1y + 2, id(font_tiny), "Solar heute");
-      if (!isnan(id(expected_solar).state)) {
-        char buf[12];
-        snprintf(buf, sizeof(buf), "%.1f kWh", id(expected_solar).state);
-        it.print(rx + cw * 2 + 6, r1y + 16, id(font_medium), buf);
-      }
-      it.line(rx + cw * 3, r1y, rx + cw * 3, r1y + ch);
-
       // Verbrauch
-      it.print(rx + cw * 3 + 6, r1y + 2, id(font_tiny), "Verbrauch");
+      it.print(rx + cw * 2 + 8, r1y + 4, id(font_tiny), "Verbrauchsprognose");
       if (!isnan(id(consumption_forecast).state)) {
         char buf[12];
         snprintf(buf, sizeof(buf), "%.0f W", id(consumption_forecast).state);
-        it.print(rx + cw * 3 + 6, r1y + 16, id(font_medium), buf);
+        it.print(rx + cw * 2 + 8, r1y + 20, id(font_medium), buf);
       }
 
       it.line(rx, r1y + ch, rx + rw, r1y + ch);

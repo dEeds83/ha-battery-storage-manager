@@ -608,7 +608,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         now = dt_util.now()
         now_key = now.strftime("%Y-%m-%dT%H")
-        remaining = {k: v for k, v in self._solar_forecast.items() if k >= now_key}
+        today_prefix = now.strftime("%Y-%m-%dT")
+        # Only sum remaining hours of TODAY (not tomorrow)
+        remaining = {
+            k: v for k, v in self._solar_forecast.items()
+            if k >= now_key and k.startswith(today_prefix)
+        }
         self._expected_solar_kwh = sum(remaining.values()) / 1000
 
     async def _read_energy_solar_forecasts(
