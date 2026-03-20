@@ -156,22 +156,20 @@ sensor:
     id: consumption_forecast
     entity_id: sensor.battery_storage_manager_verbrauchsprognose
 
-  # Average price today (from Tibber attribute)
+  # Price forecast from Battery Storage Manager (no template sensor needed)
   - platform: homeassistant
     id: avg_price
-    entity_id: sensor.electricity_price_walchenseestrasse_8
+    entity_id: sensor.battery_storage_manager_preisprognose
     attribute: avg_price
 
-  # Next 8h prices as comma-separated string from HA template sensor
-  # Create this template sensor in HA (see esphome/README.md)
   - platform: homeassistant
     id: price_min_today
-    entity_id: sensor.electricity_price_walchenseestrasse_8
+    entity_id: sensor.battery_storage_manager_preisprognose
     attribute: min_price
 
   - platform: homeassistant
     id: price_max_today
-    entity_id: sensor.electricity_price_walchenseestrasse_8
+    entity_id: sensor.battery_storage_manager_preisprognose
     attribute: max_price
 
 text_sensor:
@@ -199,10 +197,10 @@ text_sensor:
     id: next_expensive
     entity_id: sensor.battery_storage_manager_nachstes_teures_fenster
 
-  # 16h price CSV from template sensor (see ha-template-sensors.yaml)
+  # 16h price CSV directly from Battery Storage Manager
   - platform: homeassistant
     id: prices_csv
-    entity_id: sensor.strompreise_16h
+    entity_id: sensor.battery_storage_manager_preisprognose
 
 # ── SPI & Display ──────────────────────────────────────────
 spi:

@@ -40,6 +40,7 @@ async def async_setup_entry(
         PlannedActionSensor(coordinator, entry),
         ExpectedSolarSensor(coordinator, entry),
         ConsumptionForecastSensor(coordinator, entry),
+        PriceForecastSensor(coordinator, entry),
     ]
 
     # Dynamic charger status sensors
@@ -466,4 +467,77 @@ class ConsumptionForecastSensor(BatteryStorageBaseSensor):
             "hourly_forecast_w": {
                 f"{h:02d}:00": round(w) for h, w in sorted(forecast.items())
             },
+        }
+
+
+class PriceForecastSensor(BatteryStorageBaseSensor):
+    """Sensor providing upcoming prices as CSV for ePaper display and automations."""
+
+    _attr_icon = "mdi:chart-line"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "price_forecast_csv", "Preisprognose"
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return next 16 prices as comma-separated string."""
+        if not self.coordinator.data:
+            return None
+        forecast = self.coordinator.data.get("price_forecast", [])
+        if not forecast:
+            return None
+
+        from homeassistant.util import dt as dt_util
+        now = dt_util.now()
+        prices = []
+        for entry in forecast:
+            try:
+                from datetime import datetime
+                start = datetime.fromisoformat(entry["start"])
+                if start.tzinfo is not None:
+                    start = dt_util.as_local(start)
+                if start >= now.replace(minute=0, second=0, microsecond=0):
+                    prices.append(str(round(entry.get("total", 0), 4)))
+                if len(prices) >= 16:
+                    break
+            except (ValueError, TypeError, KeyError):
+                continue
+
+        return ",".join(prices) if prices else None
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        forecast = self.coordinator.data.get("price_forecast", [])
+
+        from homeassistant.util import dt as dt_util
+        now = dt_util.now()
+
+        prices_list = []
+        for entry in forecast:
+            try:
+                from datetime import datetime
+                start = datetime.fromisoformat(entry["start"])
+                if start.tzinfo is not None:
+                    start = dt_util.as_local(start)
+                if start >= now.replace(minute=0, second=0, microsecond=0):
+                    prices_list.append({
+                        "time": start.strftime("%H:%M"),
+                        "price": round(entry.get("total", 0), 4),
+                    })
+                if len(prices_list) >= 16:
+                    break
+            except (ValueError, TypeError, KeyError):
+                continue
+
+        all_prices = [p["price"] for p in prices_list]
+        return {
+            "prices": prices_list,
+            "count": len(prices_list),
+            "min_price": round(min(all_prices), 4) if all_prices else None,
+            "max_price": round(max(all_prices), 4) if all_prices else None,
+            "avg_price": round(sum(all_prices) / len(all_prices), 4) if all_prices else None,
         }
