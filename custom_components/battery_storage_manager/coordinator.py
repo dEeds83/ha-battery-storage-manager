@@ -164,6 +164,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._tibber_prices_entity,
         )
         self._read_sensor_states()
+        self._validate_operating_mode()
         await self._update_price_forecast()
         await self._read_solar_forecast()
         self._create_battery_plan()
@@ -263,6 +264,66 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     self._inverter_actual_power = None
             else:
                 self._inverter_actual_power = None
+
+        # Sync charger active flags with actual switch states
+        self._sync_device_states()
+
+    def _sync_device_states(self) -> None:
+        """Synchronize internal active flags with actual switch entity states.
+
+        After a restart, or if a switch is toggled externally, our internal
+        flags may diverge from reality.  Reading the actual switch state on
+        every cycle ensures we stay in sync.
+        """
+        for i, charger in enumerate(self._chargers):
+            if not charger["switch"]:
+                continue
+            state = self.hass.states.get(charger["switch"])
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            actual_on = state.state == "on"
+            if actual_on != charger["active"]:
+                _LOGGER.info(
+                    "Charger %d (%s): internal=%s, actual=%s → syncing",
+                    i + 1, charger["switch"],
+                    "ON" if charger["active"] else "OFF",
+                    "ON" if actual_on else "OFF",
+                )
+                charger["active"] = actual_on
+
+        if self._inverter_switch:
+            state = self.hass.states.get(self._inverter_switch)
+            if state and state.state not in ("unknown", "unavailable"):
+                actual_on = state.state == "on"
+                if actual_on != self._inverter_active:
+                    _LOGGER.info(
+                        "Inverter (%s): internal=%s, actual=%s → syncing",
+                        self._inverter_switch,
+                        "ON" if self._inverter_active else "OFF",
+                        "ON" if actual_on else "OFF",
+                    )
+                    self._inverter_active = actual_on
+
+    def _validate_operating_mode(self) -> None:
+        """Ensure operating mode matches actual device states.
+
+        If we think we're charging but no charger is on, reset to idle.
+        Same for discharging with inverter off.  This catches post-restart
+        inconsistencies and external switch changes.
+        """
+        any_charger_on = any(c["active"] for c in self._chargers)
+
+        if self._operating_mode == MODE_CHARGING and not any_charger_on:
+            _LOGGER.warning(
+                "Mode is CHARGING but no charger is active → resetting to IDLE"
+            )
+            self._operating_mode = MODE_IDLE
+
+        if self._operating_mode == MODE_DISCHARGING and not self._inverter_active:
+            _LOGGER.warning(
+                "Mode is DISCHARGING but inverter is not active → resetting to IDLE"
+            )
+            self._operating_mode = MODE_IDLE
 
     async def _update_price_forecast(self) -> None:
         """Update price forecast, preferring tibber.get_prices action."""
