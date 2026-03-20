@@ -196,73 +196,65 @@ display:
     lambda: |-
       const int W = 800;
       const int H = 480;
-      const int PAD = 12;
+      const int P = 14;  // padding
 
-      // ── Night Mode: Sleep Screen ──
-      if (id(night_mode)) {
-        // Minimal sleep screen – almost entirely white (low power for ePaper)
-        it.print(W / 2, H / 2 - 40, id(font_title), TextAlign::CENTER, "Schlafmodus");
-
-        if (id(ha_time).now().is_valid()) {
-          char wake_buf[32];
-          snprintf(wake_buf, sizeof(wake_buf), "Naechste Aktualisierung um 06:00");
-          it.print(W / 2, H / 2 + 10, id(font_small), TextAlign::CENTER, wake_buf);
+      // ── Helper: parse HH:MM and "morgen" from ISO timestamp ──
+      auto parse_time = [&](const std::string &ts, std::string &time_out, std::string &day_out) {
+        time_out = "--:--";
+        day_out = "";
+        if (ts.length() >= 16) {
+          time_out = ts.substr(11, 5);
+          if (id(ha_time).now().is_valid()) {
+            int ts_day = atoi(ts.substr(8, 2).c_str());
+            if (ts_day != id(ha_time).now().day_of_month) day_out = "morgen";
+            else day_out = "heute";
+          }
         }
-
-        // Show SOC so you can glance at it
-        if (!isnan(id(battery_soc).state)) {
-          char soc_buf[16];
-          snprintf(soc_buf, sizeof(soc_buf), "Batterie: %.0f%%", id(battery_soc).state);
-          it.print(W / 2, H / 2 + 50, id(font_medium), TextAlign::CENTER, soc_buf);
-        }
-
-        return;  // Skip full dashboard rendering
-      }
-
-      // ── Day Mode: Full Dashboard ──
-
-      // ── Helper: Draw Card Background ──
-      auto draw_card = [&](int x, int y, int w, int h) {
-        it.rectangle(x, y, w, h);
-        it.rectangle(x+1, y+1, w-2, h-2);
       };
 
-      // ── Header ──
-      it.print(PAD, PAD, id(font_title), "Batteriespeicher");
-
-      // Time
-      if (id(ha_time).now().is_valid()) {
-        char time_buf[6];
-        auto now = id(ha_time).now();
-        snprintf(time_buf, sizeof(time_buf), "%02d:%02d", now.hour, now.minute);
-        it.print(W - PAD, PAD + 4, id(font_medium), TextAlign::TOP_RIGHT, time_buf);
-
-        char date_buf[12];
-        snprintf(date_buf, sizeof(date_buf), "%02d.%02d.%04d", now.day_of_month, now.month, now.year);
-        it.print(W - PAD, PAD + 28, id(font_tiny), TextAlign::TOP_RIGHT, date_buf);
+      // ── Night Mode ──
+      if (id(night_mode)) {
+        it.print(W / 2, H / 2 - 50, id(font_title), TextAlign::CENTER, "Schlafmodus");
+        it.print(W / 2, H / 2, id(font_small), TextAlign::CENTER, "Naechste Aktualisierung um 06:00");
+        if (!isnan(id(battery_soc).state)) {
+          char buf[16];
+          snprintf(buf, sizeof(buf), "Batterie: %.0f%%", id(battery_soc).state);
+          it.print(W / 2, H / 2 + 40, id(font_medium), TextAlign::CENTER, buf);
+        }
+        return;
       }
 
-      it.line(PAD, 52, W - PAD, 52);
+      // ══════════════════════════════════════════════════════════
+      // ── HEADER ──
+      // ══════════════════════════════════════════════════════════
+      it.print(P, P, id(font_title), "Batteriespeicher");
+      if (id(ha_time).now().is_valid()) {
+        auto now = id(ha_time).now();
+        char tbuf[6], dbuf[12];
+        snprintf(tbuf, sizeof(tbuf), "%02d:%02d", now.hour, now.minute);
+        snprintf(dbuf, sizeof(dbuf), "%02d.%02d.%04d", now.day_of_month, now.month, now.year);
+        it.print(W - P, P + 2, id(font_medium), TextAlign::TOP_RIGHT, tbuf);
+        it.print(W - P, P + 26, id(font_tiny), TextAlign::TOP_RIGHT, dbuf);
+      }
+      it.line(P, 50, W - P, 50);
 
-      // ── Row 1: SOC Ring + Status Cards ──
-      int row1_y = 62;
+      // ══════════════════════════════════════════════════════════
+      // ── LEFT COLUMN: SOC (full height) ──
+      // ══════════════════════════════════════════════════════════
+      int col_left_w = 150;
+      int soc_cx = col_left_w / 2;
+      int soc_cy = 124;
+      int soc_r = 52;
+      float soc = isnan(id(battery_soc).state) ? 0 : id(battery_soc).state;
 
-      // SOC Circle
-      int soc_cx = 80;
-      int soc_cy = row1_y + 70;
-      int soc_r = 55;
-      float soc = 0;
-      if (!isnan(id(battery_soc).state)) soc = id(battery_soc).state;
-
-      // Draw SOC arc rings
-      it.circle(soc_cx, soc_cy, soc_r);
-      it.circle(soc_cx, soc_cy, soc_r - 1);
-      it.circle(soc_cx, soc_cy, soc_r - 8);
-      it.circle(soc_cx, soc_cy, soc_r - 9);
-
-      // Fill arc proportional to SOC
-      float soc_angle = soc / 100.0 * 3.14159 * 2;
-      for (float a = -1.5708; a < -1.5708 + soc_angle; a += 0.02) {
+      // SOC ring
+      for (int t = 0; t < 3; t++) {
+        it.circle(soc_cx, soc_cy, soc_r - t);
+        it.circle(soc_cx, soc_cy, soc_r - 8 + t);
+      }
+      // Fill arc
+      float soc_angle = soc / 100.0 * 6.2832;
+      for (float a = -1.5708; a < -1.5708 + soc_angle; a += 0.015) {
         for (int r = soc_r - 8; r <= soc_r; r++) {
           int px = soc_cx + r * cos(a);
           int py = soc_cy + r * sin(a);
@@ -271,232 +263,159 @@ display:
         }
       }
 
-      // SOC percentage
+      // SOC value
       char soc_buf[8];
       snprintf(soc_buf, sizeof(soc_buf), "%.0f%%", soc);
-      it.print(soc_cx, soc_cy - 8, id(font_big), TextAlign::CENTER, soc_buf);
+      it.print(soc_cx, soc_cy - 10, id(font_big), TextAlign::CENTER, soc_buf);
 
-      // Operating mode under SOC
-      std::string mode_text = "-";
+      // Mode label
+      std::string mode = "-";
       if (id(operating_mode).has_state()) {
         std::string m = id(operating_mode).state;
-        if (m == "idle") mode_text = "Idle";
-        else if (m == "charging") mode_text = "Netz";
-        else if (m == "solar_charging") mode_text = "Solar";
-        else if (m == "discharging") mode_text = "Entladen";
+        if (m == "idle") mode = "Idle";
+        else if (m == "charging") mode = "Netz-Laden";
+        else if (m == "solar_charging") mode = "Solar-Laden";
+        else if (m == "discharging") mode = "Entladen";
       }
-      it.print(soc_cx, soc_cy + soc_r + 8, id(font_small), TextAlign::TOP_CENTER, mode_text.c_str());
+      it.print(soc_cx, soc_cy + soc_r + 10, id(font_small), TextAlign::TOP_CENTER, mode.c_str());
 
-      // ── Status Cards (right of SOC) ──
-      int card_x = 170;
-      int card_w = (W - card_x - PAD * 2) / 3;
-      int card_h = 60;
+      // Vertical separator
+      it.line(col_left_w, 54, col_left_w, H - 30);
 
-      // Card 1: Strompreis
-      draw_card(card_x, row1_y, card_w - 4, card_h);
-      it.print(card_x + 8, row1_y + 6, id(font_tiny), "Strompreis");
+      // ══════════════════════════════════════════════════════════
+      // ── RIGHT AREA ──
+      // ══════════════════════════════════════════════════════════
+      int rx = col_left_w + P;  // right area x start
+      int rw = W - rx - P;      // right area width
+
+      // ── Row 1: 4 metric cards ──
+      int r1y = 58;
+      int cw = rw / 4;
+      int ch = 52;
+
+      // Strompreis
+      it.print(rx + 6, r1y + 2, id(font_tiny), "Strompreis");
       if (!isnan(id(current_price).state)) {
-        char price_buf[16];
-        snprintf(price_buf, sizeof(price_buf), "%.1f ct", id(current_price).state * 100);
-        it.print(card_x + 8, row1_y + 22, id(font_medium), price_buf);
-      } else {
-        it.print(card_x + 8, row1_y + 22, id(font_medium), "-- ct");
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%.1f ct", id(current_price).state * 100);
+        it.print(rx + 6, r1y + 16, id(font_medium), buf);
       }
+      it.line(rx + cw, r1y, rx + cw, r1y + ch);
 
-      // Card 2: Netzleistung
-      int c2_x = card_x + card_w;
-      draw_card(c2_x, row1_y, card_w - 4, card_h);
-      it.print(c2_x + 8, row1_y + 6, id(font_tiny), "Netz");
+      // Netzleistung
+      it.print(rx + cw + 6, r1y + 2, id(font_tiny), "Netz");
       if (!isnan(id(grid_power).state)) {
-        char grid_buf[16];
+        char buf[12];
         float gp = id(grid_power).state;
-        if (gp >= 0) snprintf(grid_buf, sizeof(grid_buf), "+%.0f W", gp);
-        else snprintf(grid_buf, sizeof(grid_buf), "%.0f W", gp);
-        it.print(c2_x + 8, row1_y + 22, id(font_medium), grid_buf);
-      } else {
-        it.print(c2_x + 8, row1_y + 22, id(font_medium), "-- W");
+        snprintf(buf, sizeof(buf), "%s%.0f W", gp >= 0 ? "+" : "", gp);
+        it.print(rx + cw + 6, r1y + 16, id(font_medium), buf);
       }
+      it.line(rx + cw * 2, r1y, rx + cw * 2, r1y + ch);
 
-      // Card 3: Solar
-      int c3_x = card_x + card_w * 2;
-      draw_card(c3_x, row1_y, card_w - 4, card_h);
-      it.print(c3_x + 8, row1_y + 6, id(font_tiny), "Solar heute");
+      // Solar
+      it.print(rx + cw * 2 + 6, r1y + 2, id(font_tiny), "Solar heute");
       if (!isnan(id(expected_solar).state)) {
-        char solar_buf[16];
-        snprintf(solar_buf, sizeof(solar_buf), "%.1f kWh", id(expected_solar).state);
-        it.print(c3_x + 8, row1_y + 22, id(font_medium), solar_buf);
-      } else {
-        it.print(c3_x + 8, row1_y + 22, id(font_medium), "-- kWh");
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%.1f kWh", id(expected_solar).state);
+        it.print(rx + cw * 2 + 6, r1y + 16, id(font_medium), buf);
       }
+      it.line(rx + cw * 3, r1y, rx + cw * 3, r1y + ch);
 
-      // ── Row 2: Plan + Action + Verbrauch ──
-      int row2_y = row1_y + card_h + 12;
-      int r2w = (W - card_x - PAD * 2) / 3;
-
-      // Plan summary
-      draw_card(card_x, row2_y, r2w * 2 - 4, card_h);
-      it.print(card_x + 8, row2_y + 6, id(font_tiny), "Speicherplan");
-      if (id(plan_summary).has_state()) {
-        it.print(card_x + 8, row2_y + 22, id(font_medium), id(plan_summary).state.c_str());
-      }
-
-      // Action
-      int r2c3 = card_x + r2w * 2;
-      draw_card(r2c3, row2_y, r2w - 4, card_h);
-      it.print(r2c3 + 8, row2_y + 6, id(font_tiny), "Aktion");
-      if (id(planned_action).has_state()) {
-        it.print(r2c3 + 8, row2_y + 22, id(font_medium), id(planned_action).state.c_str());
-      }
-
-      // ── Row 3: Prominent "Günstigster Strom" Banner ──
-      int row3_y = row2_y + card_h + 8;
-      int banner_h = 72;
-
-      // Inverted banner (black background, white text) for visibility
-      it.filled_rectangle(card_x, row3_y, W - card_x - PAD, banner_h);
-
-      it.print(card_x + 12, row3_y + 6, id(font_tiny), COLOR_OFF,
-               "Naechstes guenstiges Zeitfenster:");
-
-      if (id(next_cheap).has_state() && id(next_cheap).state.length() > 10) {
-        // Parse time from ISO timestamp (e.g. "2026-03-21T12:30:00.000+01:00")
-        std::string ts = id(next_cheap).state;
-        std::string time_str = "--:--";
-        std::string date_hint = "";
-        if (ts.length() >= 16) {
-          time_str = ts.substr(11, 5);  // "12:30"
-          // Check if it's today or tomorrow
-          if (id(ha_time).now().is_valid()) {
-            int cheap_day = atoi(ts.substr(8, 2).c_str());
-            int today = id(ha_time).now().day_of_month;
-            if (cheap_day != today) date_hint = " (morgen)";
-          }
-        }
-        char cheap_buf[32];
-        snprintf(cheap_buf, sizeof(cheap_buf), "%s Uhr%s",
-                 time_str.c_str(), date_hint.c_str());
-        it.print(card_x + 12, row3_y + 24, id(font_big), COLOR_OFF, cheap_buf);
-      } else {
-        it.print(card_x + 12, row3_y + 24, id(font_big), COLOR_OFF, "--:-- Uhr");
-      }
-
-      // Small info cards below banner
-      int row4_y = row3_y + banner_h + 6;
-      int r4w = (W - card_x - PAD * 2) / 3;
-      int r4h = 44;
-
-      // Verbrauchsprognose
-      draw_card(card_x, row4_y, r4w - 4, r4h);
-      it.print(card_x + 8, row4_y + 4, id(font_tiny), "Verbrauch");
+      // Verbrauch
+      it.print(rx + cw * 3 + 6, r1y + 2, id(font_tiny), "Verbrauch");
       if (!isnan(id(consumption_forecast).state)) {
-        char cons_buf[16];
-        snprintf(cons_buf, sizeof(cons_buf), "%.0f W", id(consumption_forecast).state);
-        it.print(card_x + 8, row4_y + 18, id(font_small), cons_buf);
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%.0f W", id(consumption_forecast).state);
+        it.print(rx + cw * 3 + 6, r1y + 16, id(font_medium), buf);
       }
 
-      // Wechselrichter
-      int r4c2 = card_x + r4w;
-      draw_card(r4c2, row4_y, r4w - 4, r4h);
-      it.print(r4c2 + 8, row4_y + 4, id(font_tiny), "Wechselrichter");
-      if (!isnan(id(inverter_power).state)) {
-        char inv_buf[16];
-        snprintf(inv_buf, sizeof(inv_buf), "%.0f W", id(inverter_power).state);
-        it.print(r4c2 + 8, row4_y + 18, id(font_small), inv_buf);
-      } else {
-        it.print(r4c2 + 8, row4_y + 18, id(font_small), "0 W");
+      it.line(rx, r1y + ch, rx + rw, r1y + ch);
+
+      // ── Row 2: Plan + Aktion ──
+      int r2y = r1y + ch + 4;
+      int r2h = 44;
+
+      it.print(rx + 6, r2y + 2, id(font_tiny), "Speicherplan");
+      if (id(plan_summary).has_state()) {
+        it.print(rx + 6, r2y + 16, id(font_medium), id(plan_summary).state.c_str());
       }
 
-      // Aktueller Preis vs günstigster Preis
-      int r4c3 = card_x + r4w * 2;
-      draw_card(r4c3, row4_y, r4w - 4, r4h);
-      it.print(r4c3 + 8, row4_y + 4, id(font_tiny), "Aktuell vs. guenstig");
-      if (!isnan(id(current_price).state)) {
-        char cmp_buf[24];
-        snprintf(cmp_buf, sizeof(cmp_buf), "%.1f ct jetzt",
-                 id(current_price).state * 100);
-        it.print(r4c3 + 8, row4_y + 18, id(font_small), cmp_buf);
+      // Aktion (right-aligned)
+      it.print(rx + rw - 6, r2y + 2, id(font_tiny), TextAlign::TOP_RIGHT, "Aktion");
+      if (id(planned_action).has_state()) {
+        it.print(rx + rw - 6, r2y + 16, id(font_medium), TextAlign::TOP_RIGHT,
+                 id(planned_action).state.c_str());
       }
 
-      // ── Divider ──
-      int chart_top = row3_y + card_h + 16;
-      it.line(PAD, chart_top - 4, W - PAD, chart_top - 4);
+      it.line(rx, r2y + r2h, rx + rw, r2y + r2h);
 
-      // ── 24h Price Timeline ──
-      int chart_x = PAD + 30;
-      int chart_w = W - chart_x - PAD;
-      int chart_h = H - chart_top - 40;
-      int chart_bottom = chart_top + chart_h;
+      // ══════════════════════════════════════════════════════════
+      // ── BOTTOM HALF: Two prominent time windows ──
+      // ══════════════════════════════════════════════════════════
+      int bot_y = r2y + r2h + 8;
+      int box_w = rw / 2 - 6;
+      int box_h = 110;
 
-      it.print(PAD, chart_top, id(font_small), "24h Preisverlauf");
+      // ── Günstigstes Zeitfenster (inverted) ──
+      it.filled_rectangle(rx, bot_y, box_w, box_h);
+      it.print(rx + 10, bot_y + 8, id(font_small), COLOR_OFF, "Guenstigstes Fenster");
 
-      // Axes
-      it.line(chart_x, chart_top + 24, chart_x, chart_bottom);
-      it.line(chart_x, chart_bottom, chart_x + chart_w, chart_bottom);
-
-      // Time labels
-      if (id(ha_time).now().is_valid()) {
-        int current_hour = id(ha_time).now().hour;
-        for (int h = 0; h < 24; h += 3) {
-          int display_hour = (current_hour + h) % 24;
-          float x_pos = chart_x + (float)h / 24.0 * chart_w;
-          char hlbl[4];
-          snprintf(hlbl, sizeof(hlbl), "%02d", display_hour);
-          it.print((int)x_pos, chart_bottom + 4, id(font_tiny), TextAlign::TOP_CENTER, hlbl);
-          it.line((int)x_pos, chart_bottom, (int)x_pos, chart_bottom + 3);
-        }
-
-        // "Now" marker
-        it.filled_rectangle(chart_x, chart_top + 24, 3, chart_h - 24);
-        it.print(chart_x + 6, chart_top + 24, id(font_tiny), "Jetzt");
-      }
-
-      // Current price label
-      if (!isnan(id(current_price).state)) {
-        char cur_price[12];
-        snprintf(cur_price, sizeof(cur_price), "%.0f ct", id(current_price).state * 100);
-        it.print(PAD, chart_top + chart_h / 2, id(font_tiny), TextAlign::CENTER_LEFT, cur_price);
-      }
-
-      // Cheap window zone
       if (id(next_cheap).has_state() && id(next_cheap).state.length() > 10) {
-        std::string ts = id(next_cheap).state;
-        int cheap_hour = atoi(ts.substr(11, 2).c_str());
-        int current_h = id(ha_time).now().is_valid() ? id(ha_time).now().hour : 0;
-        int hours_until = (cheap_hour - current_h + 24) % 24;
-        float x_cheap = chart_x + (float)hours_until / 24.0 * chart_w;
-        int zone_w = chart_w / 12;
-        int zone_y = chart_top + 28;
-        int zone_h = chart_h - 32;
-        for (int i = 0; i < zone_w; i += 3) {
-          it.line((int)x_cheap + i, zone_y, (int)x_cheap + i, zone_y + zone_h);
-        }
-        it.print((int)x_cheap + zone_w / 2, zone_y - 2, id(font_tiny), TextAlign::BOTTOM_CENTER, "guenstig");
+        std::string cheap_time, cheap_day;
+        parse_time(id(next_cheap).state, cheap_time, cheap_day);
+        it.print(rx + 10, bot_y + 34, id(font_big), COLOR_OFF, cheap_time.c_str());
+        it.print(rx + 10, bot_y + 84, id(font_small), COLOR_OFF, cheap_day.c_str());
+      } else {
+        it.print(rx + 10, bot_y + 34, id(font_big), COLOR_OFF, "--:--");
       }
 
-      // Expensive window zone
+      // ── Teuerstes Zeitfenster (outline, hatched) ──
+      int exp_x = rx + box_w + 12;
+      it.rectangle(exp_x, bot_y, box_w, box_h);
+      it.rectangle(exp_x + 1, bot_y + 1, box_w - 2, box_h - 2);
+      // Diagonal hatching for "danger" feel
+      for (int i = 0; i < box_w + box_h; i += 8) {
+        int x1 = exp_x + std::min(i, box_w);
+        int y1 = bot_y + std::max(0, i - box_w);
+        int x2 = exp_x + std::max(0, i - box_h);
+        int y2 = bot_y + std::min(i, box_h);
+        it.line(x1, y1, x2, y2);
+      }
+      // White box for text
+      it.filled_rectangle(exp_x + 6, bot_y + 4, box_w - 12, box_h - 8, COLOR_OFF);
+
+      it.print(exp_x + 12, bot_y + 8, id(font_small), "Teuerstes Fenster");
+
       if (id(next_expensive).has_state() && id(next_expensive).state.length() > 10) {
-        std::string ts = id(next_expensive).state;
-        int exp_hour = atoi(ts.substr(11, 2).c_str());
-        int current_h = id(ha_time).now().is_valid() ? id(ha_time).now().hour : 0;
-        int hours_until = (exp_hour - current_h + 24) % 24;
-        float x_exp = chart_x + (float)hours_until / 24.0 * chart_w;
-        int zone_w = chart_w / 12;
-        int zone_y = chart_top + 28;
-        int zone_h = chart_h - 32;
-        for (int y = zone_y; y < zone_y + zone_h; y += 4) {
-          it.line((int)x_exp, y, (int)x_exp + zone_w, y);
-        }
-        it.print((int)x_exp + zone_w / 2, zone_y - 2, id(font_tiny), TextAlign::BOTTOM_CENTER, "teuer");
+        std::string exp_time, exp_day;
+        parse_time(id(next_expensive).state, exp_time, exp_day);
+        it.print(exp_x + 12, bot_y + 34, id(font_big), exp_time.c_str());
+        it.print(exp_x + 12, bot_y + 84, id(font_small), exp_day.c_str());
+      } else {
+        it.print(exp_x + 12, bot_y + 34, id(font_big), "--:--");
       }
 
-      // Strategy + update time (bottom right)
+      // ══════════════════════════════════════════════════════════
+      // ── FOOTER ──
+      // ══════════════════════════════════════════════════════════
+      int foot_y = H - 24;
+      it.line(P, foot_y, W - P, foot_y);
+
+      // Strategy
       if (id(strategy).has_state()) {
-        std::string strat = id(strategy).state;
-        if (strat == "price_optimized") strat = "Preisoptimiert";
-        else if (strat == "self_consumption") strat = "Eigenverbrauch";
-        else if (strat == "manual") strat = "Manuell";
-        it.print(W - PAD, H - PAD, id(font_tiny), TextAlign::BOTTOM_RIGHT, strat.c_str());
+        std::string s = id(strategy).state;
+        if (s == "price_optimized") s = "Preisoptimiert";
+        else if (s == "self_consumption") s = "Eigenverbrauch";
+        else if (s == "manual") s = "Manuell";
+        it.print(P, foot_y + 4, id(font_tiny), s.c_str());
       }
 
-      // Next update hint (bottom left)
-      it.print(PAD, H - PAD, id(font_tiny), TextAlign::BOTTOM_LEFT, "Aktualisierung alle 30 min");
+      // Inverter
+      if (!isnan(id(inverter_power).state) && id(inverter_power).state > 0) {
+        char inv[20];
+        snprintf(inv, sizeof(inv), "WR: %.0f W", id(inverter_power).state);
+        it.print(W / 2, foot_y + 4, id(font_tiny), TextAlign::TOP_CENTER, inv);
+      }
+
+      // Update hint
+      it.print(W - P, foot_y + 4, id(font_tiny), TextAlign::TOP_RIGHT, "Aktualisierung alle 30 min");
