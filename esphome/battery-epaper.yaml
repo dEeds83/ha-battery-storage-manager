@@ -268,182 +268,158 @@ display:
       }
 
       // ══════════════════════════════════════════════════════════
-      // ── HEADER ──
+      // ── HEADER BAR: Title + SOC + Metrics (one line) ──
       // ══════════════════════════════════════════════════════════
-      it.print(P, P, id(font_title), "Strom-Dashboard @Familie Dietz");
+
+      // Title
+      it.print(P, P, id(font_title), "Strom-Dashboard");
+
+      // Time + Date (right)
       if (id(ha_time).now().is_valid()) {
         auto now = id(ha_time).now();
-        char tbuf[6], dbuf[12];
-        snprintf(tbuf, sizeof(tbuf), "%02d:%02d", now.hour, now.minute);
-        snprintf(dbuf, sizeof(dbuf), "%02d.%02d.%04d", now.day_of_month, now.month, now.year);
-        it.print(W - P, P, id(font_medium), TextAlign::TOP_RIGHT, tbuf);
-        it.print(W - P, P + 24, id(font_small), TextAlign::TOP_RIGHT, dbuf);
+        char tbuf[16];
+        snprintf(tbuf, sizeof(tbuf), "%02d:%02d  %02d.%02d.",
+                 now.hour, now.minute, now.day_of_month, now.month);
+        it.print(W - P, P + 6, id(font_small), TextAlign::TOP_RIGHT, tbuf);
       }
-      it.line(P, 50, W - P, 50);
 
-      // ══════════════════════════════════════════════════════════
-      // ── LEFT COLUMN: SOC (full height) ──
-      // ══════════════════════════════════════════════════════════
-      int col_left_w = 150;
-      int soc_cx = col_left_w / 2;
-      int soc_cy = 124;
-      int soc_r = 52;
+      it.line(P, 42, W - P, 42);
+
+      // ── Row 1: SOC + 5 compact metrics ──
+      int r1y = 48;
+      int r1h = 48;
+
+      // SOC (compact, left)
       float soc = isnan(id(battery_soc).state) ? 0 : id(battery_soc).state;
+      char soc_buf[16];
 
-      // SOC ring
-      for (int t = 0; t < 3; t++) {
-        it.circle(soc_cx, soc_cy, soc_r - t);
-        it.circle(soc_cx, soc_cy, soc_r - 8 + t);
-      }
-      // Fill arc
-      float soc_angle = soc / 100.0 * 6.2832;
-      for (float a = -1.5708; a < -1.5708 + soc_angle; a += 0.015) {
-        for (int r = soc_r - 8; r <= soc_r; r++) {
-          int px = soc_cx + r * cos(a);
-          int py = soc_cy + r * sin(a);
-          if (px >= 0 && px < W && py >= 0 && py < H)
-            it.draw_pixel_at(px, py);
-        }
-      }
-
-      // SOC value (centered, smaller font)
-      char soc_buf[8];
-      snprintf(soc_buf, sizeof(soc_buf), "%.0f%%", soc);
-      it.print(soc_cx, soc_cy, id(font_title), TextAlign::CENTER, soc_buf);
-
-      // Mode label
-      std::string mode = "-";
+      // Mode text
+      std::string mode = "";
       if (id(operating_mode).has_state()) {
         std::string m = id(operating_mode).state;
         if (m == "idle") mode = "Idle";
-        else if (m == "charging") mode = "Netz-Laden";
-        else if (m == "solar_charging") mode = "Solar-Laden";
-        else if (m == "discharging") mode = "Entladen";
+        else if (m == "charging") mode = "Netz";
+        else if (m == "solar_charging") mode = "Solar";
+        else if (m == "discharging") mode = "Entl.";
       }
-      it.print(soc_cx, soc_cy + soc_r + 10, id(font_small), TextAlign::TOP_CENTER, mode.c_str());
+      snprintf(soc_buf, sizeof(soc_buf), "%.0f%% %s", soc, mode.c_str());
 
-      // Vertical separator
-      it.line(col_left_w, 54, col_left_w, H - 30);
+      // SOC bar (horizontal, compact)
+      int soc_bar_x = P;
+      int soc_bar_w = 130;
+      it.print(soc_bar_x, r1y + 2, id(font_tiny), "Akku");
+      it.print(soc_bar_x, r1y + 16, id(font_medium), soc_buf);
+      // Mini progress bar
+      it.rectangle(soc_bar_x, r1y + 38, soc_bar_w, 6);
+      it.filled_rectangle(soc_bar_x + 1, r1y + 39, (int)(soc / 100.0 * (soc_bar_w - 2)), 4);
 
-      // ══════════════════════════════════════════════════════════
-      // ── RIGHT AREA ──
-      // ══════════════════════════════════════════════════════════
-      int rx = col_left_w + P;  // right area x start
-      int rw = W - rx - P;      // right area width
+      it.line(soc_bar_x + soc_bar_w + 6, r1y, soc_bar_x + soc_bar_w + 6, r1y + r1h);
 
-      // ── Row 1: 3 metric cards ──
-      int r1y = 58;
-      int cw = rw / 3;
-      int ch = 56;
+      // Metrics area
+      int mx = soc_bar_x + soc_bar_w + 14;
+      int mw = (W - mx - P) / 4;
 
-      // Strompreis + Tagesdurchschnitt
-      it.print(rx + 8, r1y + 4, id(font_tiny), "Strompreis");
+      // Strompreis
+      it.print(mx, r1y + 2, id(font_tiny), "Preis");
       if (!isnan(id(current_price).state)) {
-        char buf[24];
+        char buf[20];
         if (!isnan(id(avg_price).state)) {
-          snprintf(buf, sizeof(buf), "%.1f ct (~%.0f)",
+          snprintf(buf, sizeof(buf), "%.1f (~%.0f) ct",
                    id(current_price).state * 100, id(avg_price).state * 100);
         } else {
           snprintf(buf, sizeof(buf), "%.1f ct", id(current_price).state * 100);
         }
-        it.print(rx + 8, r1y + 20, id(font_medium), buf);
+        it.print(mx, r1y + 16, id(font_medium), buf);
       }
-      it.line(rx + cw, r1y, rx + cw, r1y + ch);
+      it.line(mx + mw, r1y, mx + mw, r1y + r1h);
 
-      // Netzleistung
-      it.print(rx + cw + 8, r1y + 4, id(font_tiny), "Netzleistung");
+      // Netz
+      it.print(mx + mw + 6, r1y + 2, id(font_tiny), "Netz");
       if (!isnan(id(grid_power).state)) {
-        char buf[16];
+        char buf[14];
         float gp = id(grid_power).state;
-        if (gp >= 0) snprintf(buf, sizeof(buf), "+%.0f W Bezug", gp);
-        else snprintf(buf, sizeof(buf), "%.0f W Einsp.", gp);
-        it.print(rx + cw + 8, r1y + 20, id(font_medium), buf);
+        snprintf(buf, sizeof(buf), "%s%.0f W", gp >= 0 ? "+" : "", gp);
+        it.print(mx + mw + 6, r1y + 16, id(font_medium), buf);
       }
-      it.line(rx + cw * 2, r1y, rx + cw * 2, r1y + ch);
+      it.line(mx + mw * 2, r1y, mx + mw * 2, r1y + r1h);
 
       // Verbrauch
-      it.print(rx + cw * 2 + 8, r1y + 4, id(font_tiny), "Verbrauchsprognose");
+      it.print(mx + mw * 2 + 6, r1y + 2, id(font_tiny), "Verbr.");
       if (!isnan(id(consumption_forecast).state)) {
-        char buf[12];
+        char buf[10];
         snprintf(buf, sizeof(buf), "%.0f W", id(consumption_forecast).state);
-        it.print(rx + cw * 2 + 8, r1y + 20, id(font_medium), buf);
+        it.print(mx + mw * 2 + 6, r1y + 16, id(font_medium), buf);
       }
+      it.line(mx + mw * 3, r1y, mx + mw * 3, r1y + r1h);
 
-      it.line(rx, r1y + ch, rx + rw, r1y + ch);
-
-      // ── Row 2: Plan + Aktion ──
-      int r2y = r1y + ch + 4;
-      int r2h = 44;
-
-      it.print(rx + 6, r2y + 2, id(font_tiny), "Speicherplan");
-      if (id(plan_summary).has_state()) {
-        it.print(rx + 6, r2y + 16, id(font_medium), id(plan_summary).state.c_str());
-      }
-
-      // Aktion (right-aligned)
-      it.print(rx + rw - 6, r2y + 2, id(font_tiny), TextAlign::TOP_RIGHT, "Aktion");
+      // Aktion
+      it.print(mx + mw * 3 + 6, r1y + 2, id(font_tiny), "Aktion");
       if (id(planned_action).has_state()) {
-        it.print(rx + rw - 6, r2y + 16, id(font_medium), TextAlign::TOP_RIGHT,
+        it.print(mx + mw * 3 + 6, r1y + 16, id(font_medium),
                  id(planned_action).state.c_str());
       }
 
-      it.line(rx, r2y + r2h, rx + rw, r2y + r2h);
+      it.line(P, r1y + r1h, W - P, r1y + r1h);
+
+      // ── Row 2: Plan summary (full width, compact) ──
+      int r2y = r1y + r1h + 2;
+      it.print(P + 4, r2y + 2, id(font_tiny), "Plan:");
+      if (id(plan_summary).has_state()) {
+        it.print(P + 40, r2y + 2, id(font_tiny), id(plan_summary).state.c_str());
+      }
+
+      it.line(P, r2y + 16, W - P, r2y + 16);
 
       // ══════════════════════════════════════════════════════════
-      // ── MID: Time windows side by side (compact) ──
+      // ── Time windows (compact row) ──
       // ══════════════════════════════════════════════════════════
-      int bot_y = r2y + r2h + 6;
-      int box_w = rw / 2 - 6;
-      int box_h = 60;
+      int tw_y = r2y + 20;
+      int tw_h = 50;
+      int tw_w = (W - P * 3) / 2;
 
-      // ── Günstigstes Fenster (inverted, nur heute) ──
-      it.filled_rectangle(rx, bot_y, box_w, box_h);
-      it.print(rx + 8, bot_y + 4, id(font_tiny), COLOR_OFF, "Guenstigstes Fenster heute");
-
+      // Günstig (inverted)
+      it.filled_rectangle(P, tw_y, tw_w, tw_h);
+      it.print(P + 8, tw_y + 4, id(font_tiny), COLOR_OFF, "Guenstigstes Fenster heute");
       if (id(next_cheap).has_state() && id(next_cheap).state.length() > 10) {
         std::string cheap_time, cheap_day;
         parse_time(id(next_cheap).state, cheap_time, cheap_day);
         if (cheap_day == "heute") {
-          it.print(rx + 8, bot_y + 20, id(font_title), COLOR_OFF, (cheap_time + " Uhr").c_str());
-          // Show min price
-          if (!isnan(id(price_min_today).state)) {
-            char mp[16];
-            snprintf(mp, sizeof(mp), "ab %.1f ct/kWh", id(price_min_today).state * 100);
-            it.print(rx + 8, bot_y + 46, id(font_tiny), COLOR_OFF, mp);
-          }
+          char cb[24];
+          if (!isnan(id(price_min_today).state))
+            snprintf(cb, sizeof(cb), "%s Uhr  ab %.1f ct", cheap_time.c_str(), id(price_min_today).state * 100);
+          else
+            snprintf(cb, sizeof(cb), "%s Uhr", cheap_time.c_str());
+          it.print(P + 8, tw_y + 20, id(font_medium), COLOR_OFF, cb);
         } else {
-          it.print(rx + 8, bot_y + 22, id(font_small), COLOR_OFF, "Kein guenstiges");
-          it.print(rx + 8, bot_y + 40, id(font_small), COLOR_OFF, "Fenster mehr heute");
+          it.print(P + 8, tw_y + 22, id(font_small), COLOR_OFF, "Kein Fenster mehr heute");
         }
       }
 
-      // ── Teuerstes Fenster (double border) ──
-      int exp_x = rx + box_w + 12;
-      it.rectangle(exp_x, bot_y, box_w, box_h);
-      it.rectangle(exp_x + 2, bot_y + 2, box_w - 4, box_h - 4);
-      it.print(exp_x + 8, bot_y + 4, id(font_tiny), "Teuerstes Fenster");
-
+      // Teuer (border)
+      int tx = P + tw_w + P;
+      it.rectangle(tx, tw_y, tw_w, tw_h);
+      it.rectangle(tx + 1, tw_y + 1, tw_w - 2, tw_h - 2);
+      it.print(tx + 8, tw_y + 4, id(font_tiny), "Teuerstes Fenster");
       if (id(next_expensive).has_state() && id(next_expensive).state.length() > 10) {
         std::string exp_time, exp_day;
         parse_time(id(next_expensive).state, exp_time, exp_day);
-        it.print(exp_x + 8, bot_y + 20, id(font_title), (exp_time + " Uhr").c_str());
-        char ep[24];
-        if (!isnan(id(price_max_today).state)) {
-          snprintf(ep, sizeof(ep), "bis %.1f ct/kWh  %s", id(price_max_today).state * 100, exp_day.c_str());
-        } else {
-          snprintf(ep, sizeof(ep), "%s", exp_day.c_str());
-        }
-        it.print(exp_x + 8, bot_y + 46, id(font_tiny), ep);
+        char eb[28];
+        if (!isnan(id(price_max_today).state))
+          snprintf(eb, sizeof(eb), "%s Uhr  bis %.1f ct  %s",
+                   exp_time.c_str(), id(price_max_today).state * 100, exp_day.c_str());
+        else
+          snprintf(eb, sizeof(eb), "%s Uhr  %s", exp_time.c_str(), exp_day.c_str());
+        it.print(tx + 8, tw_y + 20, id(font_medium), eb);
       }
 
       // ══════════════════════════════════════════════════════════
-      // ── BOTTOM: Price Curve (line chart) ──
+      // ── FULL WIDTH PRICE CHART ──
       // ══════════════════════════════════════════════════════════
-      int chart_top = bot_y + box_h + 10;
-      int chart_left = rx + 30;       // room for Y-axis labels
+      int chart_top = tw_y + tw_h + 10;
+      int chart_left = P + 34;        // room for Y-axis
       int chart_right = W - P;
       int chart_w = chart_right - chart_left;
-      int chart_bottom = H - 32;
+      int chart_bottom = H - 22;      // room for footer
       int chart_h = chart_bottom - chart_top;
 
       it.print(rx, chart_top - 2, id(font_small), "Preisverlauf");
