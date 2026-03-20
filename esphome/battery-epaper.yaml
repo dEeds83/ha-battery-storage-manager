@@ -21,8 +21,13 @@ esphome:
   name: battery-epaper
   friendly_name: "Batterie ePaper Display"
   on_boot:
-    priority: -100  # Run after everything is initialized
+    priority: -100
     then:
+      # Prevent OTA rollback: mark boot as successful before deep sleep
+      - lambda: |-
+          // Mark the boot partition as valid so OTA doesn't roll back
+          // when we enter deep sleep before the default 10min timer
+          esp_ota_mark_app_valid();
       - wait_until:
           condition:
             api.connected:
@@ -317,7 +322,7 @@ display:
       if (!isnan(id(current_price).state)) {
         char buf[24];
         if (!isnan(id(avg_price).state)) {
-          snprintf(buf, sizeof(buf), "%.1f ct (Ø %.0f)",
+          snprintf(buf, sizeof(buf), "%.1f ct (~%.0f)",
                    id(current_price).state * 100, id(avg_price).state * 100);
         } else {
           snprintf(buf, sizeof(buf), "%.1f ct", id(current_price).state * 100);
