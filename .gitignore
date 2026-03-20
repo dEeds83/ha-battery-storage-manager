@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# ESPHome secrets (enthält WiFi-Passwörter, API-Keys)
+esphome/secrets.yaml
