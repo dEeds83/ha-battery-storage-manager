@@ -8,9 +8,10 @@
 const STATUS_CARD_VERSION = "1.0.1";
 
 const MODE_ICONS = {
-  idle:        { icon: "mdi:sleep",                color: "#9E9E9E", label: "Inaktiv" },
-  charging:    { icon: "mdi:battery-charging-100", color: "#4CAF50", label: "Laden" },
-  discharging: { icon: "mdi:battery-arrow-down",   color: "#FF9800", label: "Entladen" },
+  idle:            { icon: "mdi:sleep",                color: "#9E9E9E", label: "Inaktiv" },
+  charging:        { icon: "mdi:battery-charging-100", color: "#4CAF50", label: "Laden (Netz)" },
+  solar_charging:  { icon: "mdi:solar-power",          color: "#FFD600", label: "Laden (Solar)" },
+  discharging:     { icon: "mdi:battery-arrow-down",   color: "#FF9800", label: "Entladen" },
 };
 
 class BatteryStatusCard extends HTMLElement {

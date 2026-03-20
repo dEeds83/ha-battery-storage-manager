@@ -39,6 +39,7 @@ STORAGE_VERSION_CONSUMPTION = 1
 # Operating modes
 MODE_IDLE = "idle"
 MODE_CHARGING = "charging"
+MODE_SOLAR_CHARGING = "solar_charging"
 MODE_DISCHARGING = "discharging"
 MODE_AUTO = "auto"
 

@@ -56,6 +56,7 @@ from .const import (
     MODE_CHARGING,
     MODE_DISCHARGING,
     MODE_IDLE,
+    MODE_SOLAR_CHARGING,
     STRATEGY_MANUAL,
     STRATEGY_PRICE_OPTIMIZED,
     STRATEGY_SELF_CONSUMPTION,
@@ -422,9 +423,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         """
         any_charger_on = any(c["active"] for c in self._chargers)
 
-        if self._operating_mode == MODE_CHARGING and not any_charger_on:
+        if self._operating_mode in (MODE_CHARGING, MODE_SOLAR_CHARGING) and not any_charger_on:
             _LOGGER.warning(
-                "Mode is CHARGING but no charger is active → resetting to IDLE"
+                "Mode is %s but no charger is active → resetting to IDLE",
+                self._operating_mode,
             )
             self._operating_mode = MODE_IDLE
 
@@ -1497,7 +1499,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 )
                 await self._apply_charger_states({smallest_idx})
                 await self._start_inverter_deficit(deficit_w)
-                self._operating_mode = MODE_CHARGING
+                self._operating_mode = MODE_SOLAR_CHARGING
                 return
 
             powers_str = ", ".join(
@@ -1521,7 +1523,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             await self._set_inverter_power(0)
             self._inverter_active = False
 
-        self._operating_mode = MODE_CHARGING
+        self._operating_mode = MODE_SOLAR_CHARGING
         active_str = ", ".join(
             f"C{i+1}={'ON' if i in selected else 'OFF'}({c['power']}W)"
             for i, c in enumerate(self._chargers)
