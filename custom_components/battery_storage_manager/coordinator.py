@@ -139,6 +139,18 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._plan_summary: str = ""
         self._expected_solar_kwh: float = 0.0
 
+        # PID controller state for zero-feed regulation
+        self._pid_integral: float = 0.0
+        self._pid_last_error: float | None = None
+        self._pid_kp: float = 0.6   # proportional gain
+        self._pid_ki: float = 0.15  # integral gain
+        self._pid_kd: float = 0.1   # derivative gain
+
+        # Hysteresis state for charger switching
+        self._charger_last_switch_time: dict[int, datetime] = {}
+        self._charger_min_on_time = timedelta(seconds=120)  # min 2 min on
+        self._charger_min_off_time = timedelta(seconds=60)   # min 1 min off
+
         # Track whether entities have ever been seen (for startup race condition)
         self._price_entity_seen = False
         self._prices_entity_seen = False
@@ -606,16 +618,22 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
     # ── Battery plan ────────────────────────────────────────────────
 
     def _create_battery_plan(self) -> None:
-        """Create an optimized 24h battery charge/discharge plan.
+        """Create a cost-optimized 24h battery plan using arbitrage scoring.
 
-        Combines price forecast, solar forecast, current SOC, and battery
-        capacity to decide when to charge from grid, let solar charge,
-        discharge, or hold.
+        For each hour, computes a "profit score" representing how much money
+        is saved by storing 1 kWh now vs. discharging later (or vice versa).
+        This is equivalent to solving the LP:
+
+            minimize  sum(price_t * grid_import_t)
+            subject to  SOC constraints, power limits, energy balance
+
+        but implemented as a greedy arbitrage algorithm that:
+        1. First assigns solar hours (free energy)
+        2. Finds profitable charge/discharge pairs (buy low, sell high)
+        3. Respects SOC limits via forward simulation
         """
         now = dt_util.now()
-        now_key = now.strftime("%Y-%m-%dT%H")
 
-        # Build hourly data: price + solar for each upcoming hour
         hourly_data = self._build_hourly_data(now)
         if not hourly_data:
             self._battery_plan = []
@@ -623,133 +641,177 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             return
 
         # Battery parameters
-        usable_kwh = (self._max_soc - self._min_soc) / 100 * self._battery_capacity
         current_soc = self._battery_soc if self._battery_soc is not None else 50.0
-        current_stored_kwh = (current_soc - self._min_soc) / 100 * self._battery_capacity
-        headroom_kwh = (self._max_soc - current_soc) / 100 * self._battery_capacity
-
-        # Charge power (combined chargers)
         charge_power_w = sum(c["power"] for c in self._chargers)
-        charge_kwh_per_hour = charge_power_w / 1000
+        charge_kwh_h = charge_power_w / 1000
         discharge_power_w = self._inverter_power or 800
-        discharge_kwh_per_hour = discharge_power_w / 1000
-        house_kwh_per_hour = self._house_consumption_w / 1000
+        discharge_kwh_h = discharge_power_w / 1000
+        house_kwh_h = self._house_consumption_w / 1000
+        cap = self._battery_capacity
 
-        # Step 1: Estimate solar contribution per hour (net after house consumption)
-        total_solar_charge_kwh = 0.0
+        # Enrich hourly data with solar info
         for h in hourly_data:
             solar_wh = self._solar_forecast.get(h["hour_key"], 0)
             h["solar_kwh"] = solar_wh / 1000
-            # Net solar surplus after house consumption
-            h["solar_surplus_kwh"] = max(0, h["solar_kwh"] - house_kwh_per_hour)
-            total_solar_charge_kwh += min(h["solar_surplus_kwh"], charge_kwh_per_hour)
+            h["solar_surplus_kwh"] = max(0, h["solar_kwh"] - house_kwh_h)
 
-        # Solar will fill this much of the battery
-        solar_fills_kwh = min(total_solar_charge_kwh, headroom_kwh)
-        # How much we still need from grid
-        grid_charge_needed_kwh = max(0, headroom_kwh - solar_fills_kwh)
+        n = len(hourly_data)
+        # action_val: +1 = charge from grid, -1 = discharge, 0 = idle/hold
+        # solar hours get a separate flag
+        actions = ["idle"] * n
 
-        # Step 2: Determine how many grid-charge hours we need
-        grid_charge_hours_needed = (
-            int(grid_charge_needed_kwh / charge_kwh_per_hour) + 1
-            if charge_kwh_per_hour > 0 and grid_charge_needed_kwh > 0
-            else 0
-        )
+        # Step 1: Assign solar hours (free energy, always charge if surplus)
+        for i, h in enumerate(hourly_data):
+            if h["solar_surplus_kwh"] > 0.05:
+                actions[i] = "solar_charge"
 
-        # Step 3: Determine how many discharge hours we can sustain
-        discharge_hours_available = (
-            int(current_stored_kwh / discharge_kwh_per_hour)
-            if discharge_kwh_per_hour > 0
-            else 0
-        )
+        # Step 2: Find profitable arbitrage pairs
+        # For each pair (cheap_hour, expensive_hour) where cheap < expensive,
+        # compute profit = price_expensive - price_cheap.
+        # Greedily assign the most profitable pairs first.
+        prices = [h["price"] for h in hourly_data]
+        avg_price = sum(prices) / n if n > 0 else 0
 
-        # Step 4: Sort hours by price to find optimal charge/discharge windows
-        sorted_by_price = sorted(hourly_data, key=lambda h: h["price"])
+        # Build candidate lists (only non-solar hours)
+        charge_cands = []  # (index, price)
+        discharge_cands = []  # (index, price)
+        for i, h in enumerate(hourly_data):
+            if actions[i] != "idle":
+                continue
+            charge_cands.append((i, h["price"]))
+            discharge_cands.append((i, h["price"]))
 
-        # Cheapest hours → charge candidates (only if no significant solar)
-        charge_candidates = []
-        for h in sorted_by_price:
-            if h["solar_surplus_kwh"] < charge_kwh_per_hour * 0.5:
-                charge_candidates.append(h["hour_key"])
-            if len(charge_candidates) >= grid_charge_hours_needed:
-                break
+        charge_cands.sort(key=lambda x: x[1])       # cheapest first
+        discharge_cands.sort(key=lambda x: x[1], reverse=True)  # most expensive first
 
-        # Most expensive hours → discharge candidates
-        discharge_candidates = []
-        sorted_expensive = sorted(hourly_data, key=lambda h: h["price"], reverse=True)
-        for h in sorted_expensive:
-            # Only discharge if price is significantly above average
-            avg_price = sum(x["price"] for x in hourly_data) / len(hourly_data)
-            if h["price"] >= avg_price and h["solar_surplus_kwh"] < house_kwh_per_hour * 0.5:
-                discharge_candidates.append(h["hour_key"])
-            if len(discharge_candidates) >= discharge_hours_available:
-                break
+        # Minimum spread required: 2 ct/kWh to account for round-trip losses
+        min_spread = 0.02
 
-        # Step 5: Build the plan with expected SOC tracking
+        # Greedily pair cheapest charge with most expensive discharge
+        used = set()
+        pairs = []
+        ci, di = 0, 0
+        while ci < len(charge_cands) and di < len(discharge_cands):
+            c_idx, c_price = charge_cands[ci]
+            d_idx, d_price = discharge_cands[di]
+
+            if d_price - c_price < min_spread:
+                break  # no more profitable pairs
+
+            if c_idx in used or d_idx in used or c_idx == d_idx:
+                # Skip already used hours
+                if c_idx in used:
+                    ci += 1
+                else:
+                    di += 1
+                continue
+
+            pairs.append((c_idx, d_idx, d_price - c_price))
+            used.add(c_idx)
+            used.add(d_idx)
+            ci += 1
+            di += 1
+
+        for c_idx, d_idx, _ in pairs:
+            actions[c_idx] = "charge"
+            actions[d_idx] = "discharge"
+
+        # Step 3: Forward-simulate SOC to validate and build plan
         self._battery_plan = []
+        estimated_soc = current_soc
         charge_count = 0
         discharge_count = 0
         solar_count = 0
-        estimated_soc = current_soc
+        grid_charge_kwh = 0.0
 
-        for h in hourly_data:
-            key = h["hour_key"]
-            entry = {
-                "hour": key + ":00",
+        for i, h in enumerate(hourly_data):
+            action = actions[i]
+            delta_kwh = 0.0
+
+            # Validate action against SOC constraints
+            if action == "solar_charge":
+                delta_kwh = min(h["solar_surplus_kwh"], charge_kwh_h)
+                if estimated_soc + delta_kwh / cap * 100 > self._max_soc:
+                    delta_kwh = max(0, (self._max_soc - estimated_soc) / 100 * cap)
+                    if delta_kwh < 0.05:
+                        action = "idle"
+            elif action == "charge":
+                if estimated_soc >= self._max_soc:
+                    action = "idle"
+                else:
+                    delta_kwh = min(charge_kwh_h, (self._max_soc - estimated_soc) / 100 * cap)
+                    grid_charge_kwh += delta_kwh
+            elif action == "discharge":
+                if estimated_soc <= self._min_soc:
+                    action = "idle"
+                else:
+                    delta_kwh = min(discharge_kwh_h, (estimated_soc - self._min_soc) / 100 * cap)
+
+            # Update SOC
+            if action in ("solar_charge", "charge"):
+                estimated_soc += delta_kwh / cap * 100
+                if action == "solar_charge":
+                    solar_count += 1
+                else:
+                    charge_count += 1
+            elif action == "discharge":
+                estimated_soc -= delta_kwh / cap * 100
+                discharge_count += 1
+
+            # Determine if idle hours should "hold" for upcoming discharge
+            if action == "idle":
+                has_future_discharge = any(
+                    actions[j] == "discharge" for j in range(i + 1, n)
+                )
+                if has_future_discharge and estimated_soc > self._min_soc + 5:
+                    action = "hold"
+
+            estimated_soc = max(self._min_soc, min(self._max_soc, estimated_soc))
+
+            # Build reason text
+            reasons = {
+                "solar_charge": f"Solarüberschuss {h['solar_surplus_kwh']:.1f} kWh",
+                "charge": f"Günstiger Strom ({h['price']*100:.1f} ct/kWh)",
+                "discharge": f"Teurer Strom ({h['price']*100:.1f} ct/kWh)",
+                "hold": "Ladung halten für teure Stunden",
+                "idle": "Keine Aktion nötig",
+            }
+
+            self._battery_plan.append({
+                "hour": h["hour_key"] + ":00",
                 "price": round(h["price"], 4),
                 "solar_kwh": round(h["solar_kwh"], 2),
                 "solar_surplus_kwh": round(h["solar_surplus_kwh"], 2),
                 "expected_soc": round(estimated_soc, 1),
-            }
-
-            if h["solar_surplus_kwh"] > 0.05:
-                # Solar surplus available → charge battery from solar via chargers
-                entry["action"] = "solar_charge"
-                entry["reason"] = f"Solarüberschuss {h['solar_surplus_kwh']:.1f} kWh"
-                solar_count += 1
-                delta_kwh = min(h["solar_surplus_kwh"], charge_kwh_per_hour)
-                estimated_soc += delta_kwh / self._battery_capacity * 100
-            elif key in charge_candidates:
-                entry["action"] = "charge"
-                entry["reason"] = f"Günstiger Strom ({h['price']*100:.1f} ct/kWh)"
-                charge_count += 1
-                estimated_soc += charge_kwh_per_hour / self._battery_capacity * 100
-            elif key in discharge_candidates:
-                entry["action"] = "discharge"
-                entry["reason"] = f"Teurer Strom ({h['price']*100:.1f} ct/kWh)"
-                discharge_count += 1
-                estimated_soc -= discharge_kwh_per_hour / self._battery_capacity * 100
-            else:
-                # Check if expensive hours are still coming → hold charge
-                remaining_expensive = [
-                    d for d in discharge_candidates if d > key
-                ]
-                if remaining_expensive:
-                    entry["action"] = "hold"
-                    entry["reason"] = "Ladung halten für teure Stunden"
-                else:
-                    entry["action"] = "idle"
-                    entry["reason"] = "Keine Aktion nötig"
-
-            estimated_soc = max(self._min_soc, min(self._max_soc, estimated_soc))
-            self._battery_plan.append(entry)
+                "action": action,
+                "reason": reasons.get(action, ""),
+            })
 
         # Summary
         parts = []
         if solar_count:
             parts.append(f"{solar_count}h Solar")
         if charge_count:
-            parts.append(f"{charge_count}h Laden ({grid_charge_needed_kwh:.1f} kWh)")
+            parts.append(f"{charge_count}h Laden ({grid_charge_kwh:.1f} kWh)")
         if discharge_count:
             parts.append(f"{discharge_count}h Entladen")
         self._plan_summary = " | ".join(parts) if parts else "Kein Plan erstellt"
 
+        # Estimate savings from arbitrage
+        savings = sum(
+            p[2] * min(charge_kwh_h, discharge_kwh_h)  # spread * energy
+            for p in pairs
+        )
+        self._estimated_savings = round(savings, 2)
+
         _LOGGER.debug(
-            "Battery plan: %s (SOC: %.0f%%, Solar: %.1f kWh, Headroom: %.1f kWh)",
+            "Battery plan (optimized): %s | Savings: %.2f EUR "
+            "(SOC: %.0f%%, Solar: %.1f kWh, %d pairs)",
             self._plan_summary,
+            savings,
             current_soc,
             self._expected_solar_kwh,
-            headroom_kwh,
+            len(pairs),
         )
 
     def _build_hourly_data(self, now: datetime) -> list[dict]:
@@ -992,7 +1054,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 )
                 charger["active"] = True
 
-        # Turn off inverter feed
+        # Turn off inverter feed and reset PID
+        self._reset_pid()
         if self._inverter_switch:
             await self.hass.services.async_call(
                 "switch", "turn_off", {"entity_id": self._inverter_switch}
@@ -1095,21 +1158,47 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         _LOGGER.info("Solar charging: surplus=%.0fW, %s", surplus_w, active_str)
 
     async def _apply_charger_states(self, should_be_on: set[int]) -> None:
-        """Set each charger on or off based on the index set."""
+        """Set each charger on or off, respecting minimum on/off times.
+
+        Hysteresis prevents rapid switching (flapping) by enforcing:
+        - Minimum ON time: charger must stay on for at least _charger_min_on_time
+        - Minimum OFF time: charger must stay off for at least _charger_min_off_time
+        """
+        now = dt_util.utcnow()
         for i, charger in enumerate(self._chargers):
             if not charger["switch"]:
                 continue
             want_on = i in should_be_on
+            last_switch = self._charger_last_switch_time.get(i)
+
             if want_on and not charger["active"]:
+                # Check minimum OFF time before turning on
+                if last_switch and (now - last_switch) < self._charger_min_off_time:
+                    _LOGGER.debug(
+                        "Charger %d: want ON but min off time not elapsed (%.0fs left)",
+                        i + 1,
+                        (self._charger_min_off_time - (now - last_switch)).total_seconds(),
+                    )
+                    continue
                 await self.hass.services.async_call(
                     "switch", "turn_on", {"entity_id": charger["switch"]}
                 )
                 charger["active"] = True
+                self._charger_last_switch_time[i] = now
             elif not want_on and charger["active"]:
+                # Check minimum ON time before turning off
+                if last_switch and (now - last_switch) < self._charger_min_on_time:
+                    _LOGGER.debug(
+                        "Charger %d: want OFF but min on time not elapsed (%.0fs left)",
+                        i + 1,
+                        (self._charger_min_on_time - (now - last_switch)).total_seconds(),
+                    )
+                    continue
                 await self.hass.services.async_call(
                     "switch", "turn_off", {"entity_id": charger["switch"]}
                 )
                 charger["active"] = False
+                self._charger_last_switch_time[i] = now
 
     async def _start_inverter_deficit(self, deficit_w: float) -> None:
         """Turn on inverter to cover a charger deficit."""
@@ -1165,11 +1254,17 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             await self._regulate_zero_feed()
 
     async def _regulate_zero_feed(self) -> None:
-        """Regulate inverter power to match grid import (zero-feed).
+        """PID-regulated zero-feed control for the inverter.
 
-        Reads current grid_power (positive = importing from grid) and adjusts
-        the inverter output so that grid import approaches zero without
-        exporting back to the grid.
+        Uses a PID controller to smoothly adjust inverter output so that
+        grid power approaches a small positive target (slight import preferred
+        over export).  The PID eliminates the oscillation and overshoot of
+        the previous simple additive approach.
+
+        Error = grid_power - setpoint (positive = importing too much)
+        P: immediate proportional response
+        I: corrects persistent offset (e.g. slow-changing loads)
+        D: dampens rapid changes (e.g. cloud edges)
         """
         if self._grid_power is None:
             _LOGGER.debug("No grid power data available for zero-feed regulation")
@@ -1177,24 +1272,41 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         max_power = self._inverter_power or 800
 
-        # Target: current inverter output + what we're still importing from grid
-        # grid_power is positive when importing, negative when exporting
-        new_target = self._inverter_target_power + self._grid_power
+        # Setpoint: small positive grid import (10W) to avoid export
+        setpoint = 10
+        error = self._grid_power - setpoint  # positive = need more inverter
 
-        # Clamp between 0 and max power (never negative, never over max)
+        # P term
+        p_term = self._pid_kp * error
+
+        # I term (with anti-windup clamping)
+        self._pid_integral += error
+        # Clamp integral to prevent windup
+        max_integral = max_power / self._pid_ki if self._pid_ki > 0 else 1000
+        self._pid_integral = max(-max_integral, min(max_integral, self._pid_integral))
+        i_term = self._pid_ki * self._pid_integral
+
+        # D term
+        d_term = 0.0
+        if self._pid_last_error is not None:
+            d_term = self._pid_kd * (error - self._pid_last_error)
+        self._pid_last_error = error
+
+        # Calculate new target
+        new_target = self._inverter_target_power + p_term + i_term + d_term
+
+        # Clamp between 0 and max power
         new_target = max(0, min(max_power, new_target))
 
-        # Only update if the change is significant (> 20W) to avoid excessive calls
-        if abs(new_target - self._inverter_target_power) < 20:
+        # Only update if the change is significant (> 10W) to avoid excessive calls
+        if abs(new_target - self._inverter_target_power) < 10:
             return
 
         self._inverter_target_power = new_target
 
         _LOGGER.debug(
-            "Zero-feed regulation: grid_power=%.0fW, setting inverter to %.0fW (max: %dW)",
-            self._grid_power,
-            new_target,
-            max_power,
+            "PID zero-feed: grid=%.0fW err=%.0f P=%.0f I=%.0f D=%.0f → inverter=%.0fW",
+            self._grid_power, error, p_term, i_term, d_term, new_target,
         )
 
         domain = self._inverter_power_entity.split(".")[0]
@@ -1207,12 +1319,18 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             },
         )
 
+    def _reset_pid(self) -> None:
+        """Reset PID state when switching modes."""
+        self._pid_integral = 0.0
+        self._pid_last_error = None
+
     async def _set_mode_idle(self) -> None:
         """Set idle mode - turn off all devices."""
         if self._operating_mode == MODE_IDLE:
             return
 
         _LOGGER.info("Setting battery to idle mode")
+        self._reset_pid()
         await self.stop_all()
 
     async def stop_all(self) -> None:
