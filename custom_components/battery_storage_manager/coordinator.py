@@ -283,7 +283,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             await self._run_price_optimization()
         elif self._strategy == STRATEGY_SELF_CONSUMPTION:
             await self._run_self_consumption()
-        # STRATEGY_MANUAL: no automatic actions
+        # STRATEGY_MANUAL: no automatic charge/discharge actions
+
+        # Always capture free solar surplus, regardless of strategy
+        if self._operating_mode == MODE_IDLE:
+            await self._try_solar_opportunistic()
 
         return self._build_data()
 
@@ -1495,10 +1499,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         if not selected:
             # No charger fits purely from surplus – try inverter-assisted
+            # Any surplus > 100W is worth capturing (inverter covers the rest)
             smallest = min(indexed, key=lambda x: x[1]["power"])
             smallest_idx, smallest_charger = smallest
             deficit_w = smallest_charger["power"] - surplus_w
-            if surplus_w > deficit_w and self._inverter_power_entity:
+            if surplus_w >= 100 and self._inverter_power_entity:
                 _LOGGER.debug(
                     "Solar surplus %.0fW < smallest charger (%dW) – "
                     "using inverter to cover deficit %.0fW",
