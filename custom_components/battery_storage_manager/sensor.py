@@ -482,7 +482,11 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
 
     @property
     def native_value(self) -> str | None:
-        """Return next 16 prices as comma-separated string."""
+        """Return next 12h of prices as comma-separated string.
+
+        Adapts to the price data granularity (15min → 48 entries,
+        60min → 12 entries).
+        """
         if not self.coordinator.data:
             return None
         forecast = self.coordinator.data.get("price_forecast", [])
@@ -490,18 +494,17 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
             return None
 
         from homeassistant.util import dt as dt_util
+        from datetime import datetime, timedelta
         now = dt_util.now()
+        cutoff = now + timedelta(hours=12)
         prices = []
         for entry in forecast:
             try:
-                from datetime import datetime
                 start = datetime.fromisoformat(entry["start"])
                 if start.tzinfo is not None:
                     start = dt_util.as_local(start)
-                if start >= now.replace(minute=0, second=0, microsecond=0):
+                if start >= now.replace(second=0, microsecond=0) and start < cutoff:
                     prices.append(str(round(entry.get("total", 0), 4)))
-                if len(prices) >= 16:
-                    break
             except (ValueError, TypeError, KeyError):
                 continue
 
@@ -516,27 +519,39 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
         from homeassistant.util import dt as dt_util
         now = dt_util.now()
 
+        from datetime import datetime, timedelta
+        cutoff = now + timedelta(hours=12)
+
         prices_list = []
         for entry in forecast:
             try:
-                from datetime import datetime
                 start = datetime.fromisoformat(entry["start"])
                 if start.tzinfo is not None:
                     start = dt_util.as_local(start)
-                if start >= now.replace(minute=0, second=0, microsecond=0):
+                if start >= now.replace(second=0, microsecond=0) and start < cutoff:
                     prices_list.append({
                         "time": start.strftime("%H:%M"),
                         "price": round(entry.get("total", 0), 4),
                     })
-                if len(prices_list) >= 16:
-                    break
             except (ValueError, TypeError, KeyError):
                 continue
+
+        # Detect slot duration (minutes between entries)
+        slot_minutes = 60
+        if len(prices_list) >= 2:
+            t1 = prices_list[0]["time"]
+            t2 = prices_list[1]["time"]
+            m1 = int(t1[:2]) * 60 + int(t1[3:])
+            m2 = int(t2[:2]) * 60 + int(t2[3:])
+            diff = (m2 - m1) % 1440
+            if 10 <= diff <= 60:
+                slot_minutes = diff
 
         all_prices = [p["price"] for p in prices_list]
         return {
             "prices": prices_list,
             "count": len(prices_list),
+            "slot_minutes": slot_minutes,
             "min_price": round(min(all_prices), 4) if all_prices else None,
             "max_price": round(max(all_prices), 4) if all_prices else None,
             "avg_price": round(sum(all_prices) / len(all_prices), 4) if all_prices else None,

@@ -382,12 +382,17 @@ display:
 
       it.print(P, chart_top - 4, id(font_small), "Preisverlauf 12h");
 
-      // Parse prices (limit to 12)
-      float prices[12];
+      // Parse prices (up to 48 for 12h at 15-min resolution)
+      float prices[48];
       int price_count = 0;
       if (id(prices_csv).has_state() && id(prices_csv).state.length() > 3) {
-        price_count = parse_prices(id(prices_csv).state, prices, 12);
+        price_count = parse_prices(id(prices_csv).state, prices, 48);
       }
+
+      // Detect slot duration: total_hours = 12, so minutes_per_slot = 12*60/count
+      int slot_min = (price_count > 0) ? (12 * 60 / price_count) : 60;
+      if (slot_min < 10) slot_min = 15;
+      if (slot_min > 60) slot_min = 60;
 
       if (price_count >= 2) {
         // Find min/max and their indices
@@ -406,11 +411,18 @@ display:
 
         int cur_hour = id(ha_time).now().is_valid() ? id(ha_time).now().hour : 0;
 
-        // Chart title with min/max info
-        char info[60];
-        snprintf(info, sizeof(info), "Min: %.1f ct (%02d Uhr)   Max: %.1f ct (%02d Uhr)",
-                 p_min * 100, (cur_hour + min_idx) % 24,
-                 p_max * 100, (cur_hour + max_idx) % 24);
+        // Chart title with min/max info (correct time for sub-hourly slots)
+        int cur_min_now = id(ha_time).now().is_valid() ? id(ha_time).now().minute : 0;
+        int min_total = cur_min_now + min_idx * slot_min;
+        int max_total = cur_min_now + max_idx * slot_min;
+        int min_hour = (cur_hour + min_total / 60) % 24;
+        int min_minute = min_total % 60;
+        int max_hour = (cur_hour + max_total / 60) % 24;
+        int max_minute = max_total % 60;
+        char info[70];
+        snprintf(info, sizeof(info), "Min: %.1f ct (%02d:%02d)   Max: %.1f ct (%02d:%02d)",
+                 p_min * 100, min_hour, min_minute,
+                 p_max * 100, max_hour, max_minute);
         it.print(W - P, chart_top - 4, id(font_tiny), TextAlign::TOP_RIGHT, info);
         chart_top += 14;
         chart_h -= 14;
@@ -434,10 +446,17 @@ display:
         }
 
         // X-axis labels (every 2 hours)
-        for (int i = 0; i < price_count; i += 2) {
+        // slots_per_2h = how many data points span 2 hours
+        int slots_per_2h = 120 / slot_min;
+        if (slots_per_2h < 1) slots_per_2h = 1;
+        int cur_min = id(ha_time).now().is_valid() ? id(ha_time).now().minute : 0;
+        for (int i = 0; i < price_count; i += slots_per_2h) {
           float xf = chart_left + (float)i / (price_count - 1) * chart_w;
+          // Calculate actual hour for this index
+          int total_min = cur_min + i * slot_min;
+          int display_hour = (cur_hour + total_min / 60) % 24;
           char xl[4];
-          snprintf(xl, sizeof(xl), "%02d", (cur_hour + i) % 24);
+          snprintf(xl, sizeof(xl), "%02d", display_hour);
           it.print((int)xf, chart_bottom + 2, id(font_tiny), TextAlign::TOP_CENTER, xl);
           it.line((int)xf, chart_bottom, (int)xf, chart_bottom + 3);
         }
