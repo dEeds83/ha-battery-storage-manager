@@ -200,19 +200,25 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         now = dt_util.now()
         current_hour = now.hour
 
-        # Collect sample (only positive = actual consumption from grid)
-        # When exporting, consumption from grid is 0
-        consumption_w = max(0, self._grid_power)
-        # Add back charger and inverter draw to get pure house consumption
+        # Calculate pure house consumption by compensating for all known
+        # loads/sources that the grid meter sees:
+        #
+        #   grid_power = house + chargers - solar - inverter_feed
+        #   → house = grid_power - chargers + solar + inverter_feed
+        #
+        # We don't have a direct solar power sensor, but we can estimate
+        # current solar from the forecast (hourly Wh → average W).
         charger_draw = sum(c["power"] for c in self._chargers if c["active"])
         inverter_feed = self._inverter_target_power if self._inverter_active else 0
-        # grid_power already includes charger draw and inverter feed:
-        #   grid_power = house_consumption + charger_draw - solar - inverter_feed
-        # So: house = grid_power - charger_draw + inverter_feed + solar
-        # Since we don't have a direct solar sensor, approximate:
-        #   house ≈ grid_power - charger_draw + inverter_feed
-        # (when grid_power is negative, solar covers everything)
-        house_w = self._grid_power - charger_draw + inverter_feed
+
+        # Estimate current solar production from forecast
+        solar_w = 0.0
+        now_hour_key = now.strftime("%Y-%m-%dT%H")
+        solar_wh = self._solar_forecast.get(now_hour_key, 0)
+        if solar_wh > 0:
+            solar_w = solar_wh  # Wh per hour ≈ average W for that hour
+
+        house_w = self._grid_power - charger_draw + solar_w + inverter_feed
         house_w = max(0, house_w)
 
         self._consumption_hourly_samples.append(house_w)
