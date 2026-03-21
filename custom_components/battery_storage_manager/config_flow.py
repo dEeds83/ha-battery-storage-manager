@@ -25,6 +25,7 @@ from .const import (
     CONF_PRICE_LOW_THRESHOLD,
     CONF_SOLAR_FORECAST_ENTITIES,
     CONF_SOLAR_FORECAST_ENTITY,
+    CONF_SOLAR_POWER_ENTITY,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
@@ -59,6 +60,9 @@ STEP_TIBBER_SCHEMA = vol.Schema(
             CONF_SOLAR_FORECAST_ENTITIES, default=[]
         ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor", multiple=True)
+        ),
+        vol.Optional(CONF_SOLAR_POWER_ENTITY, default=""): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
         ),
     }
 )
@@ -285,6 +289,12 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         default=self._current(CONF_SOLAR_FORECAST_ENTITIES, []),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor", multiple=True)
+                    ),
+                    vol.Optional(
+                        CONF_SOLAR_POWER_ENTITY,
+                        default=self._current(CONF_SOLAR_POWER_ENTITY, ""),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
                     ),
                 }
             ),

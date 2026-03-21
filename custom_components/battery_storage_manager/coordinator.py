@@ -41,6 +41,7 @@ from .const import (
     CONF_PRICE_LOW_THRESHOLD,
     CONF_SOLAR_FORECAST_ENTITIES,
     CONF_SOLAR_FORECAST_ENTITY,
+    CONF_SOLAR_POWER_ENTITY,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
@@ -114,6 +115,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._solar_forecast_entities: list[str] = self._config.get(
             CONF_SOLAR_FORECAST_ENTITIES, []
         )
+        self._solar_power_entity = self._config.get(CONF_SOLAR_POWER_ENTITY, "")
+        self._solar_power: float | None = None  # current solar production in W
         self._house_consumption_w = self._config.get(
             CONF_HOUSE_CONSUMPTION_W, DEFAULT_HOUSE_CONSUMPTION_W
         )
@@ -211,12 +214,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         charger_draw = sum(c["power"] for c in self._chargers if c["active"])
         inverter_feed = self._inverter_target_power if self._inverter_active else 0
 
-        # Estimate current solar production from forecast
+        # Current solar production: prefer actual sensor, fall back to forecast
         solar_w = 0.0
-        now_hour_key = now.strftime("%Y-%m-%dT%H")
-        solar_wh = self._solar_forecast.get(now_hour_key, 0)
-        if solar_wh > 0:
-            solar_w = solar_wh  # Wh per hour ≈ average W for that hour
+        if self._solar_power is not None:
+            solar_w = self._solar_power
+        else:
+            now_hour_key = now.strftime("%Y-%m-%dT%H")
+            solar_wh = self._solar_forecast.get(now_hour_key, 0)
+            if solar_wh > 0:
+                solar_w = solar_wh  # Wh per hour ≈ average W for that hour
 
         house_w = self._grid_power - charger_draw + solar_w + inverter_feed
         house_w = max(0, house_w)
@@ -384,6 +390,17 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     self._inverter_actual_power = None
             else:
                 self._inverter_actual_power = None
+
+        # Current solar production (actual sensor, not forecast)
+        if self._solar_power_entity:
+            solar_state = self.hass.states.get(self._solar_power_entity)
+            if solar_state and solar_state.state not in ("unknown", "unavailable"):
+                try:
+                    self._solar_power = float(solar_state.state)
+                except (ValueError, TypeError):
+                    self._solar_power = None
+            else:
+                self._solar_power = None
 
         # Sync charger active flags with actual switch states
         self._sync_device_states()
@@ -1854,6 +1871,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._solar_forecast_entities = options.get(
             CONF_SOLAR_FORECAST_ENTITIES, self._solar_forecast_entities
         )
+        self._solar_power_entity = options.get(
+            CONF_SOLAR_POWER_ENTITY, self._solar_power_entity
+        )
         self._house_consumption_w = options.get(
             CONF_HOUSE_CONSUMPTION_W, self._house_consumption_w
         )
@@ -1909,6 +1929,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "allow_grid_charging": self._allow_grid_charging,
             "allow_discharging": self._allow_discharging,
             "use_solar_forecast": self._use_solar_forecast,
+            "solar_power": self._solar_power,
             "consumption_forecast": self.get_hourly_consumption_forecast(),
         }
 

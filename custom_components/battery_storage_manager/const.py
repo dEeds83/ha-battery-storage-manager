@@ -22,6 +22,7 @@ CONF_PRICE_HIGH_THRESHOLD = "price_high_threshold"
 CONF_TIBBER_PRICES_ENTITY = "tibber_prices_entity"
 CONF_SOLAR_FORECAST_ENTITY = "solar_forecast_entity"
 CONF_SOLAR_FORECAST_ENTITIES = "solar_forecast_entities"
+CONF_SOLAR_POWER_ENTITY = "solar_power_entity"  # current solar production in W
 CONF_HOUSE_CONSUMPTION_W = "house_consumption_w"
 DEFAULT_HOUSE_CONSUMPTION_W = 500  # average house consumption in watts
 

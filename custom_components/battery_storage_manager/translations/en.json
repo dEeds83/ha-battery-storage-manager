@@ -10,7 +10,8 @@
           "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor (current power drawn from grid)",
           "tibber_pulse_production_entity": "Tibber Pulse production sensor (current power fed into grid)",
           "solar_forecast_entity": "Solar forecast sensor (optional, e.g. Forecast.Solar or Solcast)",
-          "solar_forecast_entities": "Additional solar forecast sensors (optional, for multiple arrays/services)"
+          "solar_forecast_entities": "Additional solar forecast sensors (optional, for multiple arrays/services)",
+          "solar_power_entity": "Solar power sensor (optional, current production in W)"
         }
       },
       "devices": {
@@ -51,7 +52,8 @@
           "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor",
           "tibber_pulse_production_entity": "Tibber Pulse production sensor",
           "solar_forecast_entity": "Solar forecast sensor (optional)",
-          "solar_forecast_entities": "Additional solar forecast sensors (optional)"
+          "solar_forecast_entities": "Additional solar forecast sensors (optional)",
+          "solar_power_entity": "Solar power sensor (optional, current production in W)"
         }
       },
       "devices": {
