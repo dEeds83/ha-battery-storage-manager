@@ -482,10 +482,10 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
 
     @property
     def native_value(self) -> str | None:
-        """Return next 12h of prices as comma-separated string.
+        """Return next 12h of prices as comma-separated hourly averages.
 
-        Adapts to the price data granularity (15min → 48 entries,
-        60min → 12 entries).
+        For 15-min data, averages 4 slots per hour to keep the CSV
+        within the 255 char HA state limit (12 values × ~7 chars = ~84).
         """
         if not self.coordinator.data:
             return None
@@ -497,16 +497,31 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
         from datetime import datetime, timedelta
         now = dt_util.now()
         cutoff = now + timedelta(hours=12)
-        prices = []
+
+        # Collect all prices within 12h, grouped by hour
+        hourly: dict[int, list[float]] = {}
         for entry in forecast:
             try:
                 start = datetime.fromisoformat(entry["start"])
                 if start.tzinfo is not None:
                     start = dt_util.as_local(start)
-                if start >= now.replace(second=0, microsecond=0) and start < cutoff:
-                    prices.append(str(round(entry.get("total", 0), 4)))
+                if start >= now.replace(minute=0, second=0, microsecond=0) and start < cutoff:
+                    h = start.hour
+                    hourly.setdefault(h, []).append(entry.get("total", 0))
             except (ValueError, TypeError, KeyError):
                 continue
+
+        if not hourly:
+            return None
+
+        # Build ordered list starting from current hour
+        cur_hour = now.hour
+        prices = []
+        for i in range(12):
+            h = (cur_hour + i) % 24
+            if h in hourly:
+                avg = sum(hourly[h]) / len(hourly[h])
+                prices.append(str(round(avg, 4)))
 
         return ",".join(prices) if prices else None
 
