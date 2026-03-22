@@ -1025,14 +1025,21 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         charge_cands.sort(key=lambda x: x[1])
         discharge_cands.sort(key=lambda x: x[1], reverse=True)
 
-        # Limit grid charging to what the battery actually needs
+        # Find profitable arbitrage pairs.
+        # The SOC forward simulation (Step 4) validates actual feasibility,
+        # so we don't limit pairs here – just require minimum spread.
+        # This ensures existing stored energy can be discharged at expensive
+        # hours and recharged at cheap hours, even when solar fills headroom.
         min_spread = 0.02
         used = set()
         pairs = []
         ci, di = 0, 0
-        grid_kwh_planned = 0.0
+        # Max pairs: limited by battery capacity (discharge + recharge cycles)
+        max_pairs = int(
+            (self._max_soc - self._min_soc) / 100 * cap / charge_kwh_slot
+        ) if charge_kwh_slot > 0 else 50
         while ci < len(charge_cands) and di < len(discharge_cands):
-            if grid_kwh_planned >= grid_headroom_kwh:
+            if len(pairs) >= max_pairs:
                 break
 
             c_idx, c_eff_cost = charge_cands[ci]
@@ -1051,8 +1058,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             pairs.append((c_idx, d_idx, d_price - c_eff_cost))
             used.add(c_idx)
             used.add(d_idx)
-            # Track how much grid energy this charge slot uses
-            grid_kwh_planned += charge_kwh_slot * hourly_data[c_idx]["grid_fraction"]
             ci += 1
             di += 1
 
