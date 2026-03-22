@@ -252,12 +252,19 @@ Das System ist auf AC-gekoppelte Speicher ausgelegt: Solarüberschuss fließt du
 |---|---|
 | ≥ 80% aller Ladegeräte | Alle Ladegeräte an |
 | ≥ 80% eines Ladegeräts | Größtes passendes an |
-| > 50% des kleinsten | Kleinstes + Wechselrichter deckt Defizit |
-| < 50% | Idle (Kreislaufverluste nicht lohnend) |
+| ≥ 100W (< 80% Ladegerät) | Kleinstes Ladegerät + Wechselrichter deckt Defizit |
+| < 100W | Idle (zu wenig Überschuss) |
 
 Der **wahre Solarüberschuss** wird bei jedem Zyklus berechnet: gemessener Export + Leistung aktiver Ladegeräte + Wechselrichter-Einspeisung. So wird Oszillation verhindert.
 
 **Opportunistisches Solar-Laden:** Auch bei Plan-Aktionen "Halten" und "Idle" wird Solarüberschuss automatisch mitgenommen. Kostenlose Solarenergie wird nie verschenkt – der Plan kontrolliert nur Netz-Laden und Entlade-Zeitpunkte.
+
+**Solar über max_soc:** Auch wenn der SOC das konfigurierte Maximum erreicht hat, wird reiner Solarüberschuss weiterhin geladen (kostenlose Energie). Nur der Wechselrichter-Defizit-Modus (der Netzstrom nutzt) wird über max_soc blockiert.
+
+| SOC | Reiner Solar | Solar + WR-Defizit | Netz-Laden |
+|---|---|---|---|
+| < max_soc | ✅ | ✅ | ✅ |
+| ≥ max_soc | ✅ Kostenlos | ❌ Zieht Netzstrom | ❌ |
 
 **Betriebsmodus:** Der Sensor zeigt `solar_charging` (gold) wenn von Solar geladen wird, `charging` (grün) bei Netz-Laden – so ist im Dashboard sofort erkennbar, woher die Energie kommt.
 
@@ -268,7 +275,8 @@ Statt einfacher additiver Anpassung nutzt der Wechselrichter einen PID-Regler:
 - **I** (integral, Ki=0.15): Gleicht dauerhafte Offsets aus
 - **D** (derivative, Kd=0.1): Dämpft schnelle Schwankungen
 - **Anti-Windup**: Begrenzt den Integralterm
-- **Setpoint**: 10W leichter Netzbezug (verhindert Einspeisung)
+- **Asymmetrische Regelung**: Export sofort korrigieren, 0-50W Import tolerieren
+- **Setpoint**: 25W Netzbezug (Mitte der 0-50W Toleranzzone)
 
 ### Lernende Verbrauchsprognose
 
