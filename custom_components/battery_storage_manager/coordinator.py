@@ -1070,6 +1070,49 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             if actions[i] == "idle" and h["solar_surplus_kwh"] > 0.05:
                 actions[i] = "solar_charge"
 
+        # Step 3b: Optimize charge slot timing
+        # The SOC simulation runs chronologically, so expensive early charge
+        # slots fill the battery before cheaper later slots get a chance.
+        # Fix: count how many charge slots the battery actually needs, keep
+        # only the cheapest ones, and drop the rest (they become solar_charge
+        # or idle).
+        charge_indices = [i for i in range(n) if actions[i] == "charge"]
+        if charge_indices:
+            # How many slots can the battery absorb?
+            # (estimated headroom after all planned discharges and solar charges)
+            discharge_energy = sum(
+                discharge_kwh_slot for i in range(n) if actions[i] == "discharge"
+            )
+            solar_energy = sum(
+                min(hourly_data[i]["solar_surplus_kwh"], charge_kwh_slot)
+                for i in range(n) if actions[i] == "solar_charge"
+            )
+            available_headroom = headroom_kwh + discharge_energy - solar_energy
+            slots_needed = max(0, int(available_headroom / charge_kwh_slot) + 1) if charge_kwh_slot > 0 else 0
+
+            if len(charge_indices) > slots_needed:
+                # Sort charge slots by effective cost, keep cheapest
+                charge_with_cost = [
+                    (i, hourly_data[i]["effective_charge_cost"]) for i in charge_indices
+                ]
+                charge_with_cost.sort(key=lambda x: x[1])
+                keep = set(idx for idx, _ in charge_with_cost[:slots_needed])
+                dropped = 0
+                for idx in charge_indices:
+                    if idx not in keep:
+                        # Convert expensive charge to solar_charge or idle
+                        if hourly_data[idx]["solar_surplus_kwh"] > 0.05:
+                            actions[idx] = "solar_charge"
+                        else:
+                            actions[idx] = "idle"
+                        dropped += 1
+                if dropped:
+                    _LOGGER.debug(
+                        "Charge optimization: dropped %d expensive slots, "
+                        "kept %d cheapest (need %d)",
+                        dropped, len(keep), slots_needed,
+                    )
+
         # Step 4: Forward-simulate SOC to validate and build plan
         self._battery_plan = []
         estimated_soc = current_soc
