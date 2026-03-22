@@ -46,23 +46,42 @@ esphome:
           condition:
             lambda: "return id(night_mode);"
           then:
-            # Night mode: show sleep screen, then sleep until 06:00
+            # Night mode: show sleep screen, then sleep until 06:01
             - component.update: eink
             - delay: 10s
             - lambda: |-
-                // Calculate minutes until 06:00
                 auto now = id(ha_time).now();
-                int mins_left = (6 - now.hour - 1) * 60 + (60 - now.minute);
+                // Minutes until 06:01
+                int target = 6 * 60 + 1;
+                int current = now.hour * 60 + now.minute;
+                int mins_left = target - current;
                 if (mins_left <= 0) mins_left = 1;
                 id(deep_sleep_ctrl).set_sleep_duration(mins_left * 60 * 1000);
             - deep_sleep.enter: deep_sleep_ctrl
           else:
-            # Day mode: fetch data, render, sleep 30 min
+            # Day mode: fetch data, render, sleep until next :01/:16/:31/:46
             - delay: 5s
             - component.update: eink
             - delay: 10s
-            # Reset sleep duration to 30 min (in case it was changed by night mode)
-            - lambda: "id(deep_sleep_ctrl).set_sleep_duration(30 * 60 * 1000);"
+            - lambda: |-
+                auto now = id(ha_time).now();
+                int minute = now.minute;
+                // Next target: :01, :16, :31, :46
+                int targets[] = {1, 16, 31, 46};
+                int sleep_min = 15; // fallback
+                for (int i = 0; i < 4; i++) {
+                  if (targets[i] > minute) {
+                    sleep_min = targets[i] - minute;
+                    break;
+                  }
+                }
+                // If past :46, next is :01 of next hour
+                if (minute >= 46) {
+                  sleep_min = 61 - minute;
+                }
+                // Minimum 1 minute sleep
+                if (sleep_min < 1) sleep_min = 1;
+                id(deep_sleep_ctrl).set_sleep_duration(sleep_min * 60 * 1000);
             - deep_sleep.enter: deep_sleep_ctrl
 
 esp32:
