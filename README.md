@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.0.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -316,6 +316,18 @@ Beispiel: Forecast überschätzt systematisch um 20% → Faktor wird 0.8 → rea
 | Netzladen erlauben | Plan-Aktionen "charge" werden übersprungen (idle stattdessen) |
 | Entladen erlauben | Plan-Aktionen "discharge" werden übersprungen |
 | Solarprognose nutzen | Solarprognosen werden nicht gelesen, Plan basiert nur auf Preisen |
+
+## ePaper Dashboard (optional)
+
+Im Ordner `esphome/` liegt eine fertige ESPHome-Konfiguration für das **Seeed Studio XIAO 7.5" ePaper Panel** (800×480). Das Display zeigt:
+
+- SOC mit Betriebsmodus, Strompreis, Netzleistung, Verbrauch, aktuelle Aktion
+- Günstigstes und teuerstes Zeitfenster
+- 12h Preiskurve mit Min/Max-Markierungen
+- Deep-Sleep alle 15 Minuten (Wake um :01, :16, :31, :46)
+- Nachtmodus 01:00-06:00 (ein langer Schlaf bis 06:01)
+
+Details: [esphome/README.md](esphome/README.md)
 
 ## Lizenz
 

@@ -73,7 +73,12 @@ Zeigt den aktuellen Batteriestatus als kompaktes, energiesparendes Dashboard an.
 
 ### Update-Intervall
 
-Das Display aktualisiert sich standardmäßig **alle 60 Sekunden** und zusätzlich bei Änderungen von SOC oder Betriebsmodus. Für längere Akkulaufzeit kann `update_interval` erhöht werden (z.B. `300s` für 5 Minuten).
+Das Display arbeitet im **Deep-Sleep-Modus** und wacht alle 15 Minuten auf, synchron zu den Tibber-Preisintervallen:
+
+- **Aufwachzeiten:** :01, :16, :31, :46 (1 Minute nach Viertelstunde, damit Preise aktuell sind)
+- **Zyklus:** Wake → WiFi → Daten holen → Display rendern → Deep Sleep
+- **Nachtmodus (01:00-06:00):** Zeigt Schlafmodus-Screen, schläft bis 06:01 am Stück
+- **Erster Boot:** Rendert sofort, schläft dann bis zum nächsten Viertelstunden-Slot
 
 ## Anpassungen
 
