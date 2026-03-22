@@ -1078,9 +1078,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # or idle).
         charge_indices = [i for i in range(n) if actions[i] == "charge"]
         if charge_indices and charge_kwh_slot > 0:
-            # Quick SOC simulation to count how many charge slots actually
-            # charge the battery (before it hits max_soc). This tells us
-            # exactly how many slots are needed.
+            # Quick SOC simulation to count how many charge slots the battery
+            # can actually absorb before hitting max_soc.
             sim_soc = current_soc
             slots_that_charged = 0
             for i in range(n):
@@ -1098,26 +1097,47 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     sim_soc += delta / cap * 100
                 sim_soc = max(self._min_soc, min(self._max_soc, sim_soc))
 
-            # If we have more charge slots than actually used, drop the expensive ones
-            if len(charge_indices) > slots_that_charged:
-                charge_with_cost = [
-                    (i, hourly_data[i]["effective_charge_cost"]) for i in charge_indices
-                ]
-                charge_with_cost.sort(key=lambda x: x[1])
-                keep = set(idx for idx, _ in charge_with_cost[:slots_that_charged])
-                dropped = 0
-                for idx in charge_indices:
-                    if idx not in keep:
-                        if hourly_data[idx]["solar_surplus_kwh"] > 0.05:
-                            actions[idx] = "solar_charge"
-                        else:
-                            actions[idx] = "idle"
-                        dropped += 1
-                if dropped:
+            # Collect ALL potential charge slots (current charges + idle/hold/solar
+            # that could be charged instead). Then pick the cheapest N.
+            discharge_set = {i for i in range(n) if actions[i] == "discharge"}
+            all_charge_candidates = []
+            for i in range(n):
+                if i in discharge_set or i in presolar_discharge_hours:
+                    continue  # can't charge during discharge
+                all_charge_candidates.append(
+                    (i, hourly_data[i]["effective_charge_cost"])
+                )
+            all_charge_candidates.sort(key=lambda x: x[1])
+
+            # Pick the cheapest slots_that_charged candidates
+            new_charge_set = set()
+            for idx, _ in all_charge_candidates:
+                if len(new_charge_set) >= slots_that_charged:
+                    break
+                new_charge_set.add(idx)
+
+            old_charge_set = set(charge_indices)
+            if new_charge_set != old_charge_set:
+                added = new_charge_set - old_charge_set
+                removed = old_charge_set - new_charge_set
+
+                # Apply changes
+                for idx in removed:
+                    if hourly_data[idx]["solar_surplus_kwh"] > 0.05:
+                        actions[idx] = "solar_charge"
+                    else:
+                        actions[idx] = "idle"
+                for idx in added:
+                    actions[idx] = "charge"
+
+                if removed:
+                    removed_costs = [f"{hourly_data[i]['effective_charge_cost']*100:.1f}ct" for i in sorted(removed)]
+                    added_costs = [f"{hourly_data[i]['effective_charge_cost']*100:.1f}ct" for i in sorted(added)]
                     _LOGGER.info(
-                        "Charge optimization: dropped %d expensive slots, "
-                        "kept %d cheapest (of %d total)",
-                        dropped, slots_that_charged, len(charge_indices),
+                        "Charge optimization: swapped %d expensive slots (%s) "
+                        "for %d cheaper ones (%s)",
+                        len(removed), ", ".join(removed_costs),
+                        len(added), ", ".join(added_costs),
                     )
 
         # Step 4: Forward-simulate SOC to validate and build plan
