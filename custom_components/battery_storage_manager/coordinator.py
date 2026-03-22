@@ -171,6 +171,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._consumption_last_hour: int | None = None
         self._consumption_loaded = False
 
+        # Tibber watchdog: restart integration if Pulse data is stale
+        self._tibber_watchdog_stale_since: datetime | None = None
+        self._tibber_watchdog_threshold = timedelta(minutes=5)
+        self._tibber_last_restart: datetime | None = None
+        self._tibber_restart_cooldown = timedelta(minutes=15)
+
         # Track whether entities have ever been seen (for startup race condition)
         self._price_entity_seen = False
         self._prices_entity_seen = False
@@ -276,6 +282,60 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 forecast[hour] = self._house_consumption_w
         return forecast
 
+    async def _check_tibber_watchdog(self) -> None:
+        """Restart Tibber integration if Pulse data appears stale.
+
+        Checks last_changed of the consumption entity. If it hasn't
+        changed for > 5 minutes, reloads the Tibber config entry.
+        Cooldown of 15 minutes between restarts to avoid loops.
+        """
+        if not self._pulse_consumption_entity:
+            return
+
+        state = self.hass.states.get(self._pulse_consumption_entity)
+        if state is None:
+            return
+
+        now = dt_util.utcnow()
+
+        # Check if state is fresh
+        last_changed = state.last_changed
+        if last_changed and (now - last_changed) < self._tibber_watchdog_threshold:
+            # Data is fresh, reset stale tracker
+            self._tibber_watchdog_stale_since = None
+            return
+
+        # Data is stale
+        if self._tibber_watchdog_stale_since is None:
+            self._tibber_watchdog_stale_since = now
+            _LOGGER.warning(
+                "Tibber Pulse data stale: %s last changed %s",
+                self._pulse_consumption_entity,
+                last_changed,
+            )
+            return
+
+        # Check if we've been stale long enough to trigger a restart
+        if (now - self._tibber_watchdog_stale_since) < self._tibber_watchdog_threshold:
+            return
+
+        # Check cooldown
+        if self._tibber_last_restart and (now - self._tibber_last_restart) < self._tibber_restart_cooldown:
+            _LOGGER.debug("Tibber watchdog: still in cooldown, skipping restart")
+            return
+
+        # Find and reload the Tibber config entry
+        for entry in self.hass.config_entries.async_entries("tibber"):
+            _LOGGER.warning(
+                "Tibber Pulse data stale for >%d min – reloading Tibber integration (%s)",
+                int(self._tibber_watchdog_threshold.total_seconds() / 60),
+                entry.entry_id,
+            )
+            await self.hass.config_entries.async_reload(entry.entry_id)
+            self._tibber_last_restart = now
+            self._tibber_watchdog_stale_since = None
+            break
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch and process data, then decide on battery action."""
         _LOGGER.debug(
@@ -286,6 +346,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         await self._load_consumption_stats()
         self._read_sensor_states()
         self._validate_operating_mode()
+        await self._check_tibber_watchdog()
         await self._record_consumption()
         await self._update_price_forecast()
         await self._read_solar_forecast()
