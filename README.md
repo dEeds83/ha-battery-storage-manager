@@ -14,6 +14,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Headroom-Reservierung** – Batterie wird nicht per Netz vollgeladen wenn Solar genug liefert
 - **Pre-Solar-Entladung** – Entlädt proaktiv vor Solar-Stunden um Platz für kostenlose Solarenergie zu schaffen
 - **Lernende Verbrauchsprognose** – 14-Tage rollender Durchschnitt pro Tagesstunde ersetzt statischen Hausverbrauch
+- **Solar-Prognose-Kalibrierung** – Lernt aus der Abweichung Forecast vs. Ist und korrigiert zukünftige Prognosen automatisch
 
 ### Steuerung
 - **Dynamische Ladegeräte-Anzahl** – Beliebig viele Ladegeräte mit individueller Leistung konfigurierbar
@@ -69,6 +70,8 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 | Einspeisung (Pulse) | Aktuelle Netzeinspeisung in Watt | Ja |
 | Solar-Forecast-Sensor | Einzelner Solarsensor (Forecast.Solar oder Solcast) | Nein |
 | Weitere Solar-Sensoren | Mehrfachauswahl für zusätzliche Solaranlagen | Nein |
+| Solar-Leistung Sensor | Aktuelle PV-Produktion in Watt (für exakte Verbrauchsberechnung) | Nein |
+| Solar-Energie heute Sensor | Tägliche PV-Produktion in kWh (für Prognose-Kalibrierung) | Nein |
 
 ### Schritt 2: Geräte
 
@@ -139,6 +142,7 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Geplante Aktion | Aktuelle Aktion dieses Zeitslots (Laden/Entladen/Solar/Halten/Inaktiv) |
 | Erwartete Solarproduktion | Verbleibende erwartete Solarproduktion heute in kWh |
 | Verbrauchsprognose | Vorhergesagter Hausverbrauch der aktuellen Stunde (W), 24h-Forecast als Attribut |
+| Preisprognose | Nächste 12h Strompreise als CSV + Attribute (min/max/avg, slot_minutes) |
 
 ### Schalter
 
@@ -275,6 +279,19 @@ Der konfigurierte Hausverbrauch (z.B. 500W) dient nur als Startwert. Die Integra
 - **Persistent** (überlebt Neustarts)
 - **Charger/Inverter herausgerechnet** → reiner Hausverbrauch
 - Beispiel: 200W nachts, 400W morgens, 800W abends
+
+### Solar-Prognose-Kalibrierung
+
+Wenn der "Solar-Energie heute" Sensor konfiguriert ist, lernt die Integration aus der täglichen Abweichung:
+
+- **Täglich um 20:00:** Vergleich Ist-Produktion vs. Forecast
+- **Ratio:** `Ist / Forecast` (z.B. 8kWh / 10kWh = 0.8)
+- **14-Tage rollender Durchschnitt** der Ratios = Korrekturfaktor
+- **Anwendung:** Alle zukünftigen Prognose-Werte × Faktor
+- **Bereich:** 0.3–3.0 (verhindert extreme Ausreißer)
+- **Persistent** gespeichert
+
+Beispiel: Forecast überschätzt systematisch um 20% → Faktor wird 0.8 → realistischere Planung.
 
 ### Strategien
 
