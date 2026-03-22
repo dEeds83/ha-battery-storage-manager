@@ -23,6 +23,10 @@ CONF_TIBBER_PRICES_ENTITY = "tibber_prices_entity"
 CONF_SOLAR_FORECAST_ENTITY = "solar_forecast_entity"
 CONF_SOLAR_FORECAST_ENTITIES = "solar_forecast_entities"
 CONF_SOLAR_POWER_ENTITY = "solar_power_entity"  # current solar production in W
+CONF_SOLAR_ENERGY_TODAY_ENTITY = "solar_energy_today_entity"  # daily solar kWh for forecast calibration
+STORAGE_KEY_SOLAR_CALIBRATION = "solar_calibration"
+STORAGE_VERSION_SOLAR_CALIBRATION = 1
+SOLAR_CALIBRATION_ROLLING_DAYS = 14
 CONF_HOUSE_CONSUMPTION_W = "house_consumption_w"
 DEFAULT_HOUSE_CONSUMPTION_W = 500  # average house consumption in watts
 

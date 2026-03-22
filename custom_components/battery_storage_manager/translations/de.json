@@ -11,7 +11,8 @@
           "tibber_pulse_production_entity": "Tibber Pulse Einspeisung (aktuelle eingespeiste Leistung)",
           "solar_forecast_entity": "Solar-Prognose-Sensor (optional, z.B. Forecast.Solar oder Solcast)",
           "solar_forecast_entities": "Weitere Solar-Prognose-Sensoren (optional, für mehrere Anlagen/Dienste)",
-          "solar_power_entity": "Solar-Leistung Sensor (optional, aktuelle Produktion in W)"
+          "solar_power_entity": "Solar-Leistung Sensor (optional, aktuelle Produktion in W)",
+          "solar_energy_today_entity": "Solar-Energie heute Sensor (optional, tägliche kWh für Prognose-Kalibrierung)"
         }
       },
       "devices": {
@@ -53,7 +54,8 @@
           "tibber_pulse_production_entity": "Tibber Pulse Einspeisung",
           "solar_forecast_entity": "Solar-Prognose-Sensor (optional)",
           "solar_forecast_entities": "Weitere Solar-Prognose-Sensoren (optional)",
-          "solar_power_entity": "Solar-Leistung Sensor (optional, aktuelle Produktion in W)"
+          "solar_power_entity": "Solar-Leistung Sensor (optional, aktuelle Produktion in W)",
+          "solar_energy_today_entity": "Solar-Energie heute Sensor (optional, tägliche kWh für Prognose-Kalibrierung)"
         }
       },
       "devices": {

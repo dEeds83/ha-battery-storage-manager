@@ -39,9 +39,13 @@ from .const import (
     CONF_MIN_SOC,
     CONF_PRICE_HIGH_THRESHOLD,
     CONF_PRICE_LOW_THRESHOLD,
+    CONF_SOLAR_ENERGY_TODAY_ENTITY,
     CONF_SOLAR_FORECAST_ENTITIES,
     CONF_SOLAR_FORECAST_ENTITY,
     CONF_SOLAR_POWER_ENTITY,
+    SOLAR_CALIBRATION_ROLLING_DAYS,
+    STORAGE_KEY_SOLAR_CALIBRATION,
+    STORAGE_VERSION_SOLAR_CALIBRATION,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
@@ -117,6 +121,20 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         )
         self._solar_power_entity = self._config.get(CONF_SOLAR_POWER_ENTITY, "")
         self._solar_power: float | None = None  # current solar production in W
+        self._solar_energy_today_entity = self._config.get(CONF_SOLAR_ENERGY_TODAY_ENTITY, "")
+
+        # Solar forecast calibration
+        self._solar_calibration_store = Store(
+            hass,
+            STORAGE_VERSION_SOLAR_CALIBRATION,
+            f"{DOMAIN}.{entry.entry_id}.{STORAGE_KEY_SOLAR_CALIBRATION}",
+        )
+        self._solar_calibration_factor: float = 1.0  # multiplier for forecast
+        self._solar_calibration_history: list[float] = []  # daily ratios
+        self._solar_calibration_loaded = False
+        self._solar_calibration_last_date: str | None = None
+        self._solar_forecast_today_kwh: float = 0.0  # today's total forecast
+
         self._house_consumption_w = self._config.get(
             CONF_HOUSE_CONSUMPTION_W, DEFAULT_HOUSE_CONSUMPTION_W
         )
@@ -282,6 +300,129 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 forecast[hour] = self._house_consumption_w
         return forecast
 
+    # ── Solar forecast calibration ───────────────────────────
+
+    async def _load_solar_calibration(self) -> None:
+        """Load solar calibration data from persistent storage."""
+        if self._solar_calibration_loaded:
+            return
+        data = await self._solar_calibration_store.async_load()
+        if data and isinstance(data, dict):
+            self._solar_calibration_history = data.get("history", [])
+            self._solar_calibration_last_date = data.get("last_date")
+            if self._solar_calibration_history:
+                self._solar_calibration_factor = (
+                    sum(self._solar_calibration_history)
+                    / len(self._solar_calibration_history)
+                )
+                _LOGGER.debug(
+                    "Solar calibration loaded: factor=%.2f (%d days)",
+                    self._solar_calibration_factor,
+                    len(self._solar_calibration_history),
+                )
+        self._solar_calibration_loaded = True
+
+    async def _calibrate_solar_forecast(self) -> None:
+        """Compare yesterday's forecast with actual production and update factor.
+
+        Called every cycle but only records once per day (at day change).
+        Stores the ratio actual/forecast as a rolling 14-day average.
+        """
+        if not self._solar_energy_today_entity:
+            return
+
+        now = dt_util.now()
+        today_str = now.strftime("%Y-%m-%d")
+
+        # Only calibrate once per day (when the date changes)
+        if self._solar_calibration_last_date == today_str:
+            return
+
+        # Read actual solar production from yesterday
+        # (the sensor shows "today", but at midnight it briefly shows yesterday's total)
+        # Better approach: we stored yesterday's forecast, compare at end of day
+        # For simplicity: calibrate when hour >= 20 (most solar done)
+        if now.hour < 20:
+            return
+
+        state = self.hass.states.get(self._solar_energy_today_entity)
+        if not state or state.state in ("unknown", "unavailable"):
+            return
+
+        try:
+            actual_kwh = float(state.state)
+        except (ValueError, TypeError):
+            return
+
+        if actual_kwh < 0.1:
+            return  # Skip cloudy/night days
+
+        # Calculate today's total forecast
+        today_prefix = now.strftime("%Y-%m-%dT")
+        forecast_kwh = sum(
+            v / 1000 for k, v in self._solar_forecast.items()
+            if k.startswith(today_prefix)
+        )
+
+        if forecast_kwh < 0.1:
+            return  # No forecast data
+
+        # Ratio: actual / forecast (> 1 means forecast underestimates)
+        ratio = actual_kwh / forecast_kwh
+        # Clamp to reasonable range (0.3 - 3.0)
+        ratio = max(0.3, min(3.0, ratio))
+
+        self._solar_calibration_history.append(round(ratio, 3))
+
+        # Keep rolling window
+        max_days = SOLAR_CALIBRATION_ROLLING_DAYS
+        if len(self._solar_calibration_history) > max_days:
+            self._solar_calibration_history = self._solar_calibration_history[-max_days:]
+
+        # Update factor
+        self._solar_calibration_factor = (
+            sum(self._solar_calibration_history)
+            / len(self._solar_calibration_history)
+        )
+        self._solar_calibration_last_date = today_str
+
+        # Persist
+        await self._solar_calibration_store.async_save({
+            "history": self._solar_calibration_history,
+            "last_date": self._solar_calibration_last_date,
+        })
+
+        _LOGGER.info(
+            "Solar calibration: actual=%.1f kWh, forecast=%.1f kWh, "
+            "ratio=%.2f, new factor=%.2f (%d days)",
+            actual_kwh, forecast_kwh, ratio,
+            self._solar_calibration_factor,
+            len(self._solar_calibration_history),
+        )
+
+    def _apply_solar_calibration(self) -> None:
+        """Apply calibration factor to all solar forecast values."""
+        if abs(self._solar_calibration_factor - 1.0) < 0.01:
+            return  # Factor is ~1.0, no adjustment needed
+
+        for key in self._solar_forecast:
+            self._solar_forecast[key] *= self._solar_calibration_factor
+
+        # Recalculate expected solar after calibration
+        now = dt_util.now()
+        now_key = now.strftime("%Y-%m-%dT%H")
+        today_prefix = now.strftime("%Y-%m-%dT")
+        remaining = {
+            k: v for k, v in self._solar_forecast.items()
+            if k >= now_key and k.startswith(today_prefix)
+        }
+        self._expected_solar_kwh = sum(remaining.values()) / 1000
+
+        _LOGGER.debug(
+            "Solar forecast calibrated: factor=%.2f, adjusted expected=%.1f kWh",
+            self._solar_calibration_factor, self._expected_solar_kwh,
+        )
+
     async def _check_tibber_watchdog(self) -> None:
         """Restart Tibber integration if Pulse data appears stale.
 
@@ -344,12 +485,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._tibber_prices_entity,
         )
         await self._load_consumption_stats()
+        await self._load_solar_calibration()
         self._read_sensor_states()
         self._validate_operating_mode()
         await self._check_tibber_watchdog()
         await self._record_consumption()
         await self._update_price_forecast()
         await self._read_solar_forecast()
+        self._apply_solar_calibration()
+        await self._calibrate_solar_forecast()
         self._create_battery_plan()
 
         if self._strategy == STRATEGY_PRICE_OPTIMIZED:
@@ -2010,6 +2154,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._solar_power_entity = options.get(
             CONF_SOLAR_POWER_ENTITY, self._solar_power_entity
         )
+        self._solar_energy_today_entity = options.get(
+            CONF_SOLAR_ENERGY_TODAY_ENTITY, self._solar_energy_today_entity
+        )
         self._house_consumption_w = options.get(
             CONF_HOUSE_CONSUMPTION_W, self._house_consumption_w
         )
@@ -2066,6 +2213,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "allow_discharging": self._allow_discharging,
             "use_solar_forecast": self._use_solar_forecast,
             "solar_power": self._solar_power,
+            "solar_calibration_factor": self._solar_calibration_factor,
             "consumption_forecast": self.get_hourly_consumption_forecast(),
         }
 
