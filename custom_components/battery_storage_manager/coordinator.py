@@ -1641,13 +1641,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         elif action == "solar_charge":
             # AC-coupled system: solar surplus flows through the house network
             # and needs the chargers to be ON to charge the battery.
-            # grid_power already includes the draw of active chargers, so we
-            # must add their power back to get the true solar surplus.
+            # Solar charging is allowed even above max_soc (free energy).
             true_surplus = self._calculate_true_solar_surplus()
             if (
                 true_surplus is not None
                 and true_surplus > 50
-                and self._battery_soc < self._max_soc
             ):
                 _LOGGER.debug(
                     "Plan action: SOLAR_CHARGE - charging from solar surplus "
@@ -1686,14 +1684,34 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         """Check for solar surplus and charge opportunistically.
 
         Called during hold/idle plan actions to capture free solar energy
-        that would otherwise be exported.  Returns True if solar charging
-        was activated, False if no surplus or battery full.
-        """
-        if self._battery_soc is not None and self._battery_soc >= self._max_soc:
-            return False
+        that would otherwise be exported.
 
+        Above max_soc: still captures pure solar surplus (free energy)
+        but does NOT use inverter-deficit mode (that draws grid power).
+        """
         true_surplus = self._calculate_true_solar_surplus()
         if true_surplus is None or true_surplus <= 50:
+            return False
+
+        above_max_soc = (
+            self._battery_soc is not None and self._battery_soc >= self._max_soc
+        )
+
+        if above_max_soc:
+            # Above max_soc: only charge from PURE solar surplus
+            # (charger power must be covered by solar alone, no grid/inverter)
+            min_charger = min(
+                (c["power"] for c in self._chargers if c["power"] > 0),
+                default=0,
+            )
+            if true_surplus >= min_charger * 0.8:
+                _LOGGER.debug(
+                    "Solar charge above max_soc: surplus=%.0fW (pure solar)",
+                    true_surplus,
+                )
+                await self._start_solar_charging(true_surplus)
+                return True
+            # Not enough surplus for a charger without grid → skip
             return False
 
         _LOGGER.debug(
@@ -1802,11 +1820,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         if not selected:
             # No charger fits purely from surplus – try inverter-assisted
-            # Any surplus > 100W is worth capturing (inverter covers the rest)
+            # But NOT above max_soc (inverter draws from battery = grid loop)
+            above_max = self._battery_soc is not None and self._battery_soc >= self._max_soc
             smallest = min(indexed, key=lambda x: x[1]["power"])
             smallest_idx, smallest_charger = smallest
             deficit_w = smallest_charger["power"] - surplus_w
-            if surplus_w >= 100 and self._inverter_power_entity:
+            if surplus_w >= 100 and self._inverter_power_entity and not above_max:
                 _LOGGER.debug(
                     "Solar surplus %.0fW < smallest charger (%dW) – "
                     "using inverter to cover deficit %.0fW",
