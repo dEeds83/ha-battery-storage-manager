@@ -1222,10 +1222,20 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         hourly_data = slot_data
 
         # ── Dynamic Programming ──────────────────────────────────
-        # SOC discretization: 5% steps from min_soc to max_soc
-        soc_step = 5.0
+        # SOC discretization: step size adapts to battery so that one
+        # charge/discharge slot always moves at least one SOC level.
+        # This prevents the quantization bug where round() maps the
+        # new SOC back to the same level, creating "free" energy.
+        charge_soc_pct = charge_kwh_slot / cap * 100 if cap > 0 else 5
+        discharge_soc_pct = discharge_kwh_slot / cap * 100 if cap > 0 else 5
+        min_delta_pct = min(charge_soc_pct, discharge_soc_pct) if charge_soc_pct > 0 else discharge_soc_pct
+        # Step must be <= min delta so transitions always move at least 1 level
+        # Clamp between 1% and 5% for reasonable resolution/performance
+        soc_step = max(1.0, min(5.0, min_delta_pct * 0.9))
+        soc_step = round(soc_step, 1)
+
         soc_levels = []
-        s = self._min_soc
+        s = float(self._min_soc)
         while s <= self._max_soc + 0.01:
             soc_levels.append(round(s, 1))
             s += soc_step
@@ -1234,6 +1244,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         def soc_to_idx(soc: float) -> int:
             idx = round((soc - self._min_soc) / soc_step)
             return max(0, min(num_soc - 1, idx))
+
+        _LOGGER.debug(
+            "DP grid: %d SOC levels (step=%.1f%%), charge=%.1f%%/slot, "
+            "discharge=%.1f%%/slot, %d time slots",
+            num_soc, soc_step, charge_soc_pct, discharge_soc_pct, n,
+        )
 
         # dp[t][s] = max cumulative profit achievable from slot t to end,
         #            starting at SOC level s
@@ -1270,12 +1286,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
                     new_soc = soc + delta / cap * 100
                     new_si = soc_to_idx(new_soc)
-                    # Cost = grid portion of energy * price + cycle degradation
-                    cost = delta * grid_frac * price + delta * cycle_cost_eur
-                    val = -cost + dp[t + 1][new_si]
-                    if val > best_val:
-                        best_val = val
-                        best_act = "charge"
+                    if new_si > si:  # must actually increase SOC level
+                        cost = delta * grid_frac * price + delta * cycle_cost_eur
+                        val = -cost + dp[t + 1][new_si]
+                        if val > best_val:
+                            best_val = val
+                            best_act = "charge"
 
                 # Option 3: solar_charge (free, but still has cycle cost)
                 if solar_surplus > 0.05 and soc < self._max_soc:
@@ -1283,25 +1299,25 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                                 (self._max_soc - soc) / 100 * cap)
                     new_soc = soc + delta / cap * 100
                     new_si = soc_to_idx(new_soc)
-                    # Solar is free, only cycle degradation cost
-                    cost = delta * cycle_cost_eur * 0.5  # half cycle cost (free energy)
-                    val = -cost + dp[t + 1][new_si]
-                    if val > best_val:
-                        best_val = val
-                        best_act = "solar_charge"
+                    if new_si > si:  # must actually increase SOC level
+                        cost = delta * cycle_cost_eur * 0.5
+                        val = -cost + dp[t + 1][new_si]
+                        if val > best_val:
+                            best_val = val
+                            best_act = "solar_charge"
 
                 # Option 4: discharge
                 if soc > self._min_soc and discharge_kwh_slot > 0:
                     delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
-                    delivered = delta * efficiency  # actual energy delivered to grid
+                    delivered = delta * efficiency
                     new_soc = soc - delta / cap * 100
                     new_si = soc_to_idx(new_soc)
-                    # Revenue = delivered energy * price - cycle degradation
-                    revenue = delivered * price - delta * cycle_cost_eur
-                    val = revenue + dp[t + 1][new_si]
-                    if val > best_val:
-                        best_val = val
-                        best_act = "discharge"
+                    if new_si < si:  # must actually decrease SOC level
+                        revenue = delivered * price - delta * cycle_cost_eur
+                        val = revenue + dp[t + 1][new_si]
+                        if val > best_val:
+                            best_val = val
+                            best_act = "discharge"
 
                 dp[t][si] = best_val
                 action_dp[t][si] = best_act
