@@ -12,7 +12,9 @@
           "solar_forecast_entity": "Solar forecast sensor (optional, e.g. Forecast.Solar or Solcast)",
           "solar_forecast_entities": "Additional solar forecast sensors (optional, for multiple arrays/services)",
           "solar_power_entity": "Solar power sensor (optional, current production in W)",
-          "solar_energy_today_entity": "Solar energy today sensor (optional, daily kWh for forecast calibration)"
+          "solar_energy_today_entity": "Solar energy today sensor (optional, daily kWh for forecast calibration)",
+          "epex_predictor_enabled": "Enable EPEX Predictor (extends price forecast beyond Tibber day-ahead)",
+          "epex_predictor_region": "EPEX Predictor region"
         }
       },
       "devices": {
@@ -57,7 +59,9 @@
           "solar_forecast_entity": "Solar forecast sensor (optional)",
           "solar_forecast_entities": "Additional solar forecast sensors (optional)",
           "solar_power_entity": "Solar power sensor (optional, current production in W)",
-          "solar_energy_today_entity": "Solar energy today sensor (optional, daily kWh for forecast calibration)"
+          "solar_energy_today_entity": "Solar energy today sensor (optional, daily kWh for forecast calibration)",
+          "epex_predictor_enabled": "Enable EPEX Predictor (extends forecast beyond Tibber)",
+          "epex_predictor_region": "EPEX Predictor region"
         }
       },
       "devices": {

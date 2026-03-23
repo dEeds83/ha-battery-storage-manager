@@ -14,6 +14,8 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
+import aiohttp
+
 from .const import (
     ATTR_BATTERY_PLAN,
     ATTR_CURRENT_PRICE,
@@ -29,7 +31,11 @@ from .const import (
     CONF_BATTERY_EFFICIENCY,
     CONF_BATTERY_SOC_ENTITY,
     CONF_CHARGERS,
+    CONF_EPEX_PREDICTOR_ENABLED,
+    CONF_EPEX_PREDICTOR_REGION,
     CONSUMPTION_STATS_ROLLING_DAYS,
+    DEFAULT_EPEX_PREDICTOR_REGION,
+    EPEX_PREDICTOR_BASE_URL,
     STORAGE_KEY_CONSUMPTION,
     STORAGE_VERSION_CONSUMPTION,
     CONF_HOUSE_CONSUMPTION_W,
@@ -143,6 +149,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._house_consumption_w = self._config.get(
             CONF_HOUSE_CONSUMPTION_W, DEFAULT_HOUSE_CONSUMPTION_W
         )
+
+        # EPEX Predictor for long-term price forecast
+        self._epex_enabled = bool(self._config.get(CONF_EPEX_PREDICTOR_ENABLED, False))
+        self._epex_region = self._config.get(
+            CONF_EPEX_PREDICTOR_REGION, DEFAULT_EPEX_PREDICTOR_REGION
+        )
+        self._epex_cache: list[dict] = []  # cached EPEX predictions
+        self._epex_cache_time: datetime | None = None
+        self._epex_cache_ttl = timedelta(minutes=30)  # refresh every 30 min
+        self._epex_markup: float | None = None  # Tibber/EPEX scaling factor
 
         # Battery economics
         self._cycle_cost = self._config.get(
@@ -625,6 +641,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         await self._check_tibber_watchdog()
         await self._record_consumption()
         await self._update_price_forecast()
+        await self._extend_prices_with_epex()
         await self._read_solar_forecast()
         self._apply_solar_calibration()
         self._apply_intraday_solar_correction()
@@ -923,6 +940,154 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 )
         else:
             self._fallback_price_range = None
+
+    async def _extend_prices_with_epex(self) -> None:
+        """Extend Tibber price forecast with EPEX Predictor data.
+
+        Fetches EPEX spot price predictions, calculates a scaling factor
+        from the overlap with Tibber prices, and appends scaled predictions
+        for hours beyond Tibber's window.
+        """
+        if not self._epex_enabled or not self._price_forecast:
+            return
+
+        # Refresh EPEX cache if stale
+        now = dt_util.now()
+        if (self._epex_cache_time is None
+                or now - self._epex_cache_time > self._epex_cache_ttl):
+            await self._fetch_epex_prices()
+
+        if not self._epex_cache:
+            return
+
+        # Find the end of Tibber data
+        tibber_end = None
+        for p in reversed(self._price_forecast):
+            try:
+                tibber_end = datetime.fromisoformat(p["start"])
+                if tibber_end.tzinfo is not None:
+                    tibber_end = dt_util.as_local(tibber_end)
+                break
+            except (ValueError, TypeError):
+                continue
+
+        if tibber_end is None:
+            return
+
+        # Build lookup of Tibber prices by hour key for overlap calculation
+        tibber_by_hour: dict[str, list[float]] = {}
+        for p in self._price_forecast:
+            try:
+                start = datetime.fromisoformat(p["start"])
+                if start.tzinfo is not None:
+                    start = dt_util.as_local(start)
+                hk = start.strftime("%Y-%m-%dT%H")
+                tibber_by_hour.setdefault(hk, []).append(p["total"])
+            except (ValueError, TypeError):
+                continue
+
+        # Build lookup of EPEX prices by hour key
+        epex_by_hour: dict[str, list[float]] = {}
+        epex_future: list[dict] = []
+        for p in self._epex_cache:
+            try:
+                start = datetime.fromisoformat(p["start"])
+                if start.tzinfo is not None:
+                    start = dt_util.as_local(start)
+                hk = start.strftime("%Y-%m-%dT%H")
+                epex_by_hour.setdefault(hk, []).append(p["total"])
+                # Collect EPEX entries beyond Tibber window
+                if start > tibber_end:
+                    epex_future.append(p)
+            except (ValueError, TypeError):
+                continue
+
+        if not epex_future:
+            _LOGGER.debug("EPEX: no data beyond Tibber window")
+            return
+
+        # Calculate markup from overlapping hours
+        # markup = average(tibber_price / epex_price) for overlapping hours
+        ratios = []
+        for hk in tibber_by_hour:
+            if hk in epex_by_hour:
+                t_avg = sum(tibber_by_hour[hk]) / len(tibber_by_hour[hk])
+                e_avg = sum(epex_by_hour[hk]) / len(epex_by_hour[hk])
+                if e_avg > 0.001:  # avoid division by zero
+                    ratios.append(t_avg / e_avg)
+
+        if not ratios:
+            _LOGGER.debug("EPEX: no overlapping hours for markup calculation")
+            return
+
+        self._epex_markup = sum(ratios) / len(ratios)
+
+        # Append scaled EPEX predictions to price forecast
+        added = 0
+        existing_starts = {p["start"] for p in self._price_forecast}
+        for p in epex_future:
+            if p["start"] not in existing_starts:
+                self._price_forecast.append({
+                    "start": p["start"],
+                    "total": round(p["total"] * self._epex_markup, 4),
+                })
+                added += 1
+
+        if added > 0:
+            msg = (
+                f"EPEX-Prognose: +{added} Slots über Tibber hinaus "
+                f"(Markup {self._epex_markup:.2f}×, "
+                f"{len(ratios)} Überlappungsstunden)"
+            )
+            _LOGGER.info(msg)
+            self._log_optimization(msg)
+
+    async def _fetch_epex_prices(self) -> None:
+        """Fetch price predictions from EPEX Predictor API."""
+        now = dt_util.now()
+        url = (
+            f"{EPEX_PREDICTOR_BASE_URL}/prices"
+            f"?region={self._epex_region}"
+            f"&unit=EUR_PER_KWH"
+            f"&timezone=Europe/Berlin"
+            f"&hours=96"
+        )
+
+        try:
+            session = aiohttp.ClientSession()
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        _LOGGER.warning("EPEX API returned status %d", resp.status)
+                        return
+                    data = await resp.json()
+            finally:
+                await session.close()
+
+            prices = data.get("prices", [])
+            if not prices:
+                _LOGGER.debug("EPEX API returned no prices")
+                return
+
+            # Convert to our internal format
+            self._epex_cache = []
+            for entry in prices:
+                if "startsAt" in entry and "total" in entry:
+                    self._epex_cache.append({
+                        "start": entry["startsAt"],
+                        "total": entry["total"],
+                    })
+
+            self._epex_cache_time = now
+            _LOGGER.debug(
+                "EPEX cache refreshed: %d entries for region %s",
+                len(self._epex_cache), self._epex_region,
+            )
+
+        except aiohttp.ClientError as err:
+            _LOGGER.warning("EPEX API request failed: %s", err)
+        except Exception:
+            _LOGGER.warning("EPEX API error", exc_info=True)
 
         _LOGGER.debug("Price forecast built with %d entries", len(self._price_forecast))
 
@@ -2311,6 +2476,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         eff_pct = options.get(CONF_BATTERY_EFFICIENCY)
         if eff_pct is not None:
             self._battery_efficiency = eff_pct / 100.0
+        self._epex_enabled = bool(options.get(
+            CONF_EPEX_PREDICTOR_ENABLED, self._epex_enabled
+        ))
+        self._epex_region = options.get(
+            CONF_EPEX_PREDICTOR_REGION, self._epex_region
+        )
         _LOGGER.info("Configuration updated from options flow")
 
     def set_strategy(self, strategy: str) -> None:
@@ -2370,6 +2541,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "cycle_cost_ct": self._cycle_cost,
             "consumption_forecast": self.get_hourly_consumption_forecast(),
             "optimization_log": list(self._optimization_log),
+            "epex_markup": self._epex_markup,
+            "epex_slots": len(self._epex_cache),
         }
 
     # Properties for entities

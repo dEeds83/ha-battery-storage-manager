@@ -16,7 +16,10 @@ from .const import (
     CONF_CHARGER_ENTITIES,
     CONF_CHARGER_POWER_DEFAULT,
     CONF_CHARGERS,
+    CONF_EPEX_PREDICTOR_ENABLED,
+    CONF_EPEX_PREDICTOR_REGION,
     CONF_HOUSE_CONSUMPTION_W,
+    DEFAULT_EPEX_PREDICTOR_REGION,
     CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
     CONF_INVERTER_FEED_POWER,
     CONF_INVERTER_FEED_POWER_ENTITY,
@@ -71,6 +74,15 @@ STEP_TIBBER_SCHEMA = vol.Schema(
         ),
         vol.Optional(CONF_SOLAR_ENERGY_TODAY_ENTITY, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_EPEX_PREDICTOR_ENABLED, default=False): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_EPEX_PREDICTOR_REGION, default=DEFAULT_EPEX_PREDICTOR_REGION
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=["DE", "AT", "BE", "NL", "SE1", "SE2", "SE3", "SE4", "DK1", "DK2"],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
         ),
     }
 )
@@ -323,6 +335,19 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         default=self._current(CONF_SOLAR_ENERGY_TODAY_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(
+                        CONF_EPEX_PREDICTOR_ENABLED,
+                        default=self._current(CONF_EPEX_PREDICTOR_ENABLED, False),
+                    ): selector.BooleanSelector(),
+                    vol.Optional(
+                        CONF_EPEX_PREDICTOR_REGION,
+                        default=self._current(CONF_EPEX_PREDICTOR_REGION, DEFAULT_EPEX_PREDICTOR_REGION),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=["DE", "AT", "BE", "NL", "SE1", "SE2", "SE3", "SE4", "DK1", "DK2"],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
                     ),
                 }
             ),

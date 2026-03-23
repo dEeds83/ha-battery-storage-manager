@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.1.3-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -9,7 +9,8 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 
 ### Optimierung
 - **Dynamic Programming Optimierung** – Findet den global optimalen SOC-Pfad über alle Zeitslots (statt greedy Pairing)
-- **48h-Lookahead** – Optimiert über morgen hinaus wenn Tibber die Preise für den Folgetag liefert
+- **EPEX Predictor Integration** – Erweitert das Planungsfenster über Tibber Day-Ahead hinaus mit skalierten EPEX-Spot-Prognosen (bis 4 Tage)
+- **48h+ Lookahead** – Optimiert über morgen hinaus: Tibber-Preise + EPEX-Prognose automatisch kombiniert
 - **Batterie-Zykluskosten** – Konfigurierbarer Degradationskostenparameter (ct/kWh) verhindert unprofitable Mini-Arbitrage
 - **Roundtrip-Effizienz** – Konfigurierbarer Effizienzfaktor (Standard 90%) wird in die Entlade-Bewertung einberechnet
 - **15-Minuten-Preisauflösung** – Nutzt die volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
@@ -76,6 +77,8 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 | Weitere Solar-Sensoren | Mehrfachauswahl für zusätzliche Solaranlagen | Nein |
 | Solar-Leistung Sensor | Aktuelle PV-Produktion in Watt (für exakte Verbrauchsberechnung) | Nein |
 | Solar-Energie heute Sensor | Tägliche PV-Produktion in kWh (für Prognose-Kalibrierung) | Nein |
+| EPEX Predictor aktivieren | Erweitert Preisprognose über Tibber-Fenster hinaus mit EPEX-Spotmarkt-Vorhersagen | Nein |
+| EPEX Predictor Region | Gebotszone (DE, AT, BE, NL, SE1-4, DK1-2) | DE |
 
 ### Schritt 2: Geräte
 
@@ -262,8 +265,20 @@ Für jeden Slot werden vier Optionen bewertet:
 - Findet das **globale Optimum** über alle Zeitslots
 - Berücksichtigt **SOC-Limits** in der Bewertung (statt nachträglicher Korrektur)
 - Integriert **Effizienz und Zykluskosten** direkt in die Bewertung
-- Optimiert automatisch über **48h** wenn morgen-Preise verfügbar sind
+- Optimiert automatisch über **48h+** wenn morgen-Preise oder EPEX-Prognosen verfügbar sind
 - Bei 96 Slots (24h × 15min) × 19 SOC-Stufen = ~1800 Zustände (< 1ms Rechenzeit)
+
+### EPEX Predictor (optional)
+
+Wenn aktiviert, erweitert die Integration das Planungsfenster über Tibber's Day-Ahead-Preise hinaus:
+
+- **Datenquelle:** [EpexPredictor](https://github.com/b3nn0/EpexPredictor) – statistisches Modell basierend auf Wetter- und Lastdaten
+- **Skalierung:** Berechnet automatisch einen Markup-Faktor aus dem Überlappungsbereich Tibber ↔ EPEX (Netzentgelte, Steuern, Tibber-Marge)
+- **Anwendung:** EPEX-Spotpreise × Markup = geschätzte Endkundenpreise für zukünftige Stunden
+- **Caching:** Alle 30 Minuten aktualisiert, bis 96h Vorhersage
+- **Regionen:** DE (Standard), AT, BE, NL, SE1-4, DK1-2
+
+**Beispiel:** Tibber liefert Preise bis morgen 23:45. EPEX Predictor ergänzt Übermorgen und Danach. Der Markup-Faktor gleicht den Unterschied zwischen Spotmarkt und Endkundenpreis aus (z.B. EPEX 5ct → Tibber 25ct → Faktor 5,0×).
 
 ### Solar-Laden (AC-gekoppelt)
 
