@@ -25,12 +25,16 @@ from .const import (
     ATTR_PLAN_SUMMARY,
     ATTR_STRATEGY,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_CYCLE_COST,
+    CONF_BATTERY_EFFICIENCY,
     CONF_BATTERY_SOC_ENTITY,
     CONF_CHARGERS,
     CONSUMPTION_STATS_ROLLING_DAYS,
     STORAGE_KEY_CONSUMPTION,
     STORAGE_VERSION_CONSUMPTION,
     CONF_HOUSE_CONSUMPTION_W,
+    DEFAULT_BATTERY_CYCLE_COST,
+    DEFAULT_BATTERY_EFFICIENCY,
     CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
     CONF_INVERTER_FEED_POWER,
     CONF_INVERTER_FEED_POWER_ENTITY,
@@ -134,10 +138,23 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._solar_calibration_loaded = False
         self._solar_calibration_last_date: str | None = None
         self._solar_forecast_today_kwh: float = 0.0  # today's total forecast
+        self._intraday_solar_factor: float = 1.0  # intraday correction factor
 
         self._house_consumption_w = self._config.get(
             CONF_HOUSE_CONSUMPTION_W, DEFAULT_HOUSE_CONSUMPTION_W
         )
+
+        # Battery economics
+        self._cycle_cost = self._config.get(
+            CONF_BATTERY_CYCLE_COST, DEFAULT_BATTERY_CYCLE_COST
+        )  # ct/kWh
+        self._battery_efficiency = self._config.get(
+            CONF_BATTERY_EFFICIENCY, DEFAULT_BATTERY_EFFICIENCY
+        ) / 100.0  # convert percent to factor
+
+        # Optimization log (recent decisions for UI)
+        self._optimization_log: list[str] = []
+        self._max_log_entries = 50
 
         # State
         self._strategy = STRATEGY_PRICE_OPTIMIZED
@@ -177,8 +194,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._charger_min_on_time = timedelta(seconds=120)  # min 2 min on
         self._charger_min_off_time = timedelta(seconds=60)   # min 1 min off
 
-        # Consumption statistics: rolling average per hour-of-day
-        # Format: {"0": [w1, w2, ...], "1": [...], ..., "23": [...]}
+        # Consumption statistics: rolling average per hour-of-day, split by day type
+        # Format: {"wd_0": [w1, w2, ...], "we_0": [...], ...}
+        # wd_ = weekday (Mon-Fri), we_ = weekend (Sat-Sun)
         self._consumption_store = Store(
             hass,
             STORAGE_VERSION_CONSUMPTION,
@@ -187,6 +205,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._consumption_stats: dict[str, list[float]] = {}
         self._consumption_hourly_samples: list[float] = []  # samples within current hour
         self._consumption_last_hour: int | None = None
+        self._consumption_last_daytype: str | None = None  # "wd" or "we"
         self._consumption_loaded = False
 
         # Tibber watchdog: restart integration if Pulse data is stale
@@ -201,14 +220,33 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._fallback_price_range: dict | None = None
 
     async def _load_consumption_stats(self) -> None:
-        """Load consumption statistics from persistent storage."""
+        """Load consumption statistics from persistent storage.
+
+        Migrates v1 format (keys "0"-"23") to v2 format (keys "wd_0", "we_0" etc.)
+        by copying old data to both weekday and weekend slots.
+        """
         if self._consumption_loaded:
             return
         data = await self._consumption_store.async_load()
         if data and isinstance(data, dict):
-            self._consumption_stats = data
+            # Detect v1 format: keys are "0"-"23" without prefix
+            needs_migration = any(
+                k.isdigit() and not any(k2.startswith("wd_") for k2 in data)
+                for k in data
+            )
+            if needs_migration:
+                migrated = {}
+                for k, v in data.items():
+                    if k.isdigit():
+                        migrated[f"wd_{k}"] = v
+                        migrated[f"we_{k}"] = list(v)  # copy for weekend too
+                self._consumption_stats = migrated
+                await self._consumption_store.async_save(migrated)
+                _LOGGER.info("Migrated consumption stats from v1 to v2 (weekday/weekend)")
+            else:
+                self._consumption_stats = data
             total = sum(len(v) for v in self._consumption_stats.values())
-            _LOGGER.debug("Loaded consumption stats: %d entries across %d hours",
+            _LOGGER.debug("Loaded consumption stats: %d entries across %d slots",
                           total, len(self._consumption_stats))
         else:
             self._consumption_stats = {}
@@ -253,11 +291,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         self._consumption_hourly_samples.append(house_w)
 
+        # Determine day type: weekday (Mon=0..Fri=4) vs weekend (Sat=5, Sun=6)
+        day_type = "wd" if now.weekday() < 5 else "we"
+
         # When the hour changes, store the average for the previous hour
         if self._consumption_last_hour is not None and current_hour != self._consumption_last_hour:
             if self._consumption_hourly_samples:
                 avg_w = sum(self._consumption_hourly_samples) / len(self._consumption_hourly_samples)
-                hour_key = str(self._consumption_last_hour)
+                # Use day type from when samples were collected
+                store_daytype = self._consumption_last_daytype or day_type
+                hour_key = f"{store_daytype}_{self._consumption_last_hour}"
 
                 if hour_key not in self._consumption_stats:
                     self._consumption_stats[hour_key] = []
@@ -271,7 +314,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                         self._consumption_stats[hour_key][-max_entries:]
 
                 _LOGGER.debug(
-                    "Consumption stats: hour %s avg %.0fW "
+                    "Consumption stats: %s avg %.0fW "
                     "(%d samples, %d days stored)",
                     hour_key, avg_w,
                     len(self._consumption_hourly_samples),
@@ -284,16 +327,26 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._consumption_hourly_samples = []
 
         self._consumption_last_hour = current_hour
+        self._consumption_last_daytype = day_type
 
-    def get_hourly_consumption_forecast(self) -> dict[int, float]:
+    def get_hourly_consumption_forecast(self, target_date: datetime | None = None) -> dict[int, float]:
         """Get predicted consumption per hour-of-day (0-23) in watts.
 
         Returns a dict mapping hour (int) → average consumption (W).
+        Uses weekday/weekend split based on the target date.
         Falls back to configured house_consumption_w for hours without data.
         """
+        if target_date is None:
+            target_date = dt_util.now()
+        day_type = "wd" if target_date.weekday() < 5 else "we"
+        other_type = "we" if day_type == "wd" else "wd"
+
         forecast: dict[int, float] = {}
         for hour in range(24):
-            samples = self._consumption_stats.get(str(hour), [])
+            # Prefer same day type, fall back to other, then config default
+            samples = self._consumption_stats.get(f"{day_type}_{hour}", [])
+            if not samples:
+                samples = self._consumption_stats.get(f"{other_type}_{hour}", [])
             if samples:
                 forecast[hour] = sum(samples) / len(samples)
             else:
@@ -400,6 +453,14 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             len(self._solar_calibration_history),
         )
 
+    def _log_optimization(self, message: str) -> None:
+        """Add an entry to the optimization log (visible in UI)."""
+        now = dt_util.now()
+        entry = f"{now.strftime('%H:%M:%S')} {message}"
+        self._optimization_log.append(entry)
+        if len(self._optimization_log) > self._max_log_entries:
+            self._optimization_log = self._optimization_log[-self._max_log_entries:]
+
     def _apply_solar_calibration(self) -> None:
         """Apply calibration factor to all solar forecast values."""
         if abs(self._solar_calibration_factor - 1.0) < 0.01:
@@ -422,6 +483,76 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "Solar forecast calibrated: factor=%.2f, adjusted expected=%.1f kWh",
             self._solar_calibration_factor, self._expected_solar_kwh,
         )
+
+    def _apply_intraday_solar_correction(self) -> None:
+        """Adjust remaining solar forecast based on actual vs predicted production so far.
+
+        If by 11:00 only 30% of the day's forecast has materialized but 50% was
+        expected, the remaining forecast is scaled down by 0.6. This gives much
+        better afternoon planning on cloudy days.
+        """
+        if not self._solar_energy_today_entity:
+            self._intraday_solar_factor = 1.0
+            return
+
+        now = dt_util.now()
+        # Only useful during daylight hours with some forecast
+        if now.hour < 8 or now.hour >= 20:
+            self._intraday_solar_factor = 1.0
+            return
+
+        state = self.hass.states.get(self._solar_energy_today_entity)
+        if not state or state.state in ("unknown", "unavailable"):
+            return
+
+        try:
+            actual_so_far_kwh = float(state.state)
+        except (ValueError, TypeError):
+            return
+
+        # Calculate forecast for hours already passed today
+        today_prefix = now.strftime("%Y-%m-%dT")
+        now_key = now.strftime("%Y-%m-%dT%H")
+        forecast_so_far_wh = sum(
+            v for k, v in self._solar_forecast.items()
+            if k.startswith(today_prefix) and k < now_key
+        )
+        forecast_so_far_kwh = forecast_so_far_wh / 1000
+
+        if forecast_so_far_kwh < 0.5:
+            # Not enough forecast data to compare yet
+            self._intraday_solar_factor = 1.0
+            return
+
+        # Ratio of actual/predicted so far
+        intraday_ratio = actual_so_far_kwh / forecast_so_far_kwh
+        # Clamp to reasonable range
+        intraday_ratio = max(0.2, min(3.0, intraday_ratio))
+
+        # Blend with daily calibration factor (70% intraday, 30% daily)
+        # This ensures we respond to today's weather while keeping some stability
+        self._intraday_solar_factor = intraday_ratio
+
+        # Apply to remaining forecast hours (future only)
+        for key in self._solar_forecast:
+            if key.startswith(today_prefix) and key >= now_key:
+                self._solar_forecast[key] *= intraday_ratio
+
+        # Recalculate expected solar
+        remaining = {
+            k: v for k, v in self._solar_forecast.items()
+            if k >= now_key and k.startswith(today_prefix)
+        }
+        self._expected_solar_kwh = sum(remaining.values()) / 1000
+
+        if abs(intraday_ratio - 1.0) > 0.1:
+            msg = (
+                f"Intraday Solar-Korrektur: Ist={actual_so_far_kwh:.1f} kWh, "
+                f"Forecast bisher={forecast_so_far_kwh:.1f} kWh → "
+                f"Faktor {intraday_ratio:.2f}, Rest={self._expected_solar_kwh:.1f} kWh"
+            )
+            _LOGGER.info(msg)
+            self._log_optimization(msg)
 
     async def _check_tibber_watchdog(self) -> None:
         """Restart Tibber integration if Pulse data appears stale.
@@ -493,6 +624,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         await self._update_price_forecast()
         await self._read_solar_forecast()
         self._apply_solar_calibration()
+        self._apply_intraday_solar_correction()
         await self._calibrate_solar_forecast()
         self._create_battery_plan()
 
@@ -1027,21 +1159,19 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
     # ── Battery plan ────────────────────────────────────────────────
 
     def _create_battery_plan(self) -> None:
-        """Create a cost-optimized 24h battery plan using effective-price arbitrage.
+        """Create a cost-optimized battery plan using Dynamic Programming.
 
-        For each hour, computes the **effective charge cost**: the portion of
-        charger power that must come from the grid (after solar surplus is
-        subtracted) times the grid price.  This means a solar hour with cheap
-        grid prices can be preferred over a non-solar hour with expensive
-        prices for grid-charging, because the effective cost is lower.
+        Uses backward DP over discretized SOC states to find the globally
+        optimal sequence of charge/discharge/idle actions that maximizes
+        profit (= revenue from discharging − cost of charging − cycle wear).
 
-        Algorithm:
-        1. Compute effective charge cost per hour (solar reduces grid draw)
-        2. All hours participate in arbitrage (no solar carve-out)
-        3. Greedily pair cheapest effective-charge hours with most expensive
-           discharge hours
-        4. Mark hours with solar surplus that aren't charging as solar_charge
-        5. Forward-simulate SOC to validate all actions
+        Considers:
+        - Effective charge cost (solar reduces grid draw)
+        - Battery round-trip efficiency
+        - Cycle degradation cost (configurable ct/kWh)
+        - Pre-solar discharge to create headroom for free solar
+        - Weekday/weekend consumption patterns
+        - Intraday solar correction factor
         """
         now = dt_util.now()
 
@@ -1058,22 +1188,27 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         discharge_power_w = self._inverter_power or 800
         discharge_kwh_slot = discharge_power_w / 1000 * slot_h
         cap = self._battery_capacity
+        efficiency = self._battery_efficiency  # round-trip, e.g. 0.90
+        cycle_cost_eur = self._cycle_cost / 100  # convert ct to EUR
 
-        # Per-hour consumption forecast (rolling average or fallback)
-        consumption_forecast = self.get_hourly_consumption_forecast()
+        # Per-day consumption forecast (weekday/weekend aware)
+        # Cache forecasts per date to avoid recalculation
+        consumption_cache: dict[str, dict[int, float]] = {}
 
         # Enrich slot data with solar info and effective charge cost
-        # Solar forecast is hourly → split evenly across sub-hour slots
         slots_per_hour = max(1, round(1.0 / slot_h))
         for h in slot_data:
             hour_of_day = h.get("hour_of_day", 12)
-            h["house_w"] = consumption_forecast.get(hour_of_day, self._house_consumption_w)
+            slot_date = h["start_dt"]
+            date_key = slot_date.strftime("%Y-%m-%d")
+            if date_key not in consumption_cache:
+                consumption_cache[date_key] = self.get_hourly_consumption_forecast(slot_date)
+            h["house_w"] = consumption_cache[date_key].get(hour_of_day, self._house_consumption_w)
             house_kwh_slot = h["house_w"] / 1000 * slot_h
 
-            # Solar: hourly forecast divided by slots per hour
             solar_wh_hour = self._solar_forecast.get(h["hour_key"], 0)
             h["solar_kwh"] = (solar_wh_hour / 1000) / slots_per_hour
-            h["solar_wh_hour_raw"] = solar_wh_hour  # for debugging
+            h["solar_wh_hour_raw"] = solar_wh_hour
             h["solar_surplus_kwh"] = max(0, h["solar_kwh"] - house_kwh_slot)
 
             if charge_kwh_slot > 0:
@@ -1084,207 +1219,150 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             h["grid_fraction"] = grid_fraction
 
         n = len(slot_data)
-        # Alias for readability in the rest of the method
         hourly_data = slot_data
-        actions = ["idle"] * n
-        headroom_kwh = (self._max_soc - current_soc) / 100 * cap
 
-        # Step 1: Calculate total expected solar and reserve headroom
-        # Solar is free → always prioritize it. Only grid-charge the
-        # portion of headroom that solar can't fill.
-        total_solar_kwh = 0.0
-        solar_hours_end_idx = -1  # last hour with significant solar
-        for i, h in enumerate(hourly_data):
-            solar_charge = min(h["solar_surplus_kwh"], charge_kwh_slot)
-            if solar_charge > 0.05:
-                total_solar_kwh += solar_charge
-                solar_hours_end_idx = i
+        # ── Dynamic Programming ──────────────────────────────────
+        # SOC discretization: 5% steps from min_soc to max_soc
+        soc_step = 5.0
+        soc_levels = []
+        s = self._min_soc
+        while s <= self._max_soc + 0.01:
+            soc_levels.append(round(s, 1))
+            s += soc_step
+        num_soc = len(soc_levels)
 
-        solar_fills_kwh = min(total_solar_kwh, headroom_kwh)
-        grid_headroom_kwh = max(0, headroom_kwh - solar_fills_kwh)
+        def soc_to_idx(soc: float) -> int:
+            idx = round((soc - self._min_soc) / soc_step)
+            return max(0, min(num_soc - 1, idx))
 
-        # Calculate how much solar would be wasted (more solar than headroom)
-        solar_wasted_kwh = max(0, total_solar_kwh - headroom_kwh)
+        # dp[t][s] = max cumulative profit achievable from slot t to end,
+        #            starting at SOC level s
+        # action_dp[t][s] = best action at slot t with SOC level s
+        INF = float("-inf")
+        dp = [[INF] * num_soc for _ in range(n + 1)]
+        action_dp = [["idle"] * num_soc for _ in range(n)]
 
-        # Pre-solar discharge: if solar exceeds headroom, discharge BEFORE
-        # solar hours to create room.  Pick the most expensive pre-solar hours.
-        presolar_discharge_hours: set[int] = set()
-        if solar_wasted_kwh > 0.1 and discharge_kwh_slot > 0:
-            # Find the first solar hour
-            first_solar_idx = next(
-                (i for i, h in enumerate(hourly_data) if h["solar_surplus_kwh"] > 0.05),
-                n,
-            )
-            # Candidate hours: before first solar, sorted by price (most expensive first)
-            presolar_cands = [
-                (i, hourly_data[i]["price"])
-                for i in range(first_solar_idx)
-                if hourly_data[i]["solar_surplus_kwh"] < 0.05
-            ]
-            presolar_cands.sort(key=lambda x: x[1], reverse=True)
+        # Terminal condition: no profit from end
+        for s in range(num_soc):
+            dp[n][s] = 0.0
 
-            discharge_needed = solar_wasted_kwh
-            for idx, price in presolar_cands:
-                if discharge_needed <= 0:
-                    break
-                # Only discharge if stored energy is available
-                presolar_discharge_hours.add(idx)
-                discharge_needed -= discharge_kwh_slot
-                actions[idx] = "discharge"
+        # Backward pass
+        for t in range(n - 1, -1, -1):
+            h = hourly_data[t]
+            price = h["price"]
+            eff_cost = h["effective_charge_cost"]
+            solar_surplus = h["solar_surplus_kwh"]
+            grid_frac = h["grid_fraction"]
 
-            if presolar_discharge_hours:
-                # Recalculate headroom after pre-solar discharge
-                extra_headroom = len(presolar_discharge_hours) * discharge_kwh_slot
-                headroom_kwh += extra_headroom
-                solar_fills_kwh = min(total_solar_kwh, headroom_kwh)
-                grid_headroom_kwh = max(0, headroom_kwh - solar_fills_kwh)
-                _LOGGER.info(
-                    "Pre-solar discharge: %d hours to free %.1f kWh for solar "
-                    "(was wasting %.1f kWh)",
-                    len(presolar_discharge_hours), extra_headroom, solar_wasted_kwh,
-                )
+            for si in range(num_soc):
+                soc = soc_levels[si]
+                best_val = INF
+                best_act = "idle"
 
-        _LOGGER.debug(
-            "Plan budget: headroom=%.1f kWh, solar=%.1f kWh, "
-            "grid_needed=%.1f kWh, pre-solar_discharge=%d hours",
-            headroom_kwh, solar_fills_kwh, grid_headroom_kwh,
-            len(presolar_discharge_hours),
+                # Option 1: idle
+                val = dp[t + 1][si]
+                if val > best_val:
+                    best_val = val
+                    best_act = "idle"
+
+                # Option 2: charge (grid)
+                if soc < self._max_soc and charge_kwh_slot > 0:
+                    delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
+                    new_soc = soc + delta / cap * 100
+                    new_si = soc_to_idx(new_soc)
+                    # Cost = grid portion of energy * price + cycle degradation
+                    cost = delta * grid_frac * price + delta * cycle_cost_eur
+                    val = -cost + dp[t + 1][new_si]
+                    if val > best_val:
+                        best_val = val
+                        best_act = "charge"
+
+                # Option 3: solar_charge (free, but still has cycle cost)
+                if solar_surplus > 0.05 and soc < self._max_soc:
+                    delta = min(solar_surplus, charge_kwh_slot,
+                                (self._max_soc - soc) / 100 * cap)
+                    new_soc = soc + delta / cap * 100
+                    new_si = soc_to_idx(new_soc)
+                    # Solar is free, only cycle degradation cost
+                    cost = delta * cycle_cost_eur * 0.5  # half cycle cost (free energy)
+                    val = -cost + dp[t + 1][new_si]
+                    if val > best_val:
+                        best_val = val
+                        best_act = "solar_charge"
+
+                # Option 4: discharge
+                if soc > self._min_soc and discharge_kwh_slot > 0:
+                    delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
+                    delivered = delta * efficiency  # actual energy delivered to grid
+                    new_soc = soc - delta / cap * 100
+                    new_si = soc_to_idx(new_soc)
+                    # Revenue = delivered energy * price - cycle degradation
+                    revenue = delivered * price - delta * cycle_cost_eur
+                    val = revenue + dp[t + 1][new_si]
+                    if val > best_val:
+                        best_val = val
+                        best_act = "discharge"
+
+                dp[t][si] = best_val
+                action_dp[t][si] = best_act
+
+        # ── Forward pass: extract optimal actions ────────────────
+        start_si = soc_to_idx(current_soc)
+        actions = []
+        current_si = start_si
+        for t in range(n):
+            act = action_dp[t][current_si]
+            actions.append(act)
+
+            soc = soc_levels[current_si]
+            h = hourly_data[t]
+            if act == "charge":
+                delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
+                new_soc = soc + delta / cap * 100
+            elif act == "solar_charge":
+                delta = min(h["solar_surplus_kwh"], charge_kwh_slot,
+                            (self._max_soc - soc) / 100 * cap)
+                new_soc = soc + delta / cap * 100
+            elif act == "discharge":
+                delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
+                new_soc = soc - delta / cap * 100
+            else:
+                new_soc = soc
+
+            current_si = soc_to_idx(new_soc)
+
+        # Log DP result
+        total_profit = dp[0][start_si]
+        charge_slots = sum(1 for a in actions if a == "charge")
+        discharge_slots = sum(1 for a in actions if a == "discharge")
+        solar_slots = sum(1 for a in actions if a == "solar_charge")
+        dp_msg = (
+            f"DP-Optimierung: {charge_slots} Lade, {discharge_slots} Entlade, "
+            f"{solar_slots} Solar Slots → Profit {total_profit:.3f} EUR "
+            f"(Effizienz {self._battery_efficiency*100:.0f}%, "
+            f"Zykluskosten {self._cycle_cost:.0f} ct/kWh)"
         )
+        _LOGGER.info(dp_msg)
+        self._log_optimization(dp_msg)
 
-        # Step 2: Find profitable arbitrage pairs
-        # ALL hours are charge candidates (solar hours have low effective cost).
-        # This ensures solar-assisted hours at cheap grid prices are preferred
-        # over expensive non-solar hours.
-        charge_cands = []   # (index, sort_cost)
-        discharge_cands = []  # (index, price)
-        for i, h in enumerate(hourly_data):
-            if i in presolar_discharge_hours:
-                continue  # already assigned
-            # Charge candidate: effective cost (solar reduces it)
-            charge_cands.append((i, h["effective_charge_cost"]))
-            # Discharge candidate: only hours with low solar surplus
-            if h["solar_surplus_kwh"] < (h["house_w"] / 1000) * 0.3:
-                discharge_cands.append((i, h["price"]))
-
-        charge_cands.sort(key=lambda x: x[1])
-        discharge_cands.sort(key=lambda x: x[1], reverse=True)
-
-        # Find profitable arbitrage pairs.
-        # The SOC forward simulation (Step 4) validates actual feasibility,
-        # so we don't limit pairs here – just require minimum spread.
-        # This ensures existing stored energy can be discharged at expensive
-        # hours and recharged at cheap hours, even when solar fills headroom.
-        min_spread = 0.02
-        used = set()
-        pairs = []
-        ci, di = 0, 0
-        # Max pairs: limited by battery capacity (discharge + recharge cycles)
-        max_pairs = int(
-            (self._max_soc - self._min_soc) / 100 * cap / charge_kwh_slot
-        ) if charge_kwh_slot > 0 else 50
-        while ci < len(charge_cands) and di < len(discharge_cands):
-            if len(pairs) >= max_pairs:
-                break
-
-            c_idx, c_eff_cost = charge_cands[ci]
-            d_idx, d_price = discharge_cands[di]
-
-            if d_price - c_eff_cost < min_spread:
-                break
-
-            if c_idx in used or d_idx in used or c_idx == d_idx:
-                if c_idx in used:
-                    ci += 1
-                else:
-                    di += 1
-                continue
-
-            pairs.append((c_idx, d_idx, d_price - c_eff_cost))
-            used.add(c_idx)
-            used.add(d_idx)
-            ci += 1
-            di += 1
-
-        for c_idx, d_idx, _ in pairs:
-            actions[c_idx] = "charge"
-            actions[d_idx] = "discharge"
-
-        # Step 3: Remaining solar hours (not picked for grid-charge) → solar_charge
-        for i, h in enumerate(hourly_data):
-            if actions[i] == "idle" and h["solar_surplus_kwh"] > 0.05:
-                actions[i] = "solar_charge"
-
-        # Step 3b: Optimize charge slot timing
-        # The SOC simulation runs chronologically, so expensive early charge
-        # slots fill the battery before cheaper later slots get a chance.
-        # Fix: count how many charge slots the battery actually needs, keep
-        # only the cheapest ones, and drop the rest (they become solar_charge
-        # or idle).
-        charge_indices = [i for i in range(n) if actions[i] == "charge"]
-        if charge_indices and charge_kwh_slot > 0:
-            # Quick SOC simulation to count how many charge slots the battery
-            # can actually absorb before hitting max_soc.
-            sim_soc = current_soc
-            slots_that_charged = 0
-            for i in range(n):
-                a = actions[i]
-                if a == "charge":
-                    if sim_soc < self._max_soc:
-                        delta = min(charge_kwh_slot, (self._max_soc - sim_soc) / 100 * cap)
-                        sim_soc += delta / cap * 100
-                        slots_that_charged += 1
-                elif a == "discharge":
-                    delta = min(discharge_kwh_slot, (sim_soc - self._min_soc) / 100 * cap)
-                    sim_soc -= delta / cap * 100
-                elif a == "solar_charge":
-                    delta = min(hourly_data[i]["solar_surplus_kwh"], charge_kwh_slot)
-                    sim_soc += delta / cap * 100
-                sim_soc = max(self._min_soc, min(self._max_soc, sim_soc))
-
-            # Collect ALL potential charge slots (current charges + idle/hold/solar
-            # that could be charged instead). Then pick the cheapest N.
-            discharge_set = {i for i in range(n) if actions[i] == "discharge"}
-            all_charge_candidates = []
-            for i in range(n):
-                if i in discharge_set or i in presolar_discharge_hours:
-                    continue  # can't charge during discharge
-                all_charge_candidates.append(
-                    (i, hourly_data[i]["effective_charge_cost"])
+        # ── Pre-solar discharge enhancement ──────────────────────
+        # DP handles this implicitly, but we track pre-solar slots for reasons
+        presolar_discharge_hours: set[int] = set()
+        first_solar_idx = next(
+            (i for i, h in enumerate(hourly_data) if h["solar_surplus_kwh"] > 0.05),
+            n,
+        )
+        for i in range(first_solar_idx):
+            if actions[i] == "discharge":
+                # Check if there's later solar that benefits from this
+                later_solar = any(
+                    hourly_data[j]["solar_surplus_kwh"] > 0.05
+                    for j in range(i + 1, n)
                 )
-            all_charge_candidates.sort(key=lambda x: x[1])
+                if later_solar:
+                    presolar_discharge_hours.add(i)
 
-            # Pick the cheapest slots_that_charged candidates
-            new_charge_set = set()
-            for idx, _ in all_charge_candidates:
-                if len(new_charge_set) >= slots_that_charged:
-                    break
-                new_charge_set.add(idx)
-
-            old_charge_set = set(charge_indices)
-            if new_charge_set != old_charge_set:
-                added = new_charge_set - old_charge_set
-                removed = old_charge_set - new_charge_set
-
-                # Apply changes
-                for idx in removed:
-                    if hourly_data[idx]["solar_surplus_kwh"] > 0.05:
-                        actions[idx] = "solar_charge"
-                    else:
-                        actions[idx] = "idle"
-                for idx in added:
-                    actions[idx] = "charge"
-
-                if removed:
-                    removed_costs = [f"{hourly_data[i]['effective_charge_cost']*100:.1f}ct" for i in sorted(removed)]
-                    added_costs = [f"{hourly_data[i]['effective_charge_cost']*100:.1f}ct" for i in sorted(added)]
-                    _LOGGER.info(
-                        "Charge optimization: swapped %d expensive slots (%s) "
-                        "for %d cheaper ones (%s)",
-                        len(removed), ", ".join(removed_costs),
-                        len(added), ", ".join(added_costs),
-                    )
-
-        # Step 4: Forward-simulate SOC to validate and build plan
+        # ── Build plan with SOC simulation and reasons ───────────
         self._battery_plan = []
         estimated_soc = current_soc
         charge_count = 0
@@ -1307,7 +1385,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     action = "idle"
                 else:
                     delta_kwh = min(charge_kwh_slot, (self._max_soc - estimated_soc) / 100 * cap)
-                    # Only grid portion counts as grid charge
                     grid_charge_kwh += delta_kwh * h["grid_fraction"]
             elif action == "discharge":
                 if estimated_soc <= self._min_soc:
@@ -1335,41 +1412,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             estimated_soc = max(self._min_soc, min(self._max_soc, estimated_soc))
 
             # Build reason text with clear explanation
-            if action == "charge" and h["solar_surplus_kwh"] > 0.05:
-                grid_pct = round(h["grid_fraction"] * 100)
-                reason = (
-                    f"Solar+Netz ({grid_pct}% Netz à {h['price']*100:.1f} ct "
-                    f"→ eff. {h['effective_charge_cost']*100:.1f} ct/kWh)"
-                )
-            elif action == "charge":
-                reason = f"Netz-Laden ({h['price']*100:.1f} ct/kWh)"
-            elif action == "solar_charge":
-                reason = f"Solar {h['solar_surplus_kwh']:.1f} kWh (kostenlos)"
-            elif action == "discharge":
-                if i in presolar_discharge_hours:
-                    reason = (
-                        f"Platz für Solar schaffen "
-                        f"({h['price']*100:.1f} ct/kWh)"
-                    )
-                else:
-                    # Find the paired charge hour for context
-                    paired_charge = None
-                    for c_idx, d_idx, spread in pairs:
-                        if d_idx == i:
-                            ch = hourly_data[c_idx]
-                            paired_charge = ch
-                            break
-                    if paired_charge:
-                        reason = (
-                            f"Entladen ({h['price']*100:.1f} ct, "
-                            f"Spread {(h['price'] - paired_charge['effective_charge_cost'])*100:.0f} ct)"
-                        )
-                    else:
-                        reason = f"Entladen ({h['price']*100:.1f} ct/kWh)"
-            elif action == "hold":
-                reason = "Halten für teure Stunden"
-            else:
-                reason = "Keine Aktion"
+            reason = self._build_plan_reason(
+                action, h, i, presolar_discharge_hours, hourly_data, actions
+            )
 
             self._battery_plan.append({
                 "hour": h.get("slot_key", h["hour_key"] + ":00"),
@@ -1385,7 +1430,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Summary
         parts = []
         def _fmt_duration(slots: int) -> str:
-            """Format slot count as human-readable duration."""
             total_min = round(slots * slot_h * 60)
             if total_min >= 60 and total_min % 60 == 0:
                 return f"{total_min // 60}h"
@@ -1401,21 +1445,61 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             parts.append(f"{_fmt_duration(discharge_count)} Entladen")
         self._plan_summary = " | ".join(parts) if parts else "Kein Plan erstellt"
 
-        savings = sum(
-            p[2] * min(charge_kwh_slot, discharge_kwh_slot)
-            for p in pairs
-        )
-        self._estimated_savings = round(savings, 2)
+        self._estimated_savings = round(max(0, total_profit), 2)
 
         _LOGGER.debug(
-            "Battery plan (optimized): %s | Savings: %.2f EUR "
-            "(SOC: %.0f%%, Solar: %.1f kWh, %d pairs)",
+            "Battery plan (DP): %s | Profit: %.2f EUR "
+            "(SOC: %.0f%%, Solar: %.1f kWh, Efficiency: %.0f%%)",
             self._plan_summary,
-            savings,
+            total_profit,
             current_soc,
             self._expected_solar_kwh,
-            len(pairs),
+            efficiency * 100,
         )
+
+    def _build_plan_reason(
+        self,
+        action: str,
+        h: dict,
+        slot_idx: int,
+        presolar_set: set[int],
+        hourly_data: list[dict],
+        actions: list[str],
+    ) -> str:
+        """Build a human-readable reason for a plan action."""
+        eff_pct = f", η={self._battery_efficiency*100:.0f}%" if self._battery_efficiency < 0.99 else ""
+        cycle_info = f", Zyklus {self._cycle_cost:.0f}ct" if self._cycle_cost > 0 else ""
+
+        if action == "charge" and h["solar_surplus_kwh"] > 0.05:
+            grid_pct = round(h["grid_fraction"] * 100)
+            return (
+                f"Solar+Netz ({grid_pct}% Netz à {h['price']*100:.1f} ct "
+                f"→ eff. {h['effective_charge_cost']*100:.1f} ct/kWh{cycle_info})"
+            )
+        if action == "charge":
+            return f"Netz-Laden ({h['price']*100:.1f} ct/kWh{cycle_info})"
+        if action == "solar_charge":
+            return f"Solar {h['solar_surplus_kwh']:.1f} kWh (kostenlos)"
+        if action == "discharge":
+            if slot_idx in presolar_set:
+                return f"Platz für Solar schaffen ({h['price']*100:.1f} ct/kWh)"
+            # Find a nearby charge slot for spread context
+            nearby_charge = None
+            for j in range(len(actions)):
+                if actions[j] == "charge" and j != slot_idx:
+                    nearby_charge = hourly_data[j]
+                    break
+            if nearby_charge:
+                spread = (h["price"] - nearby_charge["effective_charge_cost"]) * 100
+                net_spread = spread - self._cycle_cost * (2 - self._battery_efficiency)
+                return (
+                    f"Entladen ({h['price']*100:.1f} ct, "
+                    f"Spread {spread:.0f} ct, netto {net_spread:.0f} ct{eff_pct})"
+                )
+            return f"Entladen ({h['price']*100:.1f} ct/kWh{eff_pct})"
+        if action == "hold":
+            return "Halten für teure Stunden"
+        return "Keine Aktion"
 
     def _build_slot_data(self, now: datetime) -> tuple[list[dict], float]:
         """Build list of time slots from price forecast.
@@ -1463,10 +1547,18 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 slot_duration_h = 0.5   # 30 min
             # else: default 1h
 
-        _LOGGER.debug(
-            "Price slots: %d entries, %.0f min resolution",
-            len(unique), slot_duration_h * 60,
-        )
+        # Log multi-day coverage
+        if unique:
+            first_dt = unique[0]["start_dt"]
+            last_dt = unique[-1]["start_dt"]
+            hours_covered = (last_dt - first_dt).total_seconds() / 3600
+            days_covered = hours_covered / 24
+            _LOGGER.debug(
+                "Price slots: %d entries, %.0f min resolution, %.0fh coverage (%.1f days)",
+                len(unique), slot_duration_h * 60, hours_covered, days_covered,
+            )
+        else:
+            _LOGGER.debug("Price slots: 0 entries")
 
         return unique, slot_duration_h
 
@@ -2179,6 +2271,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._house_consumption_w = options.get(
             CONF_HOUSE_CONSUMPTION_W, self._house_consumption_w
         )
+        self._cycle_cost = options.get(
+            CONF_BATTERY_CYCLE_COST, self._cycle_cost
+        )
+        eff_pct = options.get(CONF_BATTERY_EFFICIENCY)
+        if eff_pct is not None:
+            self._battery_efficiency = eff_pct / 100.0
         _LOGGER.info("Configuration updated from options flow")
 
     def set_strategy(self, strategy: str) -> None:
@@ -2233,7 +2331,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "use_solar_forecast": self._use_solar_forecast,
             "solar_power": self._solar_power,
             "solar_calibration_factor": self._solar_calibration_factor,
+            "intraday_solar_factor": self._intraday_solar_factor,
+            "battery_efficiency": round(self._battery_efficiency * 100),
+            "cycle_cost_ct": self._cycle_cost,
             "consumption_forecast": self.get_hourly_consumption_forecast(),
+            "optimization_log": list(self._optimization_log),
         }
 
     # Properties for entities

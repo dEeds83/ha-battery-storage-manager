@@ -29,6 +29,10 @@ STORAGE_VERSION_SOLAR_CALIBRATION = 1
 SOLAR_CALIBRATION_ROLLING_DAYS = 14
 CONF_HOUSE_CONSUMPTION_W = "house_consumption_w"
 DEFAULT_HOUSE_CONSUMPTION_W = 500  # average house consumption in watts
+CONF_BATTERY_CYCLE_COST = "battery_cycle_cost"  # ct/kWh cost per charge/discharge cycle
+DEFAULT_BATTERY_CYCLE_COST = 10.0  # ct/kWh (typical LFP: ~3000€ / 6000 cycles / 5 kWh)
+CONF_BATTERY_EFFICIENCY = "battery_efficiency"  # round-trip efficiency in percent
+DEFAULT_BATTERY_EFFICIENCY = 90  # percent
 
 # Defaults
 DEFAULT_MIN_SOC = 10  # percent
@@ -39,7 +43,7 @@ DEFAULT_PRICE_HIGH_THRESHOLD = 30.0  # ct/kWh
 DEFAULT_SCAN_INTERVAL = 15  # seconds
 CONSUMPTION_STATS_ROLLING_DAYS = 14  # days of history per hour slot
 STORAGE_KEY_CONSUMPTION = "consumption_stats"
-STORAGE_VERSION_CONSUMPTION = 1
+STORAGE_VERSION_CONSUMPTION = 2  # v2: weekday/weekend split
 
 # Operating modes
 MODE_IDLE = "idle"

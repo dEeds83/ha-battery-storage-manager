@@ -1,20 +1,24 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.0.3-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
 ## Features
 
 ### Optimierung
-- **Preisarbitrage-Optimierung** – Paart günstigste Lade- mit teuersten Entladezeitpunkten, minimaler Spread 2 ct/kWh für Rundtrip-Verluste
+- **Dynamic Programming Optimierung** – Findet den global optimalen SOC-Pfad über alle Zeitslots (statt greedy Pairing)
+- **48h-Lookahead** – Optimiert über morgen hinaus wenn Tibber die Preise für den Folgetag liefert
+- **Batterie-Zykluskosten** – Konfigurierbarer Degradationskostenparameter (ct/kWh) verhindert unprofitable Mini-Arbitrage
+- **Roundtrip-Effizienz** – Konfigurierbarer Effizienzfaktor (Standard 90%) wird in die Entlade-Bewertung einberechnet
 - **15-Minuten-Preisauflösung** – Nutzt die volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
 - **Effektive Ladekosten** – Solar-unterstützte Stunden werden bevorzugt (z.B. 50% Solar → halber Netzpreis)
-- **Headroom-Reservierung** – Batterie wird nicht per Netz vollgeladen wenn Solar genug liefert
 - **Pre-Solar-Entladung** – Entlädt proaktiv vor Solar-Stunden um Platz für kostenlose Solarenergie zu schaffen
-- **Lernende Verbrauchsprognose** – 14-Tage rollender Durchschnitt pro Tagesstunde ersetzt statischen Hausverbrauch
-- **Solar-Prognose-Kalibrierung** – Lernt aus der Abweichung Forecast vs. Ist und korrigiert zukünftige Prognosen automatisch
+- **Lernende Verbrauchsprognose** – 14-Tage rollender Durchschnitt, getrennt nach Wochentag/Wochenende
+- **Solar-Prognose-Kalibrierung** – Lernt aus Abweichung Forecast vs. Ist, mit Intraday-Korrektur bei Wetterumschwung
+- **Intraday Solar-Korrektur** – Passt die Restprognose laufend an (Ist-Produktion vs. bisheriger Forecast)
+- **Optimierungs-Log** – Alle Entscheidungen (Umplanungen, Korrekturen) als Sensor im UI einsehbar
 
 ### Steuerung
 - **Dynamische Ladegeräte-Anzahl** – Beliebig viele Ladegeräte mit individueller Leistung konfigurierbar
@@ -97,6 +101,8 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 | Preisschwelle niedrig | Laden unter diesem Preis (Fallback ohne Prognose) | 15 ct/kWh |
 | Preisschwelle hoch | Entladen über diesem Preis (Fallback ohne Prognose) | 30 ct/kWh |
 | Hausverbrauch | Durchschnittlicher Verbrauch in Watt (Startwert, wird durch Lernfunktion ersetzt) | 500 W |
+| Zykluskosten | Degradationskosten pro Lade-/Entladezyklus in ct/kWh | 10 ct/kWh |
+| Roundtrip-Effizienz | Gesamteffizienz eines Lade-/Entladezyklus in Prozent | 90% |
 
 ### Nachträgliche Anpassung
 
@@ -143,7 +149,8 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Erwartete Solarproduktion | Verbleibende erwartete Solarproduktion heute in kWh |
 | Verbrauchsprognose | Vorhergesagter Hausverbrauch der aktuellen Stunde (W), 24h-Forecast als Attribut |
 | Preisprognose | Nächste 12h Strompreise als CSV + Attribute (min/max/avg, slot_minutes) |
-| Solar Korrekturfaktor | Kalibrierungsfaktor für Solarprognosen (1.0 = exakt, <1 = Forecast überschätzt, >1 = unterschätzt) mit Abweichung in % als Attribut |
+| Solar Korrekturfaktor | Kalibrierungsfaktor für Solarprognosen (1.0 = exakt, <1 = Forecast überschätzt, >1 = unterschätzt) mit Intraday-Faktor als Attribut |
+| Optimierungs-Log | Letzte Optimierungsentscheidung als State, vollständiges Log (max 50 Einträge) als Attribut |
 
 ### Schalter
 
@@ -227,23 +234,36 @@ title: Batteriespeicher
 3. **Verbrauch erfassen** – Aktuellen Hausverbrauch für rollende Statistik aufzeichnen
 4. **Preise laden** – 15-Min-Preise via `tibber.get_prices` Action (oder Fallback auf Attribute)
 5. **Solarprognose lesen** – Alle konfigurierten Solar-Sensoren aufsummieren
-6. **Batterieplan erstellen:**
-   - Solar-Budget berechnen und Headroom reservieren
-   - Pre-Solar-Entladung planen wenn nötig (Platz für Solar schaffen)
+6. **Intraday Solar-Korrektur** – Restprognose anhand bisheriger Ist/Forecast-Ratio anpassen
+7. **Batterieplan erstellen (DP):**
    - Effektive Ladekosten pro Slot (Netzpreis × Grid-Anteil)
-   - Arbitrage-Paare bilden (günstigste Ladeslots ↔ teuerste Entladeslots)
-   - Restliche Solar-Stunden als kostenlose Ladeslots markieren
-   - SOC vorwärts simulieren und Aktionen gegen Limits validieren
+   - Dynamic Programming über alle Slots (bis 48h): SOC diskretisiert in 5%-Stufen
+   - Jeder Slot wird mit 4 Optionen bewertet (Laden/Solar/Entladen/Idle)
+   - Zykluskosten und Roundtrip-Effizienz in der Bewertung
+   - Pre-Solar-Entladung (Platz für Solar schaffen)
+   - Optimaler SOC-Pfad mit maximalem Profit extrahiert
 7. **Aktion ausführen** – Ladegeräte/Wechselrichter entsprechend schalten
 
-### Arbitrage-Optimierung
+### Dynamic Programming Optimierung
 
-Der Algorithmus paart die günstigsten Lade-Zeitslots mit den teuersten Entlade-Zeitslots:
+Statt einfachem greedy Pairing nutzt der Algorithmus **Dynamic Programming** (Bellman-Rückwärtsinduktion) über diskretisierte SOC-Stufen (5%-Schritte):
 
-- **Effektive Ladekosten** = Netzanteil × Strompreis (Solar reduziert den Preis)
-- **Minimaler Spread** = 2 ct/kWh (deckt Rundtrip-Verluste)
-- **Headroom-Reservierung** = Kapazität die Solar füllen kann wird nicht per Netz belegt
-- **Geschätzte Ersparnis** wird pro Arbitrage-Paar berechnet
+```
+dp[t][soc] = maximaler Profit erreichbar ab Zeitpunkt t mit Ladezustand soc
+```
+
+Für jeden Slot werden vier Optionen bewertet:
+- **Idle**: Nichts tun (kein Gewinn/Verlust)
+- **Laden**: Netzstrom kaufen (Kosten = effektiver Preis × kWh + Zykluskosten)
+- **Solar-Laden**: Solarüberschuss nutzen (nur halbe Zykluskosten, kein Strompreis)
+- **Entladen**: Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − Zykluskosten)
+
+**Vorteile gegenüber greedy:**
+- Findet das **globale Optimum** über alle Zeitslots
+- Berücksichtigt **SOC-Limits** in der Bewertung (statt nachträglicher Korrektur)
+- Integriert **Effizienz und Zykluskosten** direkt in die Bewertung
+- Optimiert automatisch über **48h** wenn morgen-Preise verfügbar sind
+- Bei 96 Slots (24h × 15min) × 19 SOC-Stufen = ~1800 Zustände (< 1ms Rechenzeit)
 
 ### Solar-Laden (AC-gekoppelt)
 
@@ -285,22 +305,28 @@ Der konfigurierte Hausverbrauch (z.B. 500W) dient nur als Startwert. Die Integra
 
 - **Erfassung** alle 30 Sekunden, Durchschnitt beim Stundenwechsel gespeichert
 - **14-Tage rollender Durchschnitt** pro Tagesstunde (0-23)
-- **Persistent** (überlebt Neustarts)
+- **Wochentag/Wochenende getrennt** – Mo-Fr und Sa-So haben eigene Profile
+- **48h-fähig** – Morgen-Slots nutzen das passende Profil (z.B. Samstag-Daten für Samstag-Plan)
+- **Persistent** (überlebt Neustarts, automatische Migration von v1-Format)
 - **Charger/Inverter herausgerechnet** → reiner Hausverbrauch
-- Beispiel: 200W nachts, 400W morgens, 800W abends
+- Beispiel: Wochentags 200W nachts, 400W morgens, 800W abends; Wochenende gleichmäßiger
 
 ### Solar-Prognose-Kalibrierung
 
-Wenn der "Solar-Energie heute" Sensor konfiguriert ist, lernt die Integration aus der täglichen Abweichung:
+Wenn der "Solar-Energie heute" Sensor konfiguriert ist, lernt die Integration auf zwei Ebenen:
 
-- **Täglich um 20:00:** Vergleich Ist-Produktion vs. Forecast
-- **Ratio:** `Ist / Forecast` (z.B. 8kWh / 10kWh = 0.8)
-- **14-Tage rollender Durchschnitt** der Ratios = Korrekturfaktor
-- **Anwendung:** Alle zukünftigen Prognose-Werte × Faktor
-- **Bereich:** 0.3–3.0 (verhindert extreme Ausreißer)
-- **Persistent** gespeichert
+**Tägliche Kalibrierung (um 20:00):**
+- Vergleich Ist-Produktion vs. Forecast → Ratio (z.B. 8kWh / 10kWh = 0.8)
+- 14-Tage rollender Durchschnitt der Ratios = Korrekturfaktor
+- Bereich: 0.3–3.0, persistent gespeichert
 
-Beispiel: Forecast überschätzt systematisch um 20% → Faktor wird 0.8 → realistischere Planung.
+**Intraday-Korrektur (ab 08:00, laufend):**
+- Vergleicht die bisherige Ist-Produktion mit dem bisherigen Forecast
+- Wenn um 11:00 erst 30% statt 50% des Forecasts produziert → Restprognose × 0.6
+- Reagiert sofort auf Wetterumschwünge (z.B. plötzliche Bewölkung)
+- Sensor-Attribut `intraday_factor` zeigt den aktuellen Tagesfaktor
+
+Beispiel: Forecast sagt 10 kWh, um 12:00 erst 2 kWh statt 4 kWh → Restprognose wird halbiert → Nachmittags-Planung realistischer.
 
 ### Strategien
 

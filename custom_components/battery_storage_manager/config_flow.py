@@ -10,6 +10,8 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_CYCLE_COST,
+    CONF_BATTERY_EFFICIENCY,
     CONF_BATTERY_SOC_ENTITY,
     CONF_CHARGER_ENTITIES,
     CONF_CHARGER_POWER_DEFAULT,
@@ -32,6 +34,8 @@ from .const import (
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
     CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
+    DEFAULT_BATTERY_CYCLE_COST,
+    DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_HOUSE_CONSUMPTION_W,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
@@ -139,6 +143,20 @@ STEP_BATTERY_SCHEMA = vol.Schema(
         ): selector.NumberSelector(
             selector.NumberSelectorConfig(
                 min=100, max=5000, step=50, unit_of_measurement="W"
+            )
+        ),
+        vol.Optional(
+            CONF_BATTERY_CYCLE_COST, default=DEFAULT_BATTERY_CYCLE_COST
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=50, step=0.5, unit_of_measurement="ct/kWh"
+            )
+        ),
+        vol.Optional(
+            CONF_BATTERY_EFFICIENCY, default=DEFAULT_BATTERY_EFFICIENCY
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=50, max=100, step=1, unit_of_measurement="%"
             )
         ),
     }
@@ -449,6 +467,26 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=100, max=5000, step=50, unit_of_measurement="W"
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_BATTERY_CYCLE_COST,
+                        default=self._current(
+                            CONF_BATTERY_CYCLE_COST, DEFAULT_BATTERY_CYCLE_COST
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=50, step=0.5, unit_of_measurement="ct/kWh"
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_BATTERY_EFFICIENCY,
+                        default=self._current(
+                            CONF_BATTERY_EFFICIENCY, DEFAULT_BATTERY_EFFICIENCY
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=50, max=100, step=1, unit_of_measurement="%"
                         )
                     ),
                 }

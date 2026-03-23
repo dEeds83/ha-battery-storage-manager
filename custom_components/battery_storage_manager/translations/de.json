@@ -37,7 +37,9 @@
           "max_soc": "Maximaler Ladestand (%)",
           "price_low_threshold": "Preisschwelle niedrig (ct/kWh) - darunter wird geladen",
           "price_high_threshold": "Preisschwelle hoch (ct/kWh) - darüber wird entladen",
-          "house_consumption_w": "Durchschnittlicher Hausverbrauch (W) - wird für Planung verwendet"
+          "house_consumption_w": "Durchschnittlicher Hausverbrauch (W) - wird für Planung verwendet",
+          "battery_cycle_cost": "Batterie-Zykluskosten (ct/kWh) - Degradationskosten pro Lade-/Entladezyklus",
+          "battery_efficiency": "Batterie Roundtrip-Effizienz (%)"
         }
       }
     }
@@ -80,7 +82,9 @@
           "max_soc": "Maximaler Ladestand (%)",
           "price_low_threshold": "Preisschwelle niedrig (ct/kWh)",
           "price_high_threshold": "Preisschwelle hoch (ct/kWh)",
-          "house_consumption_w": "Durchschnittlicher Hausverbrauch (W)"
+          "house_consumption_w": "Durchschnittlicher Hausverbrauch (W)",
+          "battery_cycle_cost": "Batterie-Zykluskosten (ct/kWh)",
+          "battery_efficiency": "Batterie Roundtrip-Effizienz (%)"
         }
       }
     }

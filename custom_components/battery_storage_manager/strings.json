@@ -37,7 +37,9 @@
           "max_soc": "Maximum SOC (%)",
           "price_low_threshold": "Low price threshold (ct/kWh) - charge below this",
           "price_high_threshold": "High price threshold (ct/kWh) - discharge above this",
-          "house_consumption_w": "Average house consumption (W) - used for planning"
+          "house_consumption_w": "Average house consumption (W) - used for planning",
+          "battery_cycle_cost": "Battery cycle cost (ct/kWh) - degradation cost per charge/discharge",
+          "battery_efficiency": "Battery round-trip efficiency (%)"
         }
       }
     }
@@ -80,7 +82,9 @@
           "max_soc": "Maximum SOC (%)",
           "price_low_threshold": "Low price threshold (ct/kWh)",
           "price_high_threshold": "High price threshold (ct/kWh)",
-          "house_consumption_w": "Average house consumption (W)"
+          "house_consumption_w": "Average house consumption (W)",
+          "battery_cycle_cost": "Battery cycle cost (ct/kWh)",
+          "battery_efficiency": "Battery round-trip efficiency (%)"
         }
       }
     }

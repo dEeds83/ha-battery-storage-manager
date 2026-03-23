@@ -42,6 +42,7 @@ async def async_setup_entry(
         ConsumptionForecastSensor(coordinator, entry),
         PriceForecastSensor(coordinator, entry),
         SolarCalibrationFactorSensor(coordinator, entry),
+        OptimizationLogSensor(coordinator, entry),
     ]
 
     # Dynamic charger status sensors
@@ -598,7 +599,40 @@ class SolarCalibrationFactorSensor(BatteryStorageBaseSensor):
         if not self.coordinator.data:
             return {}
         factor = self.coordinator.data.get("solar_calibration_factor", 1.0)
+        intraday = self.coordinator.data.get("intraday_solar_factor", 1.0)
         return {
             "description": f"Forecast × {factor:.2f} = calibrated value",
             "deviation_percent": round((factor - 1.0) * 100, 1),
+            "intraday_factor": round(intraday, 3),
+            "intraday_deviation_percent": round((intraday - 1.0) * 100, 1),
+        }
+
+
+class OptimizationLogSensor(BatteryStorageBaseSensor):
+    """Sensor exposing the optimization decision log for UI access."""
+
+    _attr_icon = "mdi:text-box-search"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "optimization_log", "Optimierungs-Log"
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        if not self.coordinator.data:
+            return None
+        log = self.coordinator.data.get("optimization_log", [])
+        return log[-1] if log else "Keine Einträge"
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        log = self.coordinator.data.get("optimization_log", [])
+        return {
+            "entries": log,
+            "count": len(log),
+            "efficiency_percent": self.coordinator.data.get("battery_efficiency"),
+            "cycle_cost_ct": self.coordinator.data.get("cycle_cost_ct"),
         }
