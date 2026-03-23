@@ -41,6 +41,7 @@ async def async_setup_entry(
         ExpectedSolarSensor(coordinator, entry),
         ConsumptionForecastSensor(coordinator, entry),
         PriceForecastSensor(coordinator, entry),
+        SolarCalibrationFactorSensor(coordinator, entry),
     ]
 
     # Dynamic charger status sensors
@@ -570,4 +571,34 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
             "min_price": round(min(all_prices), 4) if all_prices else None,
             "max_price": round(max(all_prices), 4) if all_prices else None,
             "avg_price": round(sum(all_prices) / len(all_prices), 4) if all_prices else None,
+        }
+
+
+class SolarCalibrationFactorSensor(BatteryStorageBaseSensor):
+    """Sensor showing the solar forecast calibration/correction factor."""
+
+    _attr_icon = "mdi:solar-power-variant-outline"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "solar_calibration_factor", "Solar Korrekturfaktor"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("solar_calibration_factor")
+            if val is not None:
+                return round(val, 3)
+        return None
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        factor = self.coordinator.data.get("solar_calibration_factor", 1.0)
+        return {
+            "description": f"Forecast × {factor:.2f} = calibrated value",
+            "deviation_percent": round((factor - 1.0) * 100, 1),
         }

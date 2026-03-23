@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.0.3-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -143,6 +143,7 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Erwartete Solarproduktion | Verbleibende erwartete Solarproduktion heute in kWh |
 | Verbrauchsprognose | Vorhergesagter Hausverbrauch der aktuellen Stunde (W), 24h-Forecast als Attribut |
 | Preisprognose | Nächste 12h Strompreise als CSV + Attribute (min/max/avg, slot_minutes) |
+| Solar Korrekturfaktor | Kalibrierungsfaktor für Solarprognosen (1.0 = exakt, <1 = Forecast überschätzt, >1 = unterschätzt) mit Abweichung in % als Attribut |
 
 ### Schalter
 
