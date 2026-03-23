@@ -155,6 +155,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Optimization log (recent decisions for UI)
         self._optimization_log: list[str] = []
         self._max_log_entries = 50
+        self._last_dp_signature: str = ""  # to avoid re-logging identical plans
 
         # State
         self._strategy = STRATEGY_PRICE_OPTIMIZED
@@ -545,10 +546,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         }
         self._expected_solar_kwh = sum(remaining.values()) / 1000
 
-        if abs(intraday_ratio - 1.0) > 0.1:
+        # Only log when factor changes significantly (>5% shift)
+        if (abs(intraday_ratio - 1.0) > 0.1
+                and abs(intraday_ratio - self._intraday_solar_factor) > 0.05):
             msg = (
                 f"Intraday Solar-Korrektur: Ist={actual_so_far_kwh:.1f} kWh, "
-                f"Forecast bisher={forecast_so_far_kwh:.1f} kWh → "
+                f"Forecast bisher={forecast_so_far_kwh:.1f} kWh \u2192 "
                 f"Faktor {intraday_ratio:.2f}, Rest={self._expected_solar_kwh:.1f} kWh"
             )
             _LOGGER.info(msg)
@@ -1347,19 +1350,24 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
             current_si = soc_to_idx(new_soc)
 
-        # Log DP result
+        # Log DP result (only when plan changes)
         total_profit = dp[0][start_si]
         charge_slots = sum(1 for a in actions if a == "charge")
         discharge_slots = sum(1 for a in actions if a == "discharge")
         solar_slots = sum(1 for a in actions if a == "solar_charge")
-        dp_msg = (
-            f"DP-Optimierung: {charge_slots} Lade, {discharge_slots} Entlade, "
-            f"{solar_slots} Solar Slots → Profit {total_profit:.3f} EUR "
-            f"(Effizienz {self._battery_efficiency*100:.0f}%, "
-            f"Zykluskosten {self._cycle_cost:.0f} ct/kWh)"
-        )
-        _LOGGER.info(dp_msg)
-        self._log_optimization(dp_msg)
+        dp_signature = f"{charge_slots}:{discharge_slots}:{solar_slots}:{total_profit:.2f}"
+
+        if dp_signature != self._last_dp_signature:
+            profit_str = f"{total_profit:.3f}".replace(".", ",")
+            dp_msg = (
+                f"DP-Optimierung: {charge_slots} Lade, {discharge_slots} Entlade, "
+                f"{solar_slots} Solar Slots \u2192 Profit {profit_str} EUR "
+                f"(Effizienz {self._battery_efficiency*100:.0f}%, "
+                f"Zykluskosten {self._cycle_cost:.0f} ct/kWh)"
+            )
+            _LOGGER.info(dp_msg)
+            self._log_optimization(dp_msg)
+            self._last_dp_signature = dp_signature
 
         # ── Pre-solar discharge enhancement ──────────────────────
         # DP handles this implicitly, but we track pre-solar slots for reasons
@@ -1456,7 +1464,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         if solar_count:
             parts.append(f"{_fmt_duration(solar_count)} Solar")
         if charge_count:
-            parts.append(f"{_fmt_duration(charge_count)} Laden ({grid_charge_kwh:.1f} kWh)")
+            parts.append(f"{_fmt_duration(charge_count)} Laden ({self._fmt_ct(grid_charge_kwh)} kWh)")
         if discharge_count:
             parts.append(f"{_fmt_duration(discharge_count)} Entladen")
         self._plan_summary = " | ".join(parts) if parts else "Kein Plan erstellt"
@@ -1473,6 +1481,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             efficiency * 100,
         )
 
+    @staticmethod
+    def _fmt_ct(value: float) -> str:
+        """Format a ct/kWh value with German decimal comma."""
+        return f"{value:.1f}".replace(".", ",")
+
     def _build_plan_reason(
         self,
         action: str,
@@ -1483,23 +1496,23 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         actions: list[str],
     ) -> str:
         """Build a human-readable reason for a plan action."""
+        fc = self._fmt_ct
         eff_pct = f", η={self._battery_efficiency*100:.0f}%" if self._battery_efficiency < 0.99 else ""
-        cycle_info = f", Zyklus {self._cycle_cost:.0f}ct" if self._cycle_cost > 0 else ""
+        cycle_info = f", Zyklus {fc(self._cycle_cost)}ct" if self._cycle_cost > 0 else ""
 
         if action == "charge" and h["solar_surplus_kwh"] > 0.05:
             grid_pct = round(h["grid_fraction"] * 100)
             return (
-                f"Solar+Netz ({grid_pct}% Netz à {h['price']*100:.1f} ct "
-                f"→ eff. {h['effective_charge_cost']*100:.1f} ct/kWh{cycle_info})"
+                f"Solar+Netz ({grid_pct}% Netz à {fc(h['price']*100)} ct "
+                f"\u2192 eff. {fc(h['effective_charge_cost']*100)} ct/kWh{cycle_info})"
             )
         if action == "charge":
-            return f"Netz-Laden ({h['price']*100:.1f} ct/kWh{cycle_info})"
+            return f"Netz-Laden ({fc(h['price']*100)} ct/kWh{cycle_info})"
         if action == "solar_charge":
-            return f"Solar {h['solar_surplus_kwh']:.1f} kWh (kostenlos)"
+            return f"Solar {fc(h['solar_surplus_kwh'])} kWh (kostenlos)"
         if action == "discharge":
             if slot_idx in presolar_set:
-                return f"Platz für Solar schaffen ({h['price']*100:.1f} ct/kWh)"
-            # Find a nearby charge slot for spread context
+                return f"Platz für Solar schaffen ({fc(h['price']*100)} ct/kWh)"
             nearby_charge = None
             for j in range(len(actions)):
                 if actions[j] == "charge" and j != slot_idx:
@@ -1509,10 +1522,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 spread = (h["price"] - nearby_charge["effective_charge_cost"]) * 100
                 net_spread = spread - self._cycle_cost * (2 - self._battery_efficiency)
                 return (
-                    f"Entladen ({h['price']*100:.1f} ct, "
-                    f"Spread {spread:.0f} ct, netto {net_spread:.0f} ct{eff_pct})"
+                    f"Entladen ({fc(h['price']*100)} ct, "
+                    f"Spread {fc(spread)} ct, netto {fc(net_spread)} ct{eff_pct})"
                 )
-            return f"Entladen ({h['price']*100:.1f} ct/kWh{eff_pct})"
+            return f"Entladen ({fc(h['price']*100)} ct/kWh{eff_pct})"
         if action == "hold":
             return "Halten für teure Stunden"
         return "Keine Aktion"
