@@ -1284,26 +1284,30 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     best_val = val
                     best_act = "idle"
 
+                # Cycle cost split: half on charge, half on discharge
+                # so configured value = total cost per full cycle (charge+discharge)
+                half_cycle_eur = cycle_cost_eur / 2
+
                 # Option 2: charge (grid)
                 if soc < self._max_soc and charge_kwh_slot > 0:
                     delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
                     new_soc = soc + delta / cap * 100
                     new_si = soc_to_idx(new_soc)
                     if new_si > si:  # must actually increase SOC level
-                        cost = delta * grid_frac * price + delta * cycle_cost_eur
+                        cost = delta * grid_frac * price + delta * half_cycle_eur
                         val = -cost + dp[t + 1][new_si]
                         if val > best_val:
                             best_val = val
                             best_act = "charge"
 
-                # Option 3: solar_charge (free, but still has cycle cost)
+                # Option 3: solar_charge (free, only half-cycle degradation)
                 if solar_surplus > 0.05 and soc < self._max_soc:
                     delta = min(solar_surplus, charge_kwh_slot,
                                 (self._max_soc - soc) / 100 * cap)
                     new_soc = soc + delta / cap * 100
                     new_si = soc_to_idx(new_soc)
                     if new_si > si:  # must actually increase SOC level
-                        cost = delta * cycle_cost_eur * 0.5
+                        cost = delta * half_cycle_eur * 0.5  # quarter cycle (free energy)
                         val = -cost + dp[t + 1][new_si]
                         if val > best_val:
                             best_val = val
@@ -1316,7 +1320,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     new_soc = soc - delta / cap * 100
                     new_si = soc_to_idx(new_soc)
                     if new_si < si:  # must actually decrease SOC level
-                        revenue = delivered * price - delta * cycle_cost_eur
+                        revenue = delivered * price - delta * half_cycle_eur
                         val = revenue + dp[t + 1][new_si]
                         if val > best_val:
                             best_val = val
@@ -1520,7 +1524,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     break
             if nearby_charge:
                 spread = (h["price"] - nearby_charge["effective_charge_cost"]) * 100
-                net_spread = spread - self._cycle_cost * (2 - self._battery_efficiency)
+                eff_loss = nearby_charge["effective_charge_cost"] * 100 * (1 - self._battery_efficiency)
+                net_spread = spread - self._cycle_cost - eff_loss
                 return (
                     f"Entladen ({fc(h['price']*100)} ct, "
                     f"Spread {fc(spread)} ct, netto {fc(net_spread)} ct{eff_pct})"
