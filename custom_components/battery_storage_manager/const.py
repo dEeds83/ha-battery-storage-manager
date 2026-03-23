@@ -43,7 +43,7 @@ DEFAULT_PRICE_HIGH_THRESHOLD = 30.0  # ct/kWh
 DEFAULT_SCAN_INTERVAL = 15  # seconds
 CONSUMPTION_STATS_ROLLING_DAYS = 14  # days of history per hour slot
 STORAGE_KEY_CONSUMPTION = "consumption_stats"
-STORAGE_VERSION_CONSUMPTION = 2  # v2: weekday/weekend split
+STORAGE_VERSION_CONSUMPTION = 1  # format migration handled in _load_consumption_stats
 
 # Operating modes
 MODE_IDLE = "idle"
