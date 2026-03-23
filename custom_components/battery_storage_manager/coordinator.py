@@ -944,9 +944,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
     async def _extend_prices_with_epex(self) -> None:
         """Extend Tibber price forecast with EPEX Predictor data.
 
-        Fetches EPEX spot price predictions, calculates a scaling factor
-        from the overlap with Tibber prices, and appends scaled predictions
-        for hours beyond Tibber's window.
+        Uses linear regression on the overlap between Tibber and EPEX to
+        derive the fixed and variable cost components:
+
+            Tibber = a + b × EPEX
+
+        Where a ≈ grid fees + taxes + margin (fixed ct/kWh) and
+        b ≈ 1 + VAT rate (variable multiplier).
+
+        A simple multiplicative factor would fail for negative EPEX prices
+        (grid fees don't become negative just because the spot price does).
         """
         if not self._epex_enabled or not self._price_forecast:
             return
@@ -974,7 +981,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         if tibber_end is None:
             return
 
-        # Build lookup of Tibber prices by hour key for overlap calculation
+        # Build lookup of Tibber prices by hour key
         tibber_by_hour: dict[str, list[float]] = {}
         for p in self._price_forecast:
             try:
@@ -996,7 +1003,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     start = dt_util.as_local(start)
                 hk = start.strftime("%Y-%m-%dT%H")
                 epex_by_hour.setdefault(hk, []).append(p["total"])
-                # Collect EPEX entries beyond Tibber window
                 if start > tibber_end:
                     epex_future.append(p)
             except (ValueError, TypeError):
@@ -1006,38 +1012,66 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("EPEX: no data beyond Tibber window")
             return
 
-        # Calculate markup from overlapping hours
-        # markup = average(tibber_price / epex_price) for overlapping hours
-        ratios = []
+        # Collect overlapping (EPEX, Tibber) price pairs for regression
+        pairs: list[tuple[float, float]] = []  # (epex, tibber)
         for hk in tibber_by_hour:
             if hk in epex_by_hour:
                 t_avg = sum(tibber_by_hour[hk]) / len(tibber_by_hour[hk])
                 e_avg = sum(epex_by_hour[hk]) / len(epex_by_hour[hk])
-                if e_avg > 0.001:  # avoid division by zero
-                    ratios.append(t_avg / e_avg)
+                pairs.append((e_avg, t_avg))
 
-        if not ratios:
-            _LOGGER.debug("EPEX: no overlapping hours for markup calculation")
+        if len(pairs) < 3:
+            _LOGGER.debug(
+                "EPEX: only %d overlapping hours, need at least 3 for regression",
+                len(pairs),
+            )
             return
 
-        self._epex_markup = sum(ratios) / len(ratios)
+        # Linear regression: Tibber = a + b × EPEX
+        # Using least squares: b = Σ((x-x̄)(y-ȳ)) / Σ((x-x̄)²), a = ȳ - b×x̄
+        n = len(pairs)
+        x_vals = [p[0] for p in pairs]
+        y_vals = [p[1] for p in pairs]
+        x_mean = sum(x_vals) / n
+        y_mean = sum(y_vals) / n
 
-        # Append scaled EPEX predictions to price forecast
+        num = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_vals, y_vals))
+        den = sum((x - x_mean) ** 2 for x in x_vals)
+
+        if abs(den) < 1e-10:
+            # All EPEX prices identical → can't determine slope, use offset only
+            b = 1.0
+            a = y_mean - x_mean
+        else:
+            b = num / den
+            a = y_mean - b * x_mean
+
+        # Sanity: b should be positive (typically 1.0-1.25 with VAT)
+        # a should be positive (grid fees + taxes, typically 0.10-0.20 EUR/kWh)
+        b = max(0.5, min(3.0, b))
+        a = max(-0.05, min(0.50, a))
+
+        self._epex_markup = {"a": round(a, 4), "b": round(b, 4)}
+
+        # Append scaled EPEX predictions: predicted_tibber = a + b × epex_price
         added = 0
         existing_starts = {p["start"] for p in self._price_forecast}
         for p in epex_future:
             if p["start"] not in existing_starts:
+                predicted = a + b * p["total"]
                 self._price_forecast.append({
                     "start": p["start"],
-                    "total": round(p["total"] * self._epex_markup, 4),
+                    "total": round(max(0, predicted), 4),
                 })
                 added += 1
 
         if added > 0:
+            a_ct = a * 100
             msg = (
-                f"EPEX-Prognose: +{added} Slots über Tibber hinaus "
-                f"(Markup {self._epex_markup:.2f}×, "
-                f"{len(ratios)} Überlappungsstunden)"
+                f"EPEX-Prognose: +{added} Slots "
+                f"(Tibber \u2248 {self._fmt_ct(a_ct)} ct + "
+                f"{b:.2f} \u00d7 EPEX, "
+                f"{n} Überlappungsstunden)"
             )
             _LOGGER.info(msg)
             self._log_optimization(msg)

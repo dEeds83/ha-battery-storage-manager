@@ -273,12 +273,12 @@ Für jeden Slot werden vier Optionen bewertet:
 Wenn aktiviert, erweitert die Integration das Planungsfenster über Tibber's Day-Ahead-Preise hinaus:
 
 - **Datenquelle:** [EpexPredictor](https://github.com/b3nn0/EpexPredictor) – statistisches Modell basierend auf Wetter- und Lastdaten
-- **Skalierung:** Berechnet automatisch einen Markup-Faktor aus dem Überlappungsbereich Tibber ↔ EPEX (Netzentgelte, Steuern, Tibber-Marge)
-- **Anwendung:** EPEX-Spotpreise × Markup = geschätzte Endkundenpreise für zukünftige Stunden
+- **Lineare Regression:** Berechnet `Tibber ≈ a + b × EPEX` aus dem Überlappungsbereich, wobei `a` = Fixkosten (Netzentgelte, Steuern, Marge) und `b` = variabler Faktor (inkl. MwSt)
+- **Anwendung:** Geschätzter Preis = Fixkosten + Faktor × EPEX-Spot (auch bei negativen Spotpreisen korrekt)
 - **Caching:** Alle 30 Minuten aktualisiert, bis 96h Vorhersage
 - **Regionen:** DE (Standard), AT, BE, NL, SE1-4, DK1-2
 
-**Beispiel:** Tibber liefert Preise bis morgen 23:45. EPEX Predictor ergänzt Übermorgen und Danach. Der Markup-Faktor gleicht den Unterschied zwischen Spotmarkt und Endkundenpreis aus (z.B. EPEX 5ct → Tibber 25ct → Faktor 5,0×).
+**Beispiel:** Tibber liefert Preise bis morgen 23:45. Aus der Überlappung ergibt sich: `a = 0,18 EUR` (Fixkosten) + `b = 1,19` (MwSt). EPEX-Spot von 0,05 EUR → geschätzter Tibber-Preis = 0,18 + 1,19 × 0,05 = 0,24 EUR. Auch bei negativem EPEX-Spot von −0,02 EUR → 0,18 + 1,19 × (−0,02) = 0,156 EUR (bleibt positiv dank Fixkosten).
 
 ### Solar-Laden (AC-gekoppelt)
 
