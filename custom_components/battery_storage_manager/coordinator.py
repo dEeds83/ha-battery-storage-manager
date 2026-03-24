@@ -1525,7 +1525,14 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 # so configured value = total cost per full cycle (charge+discharge)
                 half_cycle_eur = cycle_cost_eur / 2
 
-                # Option 2: charge (grid)
+                # Option 2: charge at full charger power
+                # Solar reduces the effective cost via grid_fraction (already
+                # computed per slot). No separate solar_charge option in the DP
+                # because: (a) solar forecasts are unreliable, (b) planning
+                # grid charge at cheap prices is conservative – if solar delivers
+                # more than predicted, it automatically reduces grid draw at
+                # runtime, and (c) _try_solar_opportunistic captures free solar
+                # during idle/hold slots regardless.
                 if soc < self._max_soc and charge_kwh_slot > 0:
                     delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
                     new_soc = soc + delta / cap * 100
@@ -1537,20 +1544,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                             best_val = val
                             best_act = "charge"
 
-                # Option 3: solar_charge (free, only half-cycle degradation)
-                if solar_surplus > 0.05 and soc < self._max_soc:
-                    delta = min(solar_surplus, charge_kwh_slot,
-                                (self._max_soc - soc) / 100 * cap)
-                    new_soc = soc + delta / cap * 100
-                    new_si = soc_to_idx(new_soc)
-                    if new_si > si:  # must actually increase SOC level
-                        cost = delta * half_cycle_eur * 0.5  # quarter cycle (free energy)
-                        val = -cost + dp[t + 1][new_si]
-                        if val > best_val:
-                            best_val = val
-                            best_act = "solar_charge"
-
-                # Option 4: discharge
+                # Option 3: discharge
                 if soc > self._min_soc and discharge_kwh_slot > 0:
                     delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
                     delivered = delta * efficiency
@@ -1579,10 +1573,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             if act == "charge":
                 delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
                 new_soc = soc + delta / cap * 100
-            elif act == "solar_charge":
-                delta = min(h["solar_surplus_kwh"], charge_kwh_slot,
-                            (self._max_soc - soc) / 100 * cap)
-                new_soc = soc + delta / cap * 100
             elif act == "discharge":
                 delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
                 new_soc = soc - delta / cap * 100
@@ -1595,14 +1585,19 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         total_profit = dp[0][start_si]
         charge_slots = sum(1 for a in actions if a == "charge")
         discharge_slots = sum(1 for a in actions if a == "discharge")
-        solar_slots = sum(1 for a in actions if a == "solar_charge")
-        dp_signature = f"{charge_slots}:{discharge_slots}:{solar_slots}:{total_profit:.2f}"
+        dp_signature = f"{charge_slots}:{discharge_slots}:{total_profit:.2f}"
 
         if dp_signature != self._last_dp_signature:
             profit_str = f"{total_profit:.3f}".replace(".", ",")
+            # Count how many charge slots have solar contribution
+            solar_assisted = sum(
+                1 for i, a in enumerate(actions)
+                if a == "charge" and hourly_data[i]["solar_surplus_kwh"] > 0.05
+            )
+            solar_info = f", davon {solar_assisted} mit Solar" if solar_assisted else ""
             dp_msg = (
-                f"DP-Optimierung: {charge_slots} Lade, {discharge_slots} Entlade, "
-                f"{solar_slots} Solar Slots \u2192 Profit {profit_str} EUR "
+                f"DP-Optimierung: {charge_slots} Lade{solar_info}, "
+                f"{discharge_slots} Entlade Slots \u2192 Profit {profit_str} EUR "
                 f"(Effizienz {self._battery_efficiency*100:.0f}%, "
                 f"Zykluskosten {self._cycle_cost:.0f} ct/kWh)"
             )
@@ -1628,6 +1623,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     presolar_discharge_hours.add(i)
 
         # ── Build plan with SOC simulation and reasons ───────────
+        # The DP only outputs "charge", "discharge", "idle".
+        # For display, we relabel charge slots with significant solar
+        # as "solar_charge" so the UI can show them differently.
         self._battery_plan = []
         estimated_soc = current_soc
         charge_count = 0
@@ -1639,18 +1637,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             action = actions[i]
             delta_kwh = 0.0
 
-            if action == "solar_charge":
-                delta_kwh = min(h["solar_surplus_kwh"], charge_kwh_slot)
-                if estimated_soc + delta_kwh / cap * 100 > self._max_soc:
-                    delta_kwh = max(0, (self._max_soc - estimated_soc) / 100 * cap)
-                    if delta_kwh < 0.05:
-                        action = "idle"
-            elif action == "charge":
+            if action == "charge":
                 if estimated_soc >= self._max_soc:
                     action = "idle"
                 else:
                     delta_kwh = min(charge_kwh_slot, (self._max_soc - estimated_soc) / 100 * cap)
                     grid_charge_kwh += delta_kwh * h["grid_fraction"]
+                    # Relabel for display: if solar covers >80% → show as solar_charge
+                    if h["grid_fraction"] < 0.2 and h["solar_surplus_kwh"] > 0.05:
+                        action = "solar_charge"
             elif action == "discharge":
                 if estimated_soc <= self._min_soc:
                     action = "idle"
