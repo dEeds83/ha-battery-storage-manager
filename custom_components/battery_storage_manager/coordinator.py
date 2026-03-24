@@ -1985,16 +1985,20 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         start_stored_kwh = (current_soc - self._min_soc) / 100 * cap
         profit = dp[0][soc_to_idx(current_soc)] - start_stored_kwh * tv_per_kwh
 
-        # Full forward pass dump (one log per DP call, ~3 calls per cycle)
-        header = (
-            f"DP DUMP: n={n} soc_step={soc_step:.1f} num_soc={num_soc} "
-            f"start_soc={current_soc:.1f}% si={start_si} "
-            f"charge_kwh={charge_kwh_slot:.3f} discharge_kwh={discharge_kwh_slot:.3f} "
-            f"cap={cap:.1f} eff={efficiency:.2f} cycle={cycle_cost_eur:.4f} "
-            f"tv={tv_per_kwh:.4f} profit={profit:.4f}"
-        )
-        body = "\n".join(_fwd_rows)
-        _LOGGER.warning("%s\n%s", header, body)
+        # Full forward pass dump — only log when plan changes
+        action_sig = "".join(a[0] for a in actions)  # e.g. "cccdddiiihhh..."
+        prev_sig = getattr(self, "_dp_dump_last_sig", "")
+        if action_sig != prev_sig:
+            self._dp_dump_last_sig = action_sig
+            header = (
+                f"DP DUMP: n={n} soc_step={soc_step:.1f} num_soc={num_soc} "
+                f"start_soc={current_soc:.1f}% si={start_si} "
+                f"charge_kwh={charge_kwh_slot:.3f} discharge_kwh={discharge_kwh_slot:.3f} "
+                f"cap={cap:.1f} eff={efficiency:.2f} cycle={cycle_cost_eur:.4f} "
+                f"tv={tv_per_kwh:.4f} profit={profit:.4f}"
+            )
+            body = "\n".join(_fwd_rows)
+            _LOGGER.warning("%s\n%s", header, body)
 
         return actions, profit
 
