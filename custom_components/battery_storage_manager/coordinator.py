@@ -1577,25 +1577,18 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         #         spread is below the break-even threshold.
         smoothed = 0
 
-        # Pass 1: Minimum run length for charge/discharge
-        min_run = 1  # 1 slot = 15 min, physically feasible for chargers
-        i = 0
-        while i < n:
+        # Pass 1: Remove single-slot charge/discharge enclaves.
+        # A single charge or discharge slot surrounded by idle/hold is
+        # almost always a DP artifact from SOC quantization near limits.
+        # But single slots at the START or END of a block are fine.
+        for i in range(1, n - 1):
             act = actions[i]
             if act in ("charge", "discharge"):
-                # Find run length
-                j = i + 1
-                while j < n and actions[j] == act:
-                    j += 1
-                run_len = j - i
-                if run_len < min_run:
-                    # Short run → convert to idle
-                    for k in range(i, j):
-                        actions[k] = "idle"
-                    smoothed += run_len
-                i = j
-            else:
-                i += 1
+                prev_same = (actions[i - 1] == act)
+                next_same = (actions[i + 1] == act)
+                if not prev_same and not next_same:
+                    actions[i] = "idle"
+                    smoothed += 1
 
         # Pass 2: Remove rapid charge↔discharge alternation
         # If charge is immediately followed by discharge (or vice versa)
