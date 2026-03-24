@@ -1,15 +1,29 @@
 # Battery Storage Manager – ePaper Dashboard (Deep Sleep)
 # For: Seeed Studio XIAO 7.5" ePaper Panel (800x480, ESP32-C3)
 #
-# Cycle: Wake → WiFi → fetch HA data → render display → deep sleep (30 min)
+# Cycle: Wake → WiFi → fetch HA data → render display → deep sleep
 # Power: ~10mA during wake (~15s), ~10µA during sleep
-# Battery life: ~6+ months with 2000mAh battery at 30min interval
 #
-# Setup:
-#   1. Copy this file to your ESPHome config directory
-#   2. Create/update secrets.yaml with wifi_ssid, wifi_password, api_key, ota_password
-#   3. Adjust entity IDs below to match your Battery Storage Manager instance
-#   4. Flash via ESPHome dashboard (first flash via USB, then OTA during wake window)
+# Multi-device setup:
+#   1. Copy this file as template (e.g. kitchen-epaper.yaml)
+#   2. Change substitutions (device_name, friendly_name)
+#   3. Add per-device secrets to secrets.yaml:
+#
+#   # secrets.yaml
+#   wifi_ssid: "MyWiFi"
+#   wifi_password: "MyPassword"
+#   api_key_kitchen: "abc123..."       # generate with: esphome wizard
+#   ota_pass_kitchen: "mypassword"
+#   api_key_office: "def456..."
+#   ota_pass_office: "otherpassword"
+#
+#   4. In each device YAML, change the api/ota secret references:
+#      api: encryption: key: !secret api_key_kitchen
+#      ota: password: !secret ota_pass_kitchen
+
+substitutions:
+  device_name: battery-epaper
+  friendly_name: "Batterie ePaper Display"
 
 globals:
   - id: night_mode
@@ -18,8 +32,8 @@ globals:
     initial_value: "false"
 
 esphome:
-  name: battery-epaper
-  friendly_name: "Batterie ePaper Display"
+  name: ${device_name}
+  friendly_name: "${friendly_name}"
   on_boot:
     priority: -100
     then:
