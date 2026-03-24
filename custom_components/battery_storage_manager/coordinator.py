@@ -1714,6 +1714,48 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         smoothed += filled
 
+        # Pass 5: Remove isolated mini-charge islands.
+        # If a small charge block (< 4 slots) is separated from the main
+        # charge block by idle/hold slots, convert it to idle. Pass 4 will
+        # have already ensured enough charge slots near the discharge block.
+        # Find all charge blocks
+        charge_blocks = []
+        block_s = None
+        for i in range(n):
+            if actions[i] == "charge":
+                if block_s is None:
+                    block_s = i
+            else:
+                if block_s is not None:
+                    charge_blocks.append((block_s, i - block_s))  # (start, length)
+                    block_s = None
+        if block_s is not None:
+            charge_blocks.append((block_s, n - block_s))
+
+        if len(charge_blocks) > 1:
+            # Find the largest charge block (the "main" one)
+            main_block = max(charge_blocks, key=lambda b: b[1])
+            removed_islands = 0
+            for start, length in charge_blocks:
+                if (start, length) == main_block:
+                    continue
+                if length < 4:
+                    # Check: is this block separated from main by > 2 slots gap?
+                    main_start, main_len = main_block
+                    main_end = main_start + main_len
+                    gap = min(abs(start - main_end), abs(main_start - (start + length)))
+                    if gap > 2:
+                        for j in range(start, start + length):
+                            actions[j] = "idle"
+                            removed_islands += 1
+
+            if removed_islands:
+                smoothed += removed_islands
+                _LOGGER.info(
+                    "Pass 5: removed %d isolated mini-charge slots",
+                    removed_islands,
+                )
+
         if smoothed:
             _LOGGER.info(
                 "Plan smoothing: %d slots adjusted (%d swaps, %d filled)",
