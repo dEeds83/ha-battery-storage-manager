@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git tag:*)",
+      "Bash(git push:*)",
+      "Bash(gh release:*)",
+      "Bash(brew list:*)",
+      "Bash(brew install:*)",
+      "Bash(gh auth:*)",
+      "WebSearch",
+      "WebFetch(domain:www.home-assistant.io)",
+      "WebFetch(domain:community.home-assistant.io)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:www.thecandidstartup.org)",
+      "Bash(gh search:*)",
+      "Bash(git restore:*)",
+      "WebFetch(domain:developers.home-assistant.io)",
+      "WebFetch(domain:gist.github.com)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:wiki.seeedstudio.com)",
+      "WebFetch(domain:smarthomecircle.com)",
+      "Bash(python3 -c \"import secrets, base64; print\\(base64.b64encode\\(secrets.token_bytes\\(32\\)\\).decode\\(\\)\\)\")",
+      "WebFetch(domain:forum.seeedstudio.com)",
+      "WebFetch(domain:www.seeedstudio.com)",
+      "Bash(claude mcp:*)",
+      "Bash(npm search:*)",
+      "Bash(python3 -m py_compile custom_components/battery_storage_manager/coordinator.py)",
+      "Bash(python3 -m py_compile custom_components/battery_storage_manager/sensor.py)",
+      "Bash(python3 -m py_compile custom_components/battery_storage_manager/config_flow.py)",
+      "Bash(python3 -m py_compile custom_components/battery_storage_manager/const.py)",
+      "WebFetch(domain:epexpredictor.batzill.com)"
+    ]
+  }
+}

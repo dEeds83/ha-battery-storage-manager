@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.5.5-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.5.6-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -15,7 +15,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Batterie-Zykluskosten** – Konfigurierbarer Degradationskostenparameter (ct/kWh) verhindert unprofitable Mini-Arbitrage
 - **Roundtrip-Effizienz** – Konfigurierbarer Effizienzfaktor (Standard 90%) in der Entlade-Bewertung
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
-- **Effektive Ladekosten** – Solar reduziert den Netzanteil (z.B. 50% Solar → halber Netzpreis)
+- **Solarbasierte Ladepriorisierung** – DP bevorzugt automatisch Solar-Stunden (niedrige `grid_fraction`) über Nacht-Laden (voller Netzpreis), kein künstlicher Tie-Breaker nötig
 - **3-Pass Smoothing** – Min-Run + Break-Even-Spread + Slot-Swap eliminiert Mikro-Zyklen
 - **Optimierungs-Log** – Alle Entscheidungen (Szenarien, Kalman, Swaps) als Sensor im UI einsehbar
 
@@ -255,11 +255,12 @@ Statt einfachem greedy Pairing nutzt der Algorithmus **Dynamic Programming** (Be
 dp[t][soc] = maximaler Profit erreichbar ab Zeitpunkt t mit Ladezustand soc
 ```
 
-Für jeden Slot werden vier Optionen bewertet:
+Für jeden Slot werden drei Optionen bewertet:
 - **Idle**: Nichts tun (kein Gewinn/Verlust)
-- **Laden**: Netzstrom kaufen (Kosten = effektiver Preis × kWh + Zykluskosten)
-- **Solar-Laden**: Solarüberschuss nutzen (nur halbe Zykluskosten, kein Strompreis)
-- **Entladen**: Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − Zykluskosten)
+- **Laden**: Strom kaufen (Kosten = effektiver Preis × Grid-Anteil × kWh + ½ Zykluskosten). Solar-Überschuss reduziert den Grid-Anteil automatisch → günstigere effektive Kosten bei Sonnenstunden
+- **Entladen**: Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − ½ Zykluskosten)
+
+Zusätzlich wird bei idle/hold zur Laufzeit **opportunistisches Solar-Laden** aktiviert wenn freier Überschuss vorhanden ist.
 
 **Vorteile gegenüber greedy:**
 - Findet das **globale Optimum** über alle Zeitslots
