@@ -1125,25 +1125,18 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 "epex_spot": round(p["total"], 4),
             })
 
-        # Calculate terminal value: expected profit per kWh of stored energy
-        # based on EPEX predicted prices after Tibber window.
-        # Average predicted Tibber price from EPEX
-        predicted_prices = [max(0, a + b * p["total"]) for p in epex_future]
-        avg_future_price = sum(predicted_prices) / len(predicted_prices)
-
-        # Average Tibber charge cost (what it costs to fill the battery now)
-        tibber_prices = [p["total"] for p in self._price_forecast]
-        avg_charge_cost = sum(tibber_prices) / len(tibber_prices) if tibber_prices else 0.20
-
-        # Terminal value = potential profit from having energy stored:
-        # sell at future price × efficiency − cycle cost
-        # Minus: the energy could have been sold during Tibber window already
-        # Net incentive to keep energy = future_price × η − current_avg_price
+        # Calculate terminal value from EPEX predicted future prices.
+        # Same formula as base_tv but with actual prediction data:
+        # TV = median_future × η × uncertainty_discount − half_cycle
+        # This is MORE informed than the base_tv (which uses current Tibber median).
+        predicted_prices = sorted(max(0, a + b * p["total"]) for p in epex_future)
+        median_future = predicted_prices[len(predicted_prices) // 2]
         efficiency = self._battery_efficiency
         half_cycle = self._cycle_cost / 100 / 2
+        uncertainty_discount = 0.8  # EPEX is more reliable than base → less discount
         self._epex_terminal_value_per_kwh = max(
             0.0,
-            avg_future_price * efficiency - half_cycle - avg_charge_cost
+            median_future * efficiency * uncertainty_discount - half_cycle
         )
 
         epex_sig = f"{len(epex_future)}:{a:.4f}:{b:.4f}:{self._epex_terminal_value_per_kwh:.4f}"
@@ -1152,8 +1145,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             tv_ct = self._epex_terminal_value_per_kwh * 100
             msg = (
                 f"EPEX Terminal-Value: {self._fmt_ct(tv_ct)} ct/kWh "
-                f"(Zukunft \u00d8 {self._fmt_ct(avg_future_price * 100)} ct, "
-                f"Tibber \u00d8 {self._fmt_ct(avg_charge_cost * 100)} ct, "
+                f"(Median Zukunft {self._fmt_ct(median_future * 100)} ct, "
+                f"Unsicherheit 20%, "
                 f"Regression: {self._fmt_ct(a * 100)} ct + {b:.2f}\u00d7EPEX)"
             )
             _LOGGER.info(msg)
