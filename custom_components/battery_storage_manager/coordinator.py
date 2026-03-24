@@ -2074,35 +2074,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         start_stored_kwh = (current_soc - self._min_soc) / 100 * cap
         profit = dp[0][soc_to_idx(current_soc)] - start_stored_kwh * tv_per_kwh
 
-        # Debug dump: log full forward pass (only when plan changes)
-        action_sig = "".join(a[0] for a in actions)
-        prev_sig = getattr(self, "_dp_dump_last_sig", "")
-        if action_sig != prev_sig:
-            self._dp_dump_last_sig = action_sig
-            rows = []
-            fwd_si = soc_to_idx(current_soc)
-            for t in range(n):
-                h = hourly_data[t]
-                soc = soc_levels[fwd_si]
-                gf = h.get("_scn_grid_frac", h["grid_fraction"])
-                cl = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
-                hi = min(fwd_si + cl, num_soc - 1)
-                rows.append(
-                    f"t={t} p={h['price']*100:.1f} gf={gf:.2f} "
-                    f"sol={h.get('solar_kwh',0):.3f} soc={soc:.1f}% "
-                    f"act={actions[t]} Δchg={dp[t+1][hi]-dp[t+1][fwd_si]:.4f}"
-                )
-                if actions[t] == "charge":
-                    d = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
-                    fwd_si = soc_to_idx(soc + d / cap * 100)
-                elif actions[t] == "discharge":
-                    d = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
-                    fwd_si = soc_to_idx(soc - d / cap * 100)
-            _LOGGER.warning(
-                "DP DUMP: n=%d step=%.1f soc0=%.1f tv=%.4f profit=%.4f\n%s",
-                n, soc_step, current_soc, tv_per_kwh, profit, "\n".join(rows),
-            )
-
         return actions, profit
 
     def _build_slot_data(self, now: datetime) -> tuple[list[dict], float]:
