@@ -323,16 +323,25 @@ class BatteryPlanCard extends HTMLElement {
       }
     });
 
-    // Render solar as SVG overlay
+    // Render solar as CSS-based line segments (no SVG scaling issues)
     let solarOverlay = "";
     if (showSolar && solarPoints.length > 0) {
-      const polyPoints = solarPoints.map(p => `${p.x},${p.y}`).join(" ");
-      solarOverlay = `<div class="solar-layer">
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:100%;position:absolute;top:0;left:0;overflow:visible">
-          ${solarPoints.length > 1 ? `<polyline points="${polyPoints}" fill="none" stroke="#FFD600" stroke-width="2" vector-effect="non-scaling-stroke"/>` : ""}
-          ${solarPoints.map(p => `<circle cx="${p.x}" cy="${p.y}" r="3" fill="#FFD600" vector-effect="non-scaling-stroke"/>`).join("")}
-        </svg>
-      </div>`;
+      let segments = "";
+      // Draw line segments between consecutive points
+      for (let j = 0; j < solarPoints.length - 1; j++) {
+        const p1 = solarPoints[j];
+        const p2 = solarPoints[j + 1];
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        segments += `<div class="solar-seg" style="left:${p1.x}%;top:${p1.y}%;width:${len}%;transform:rotate(${angle}deg)"></div>`;
+      }
+      // Draw dots at each point
+      for (const p of solarPoints) {
+        segments += `<div class="solar-dot" style="left:${p.x}%;top:${p.y}%"></div>`;
+      }
+      solarOverlay = `<div class="solar-layer">${segments}</div>`;
     }
 
     // Price axis labels
@@ -493,6 +502,20 @@ class BatteryPlanCard extends HTMLElement {
         top: 0; left: 0; right: 0; bottom: 0;
         pointer-events: none;
         overflow: hidden;
+      }
+      .solar-seg {
+        position: absolute;
+        height: 2px;
+        background: #FFD600;
+        transform-origin: 0 50%;
+      }
+      .solar-dot {
+        position: absolute;
+        width: 4px;
+        height: 4px;
+        background: #FFD600;
+        border-radius: 50%;
+        transform: translate(-2px, -2px);
       }
       .now-marker {
         position: absolute;
