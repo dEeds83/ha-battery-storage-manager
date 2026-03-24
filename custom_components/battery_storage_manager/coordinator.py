@@ -1972,11 +1972,32 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         start_si = soc_to_idx(current_soc)
         actions = []
         current_si = start_si
+        fwd_debug_logged = 0
         for t in range(n):
             act = action_dp[t][current_si]
             actions.append(act)
 
             soc = soc_levels[current_si]
+
+            # Debug: log from forward pass perspective at cheap idle slots
+            if (act == "idle" and hourly_data[t]["price"] < 0.20
+                    and soc < self._max_soc - 5 and fwd_debug_logged < 8):
+                cl = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
+                hi_si = min(current_si + cl, num_soc - 1)
+                gf = hourly_data[t].get("_scn_grid_frac", hourly_data[t]["grid_fraction"])
+                d = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
+                cst = d * gf * hourly_data[t]["price"] + d * half_cycle_eur
+                dp_lo = dp[t + 1][current_si]
+                dp_hi = dp[t + 1][hi_si]
+                _LOGGER.warning(
+                    "DP fwd t=%d soc=%.1f si=%d price=%.1f gf=%.2f: "
+                    "idle=%.4f charge=%.4f (dp[%d]=%.4f dp[%d]=%.4f cost=%.4f delta=%.4f)",
+                    t, soc, current_si, hourly_data[t]["price"] * 100, gf,
+                    dp_lo, -cst + dp_hi,
+                    current_si, dp_lo, hi_si, dp_hi, cst, dp_hi - dp_lo,
+                )
+                fwd_debug_logged += 1
+
             if act == "charge":
                 delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
                 new_soc = soc + delta / cap * 100
