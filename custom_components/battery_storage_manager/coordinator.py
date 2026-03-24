@@ -1658,8 +1658,55 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 break
 
         smoothed += swapped
+
+        # Pass 4: Backward shift of charge slots.
+        # Problem: the DP may start charging too early (e.g. midnight)
+        # when later slots have the same price. This fills the battery
+        # before solar hours, wasting free solar surplus.
+        #
+        # Fix: for each contiguous block of same-price charge+idle slots,
+        # shift charge slots to the LATEST positions. This leaves early
+        # slots as idle where opportunistic solar charging can fill them.
+        #
+        # Example: [idle idle charge charge charge discharge]
+        #       → [idle idle idle charge charge+charge discharge]
+        # Wait that doesn't work for blocks. Let me think differently.
+        #
+        # Approach: find all charge slots, for each one check if there's
+        # a later idle slot at the same or lower price that could take
+        # over. Swap them (charge moves later, idle moves earlier).
+        shifted = 0
+        charge_price_threshold = 0.005  # max price difference for "same price band"
+        for i in range(n):
+            if actions[i] != "charge":
+                continue
+            p_i = hourly_data[i]["price"]
+            # Find the LATEST idle slot at similar or lower price
+            best_j = None
+            for j in range(n - 1, i, -1):
+                if actions[j] == "idle" and j < n:
+                    p_j = hourly_data[j]["price"]
+                    # Must be before any discharge block that follows charge
+                    # (don't push charge past discharge)
+                    has_discharge_between = any(
+                        actions[k] == "discharge" for k in range(i + 1, j)
+                    )
+                    if has_discharge_between:
+                        continue
+                    if p_j <= p_i + charge_price_threshold:
+                        best_j = j
+                        break  # found latest suitable idle
+            if best_j is not None:
+                actions[i] = "idle"
+                actions[best_j] = "charge"
+                shifted += 1
+        smoothed += shifted
+
         if smoothed:
-            _LOGGER.info("Plan smoothing: %d slots adjusted (%d swaps)", smoothed, swapped)
+            _LOGGER.info(
+                "Plan smoothing: %d slots adjusted (%d swaps, %d shifted)",
+                smoothed, swapped, shifted,
+            )
 
         # Log DP result (only when plan changes)
         charge_slots = sum(1 for a in actions if a == "charge")
@@ -1917,8 +1964,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 # enables additional profitable discharge slots.
 
                 # Charge: use >= so that break-even ties prefer charging.
-                # When the marginal discharge slot exactly covers charge cost,
-                # it's better to charge (battery has energy) than idle (doesn't).
+                # The DP value difference Δchg can be exactly equal to charge
+                # cost due to floating point (0.0434 vs 0.04334 EUR). With >=,
+                # the DP charges at break-even slots. Pass 4 (backward shift)
+                # then moves these charge slots to the latest possible position,
+                # leaving early hours free for solar.
                 if soc < self._max_soc and charge_kwh_slot > 0:
                     delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
                     new_soc = soc + delta / cap * 100
