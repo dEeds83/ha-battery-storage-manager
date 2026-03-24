@@ -1584,6 +1584,25 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
             current_si = soc_to_idx(new_soc)
 
+        # ── Smooth micro-cycles ─────────────────────────────────
+        # Remove single-slot "enclaves" where action differs from neighbors
+        # e.g. charge→discharge→charge or discharge→charge→discharge.
+        # These are DP artifacts from SOC quantization near limits and
+        # always lose money due to round-trip efficiency + cycle costs.
+        smoothed = 0
+        for i in range(1, n - 1):
+            prev_a, cur_a, next_a = actions[i - 1], actions[i], actions[i + 1]
+            # Single discharge between charges
+            if cur_a == "discharge" and prev_a == "charge" and next_a == "charge":
+                actions[i] = "charge"
+                smoothed += 1
+            # Single charge between discharges
+            elif cur_a == "charge" and prev_a == "discharge" and next_a == "discharge":
+                actions[i] = "discharge"
+                smoothed += 1
+        if smoothed:
+            _LOGGER.info("Plan smoothing: removed %d micro-cycle enclaves", smoothed)
+
         # Log DP result (only when plan changes)
         total_profit = dp[0][start_si]
         charge_slots = sum(1 for a in actions if a == "charge")
