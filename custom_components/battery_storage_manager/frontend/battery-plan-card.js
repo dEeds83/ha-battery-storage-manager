@@ -224,12 +224,12 @@ class BatteryPlanCard extends HTMLElement {
     const priceForecastEntity = this._config.price_entity || "";
     const priceState = priceForecastEntity && this._hass ? this._hass.states[priceForecastEntity] : null;
     const extForecast = priceState?.attributes?.extended_forecast || [];
-    const epexCount = extForecast.filter(e => e.source === "epex").length;
+    const epexCount = extForecast.filter(e => e.source === "epex_predictor").length;
     if (epexCount > 0) {
       html += `
         <span class="legend-item">
           <span class="legend-dot" style="background:repeating-linear-gradient(135deg,#ff9800,#ff9800 2px,transparent 2px,transparent 4px); border:1px solid #ff9800"></span>
-          EPEX (${this._formatDuration(epexCount, 60)})
+          Prognose (${this._formatDuration(epexCount, 60)})
         </span>
       `;
     }
@@ -254,7 +254,7 @@ class BatteryPlanCard extends HTMLElement {
     const priceState = priceForecastEntity ? this._hass.states[priceForecastEntity] : null;
     const extForecast = priceState?.attributes?.extended_forecast || [];
     const epexSlots = new Set(
-      extForecast.filter(e => e.source === "epex").map(e => e.time)
+      extForecast.filter(e => e.source === "epex_predictor").map(e => e.time)
     );
 
     plan.forEach((entry, i) => {
@@ -268,7 +268,7 @@ class BatteryPlanCard extends HTMLElement {
       const epexStyle = isEpex
         ? `background:repeating-linear-gradient(135deg,${cfg.color},${cfg.color} 3px,transparent 3px,transparent 6px); opacity:0.55`
         : `background:${cfg.color}; opacity:${isCurrent ? 1 : 0.75}`;
-      const epexLabel = isEpex ? " (EPEX)" : "";
+      const epexLabel = isEpex ? " (Prognose)" : "";
       barsHtml += `
         <div class="bar${isCurrent ? " current" : ""}"
              style="left:${left}%; width:${barWidth}%; height:${pricePct}%; ${epexStyle}"
@@ -333,7 +333,7 @@ class BatteryPlanCard extends HTMLElement {
     const firstEpexIdx = plan.findIndex(e => epexSlots.has(e.hour));
     if (firstEpexIdx > 0) {
       const epexLeft = (firstEpexIdx / plan.length) * 100;
-      epexMarkerHtml = `<div class="epex-marker" style="left:${epexLeft}%" title="Ab hier: EPEX-Prognose"></div>`;
+      epexMarkerHtml = `<div class="epex-marker" style="left:${epexLeft}%" title="Ab hier: EPEX Predictor (Prognose)"></div>`;
     }
 
     return `

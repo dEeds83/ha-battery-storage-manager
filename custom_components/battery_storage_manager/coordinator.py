@@ -1095,6 +1095,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 self._price_forecast.append({
                     "start": p["start"],
                     "total": round(max(0, predicted), 4),
+                    "source": "epex_predictor",
+                    "epex_spot": round(p["total"], 4),
                 })
                 added += 1
 
