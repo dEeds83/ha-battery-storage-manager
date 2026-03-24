@@ -566,7 +566,7 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
 
         all_prices = [p["price"] for p in prices_list]
 
-        # Extended forecast: ALL available prices (Tibber + EPEX) with source marker
+        # Extended forecast: Tibber prices + EPEX visualization data
         extended = []
         for entry in forecast:
             try:
@@ -574,18 +574,34 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
                 if start.tzinfo is not None:
                     start = dt_util.as_local(start)
                 if start >= now.replace(second=0, microsecond=0):
-                    item = {
+                    extended.append({
                         "time": start.strftime("%Y-%m-%dT%H:%M"),
                         "price": round(entry.get("total", 0), 4),
-                        "source": entry.get("source", "tibber"),
-                    }
-                    if "epex_spot" in entry:
-                        item["epex_spot"] = entry["epex_spot"]
-                    extended.append(item)
+                        "source": "tibber",
+                    })
+            except (ValueError, TypeError, KeyError):
+                continue
+
+        # Append EPEX visualization data (separate from price_forecast)
+        epex_viz = self.coordinator.data.get("epex_visualization", [])
+        for entry in epex_viz:
+            try:
+                start = datetime.fromisoformat(entry["start"])
+                if start.tzinfo is not None:
+                    start = dt_util.as_local(start)
+                item = {
+                    "time": start.strftime("%Y-%m-%dT%H:%M"),
+                    "price": entry.get("total", 0),
+                    "source": "epex_predictor",
+                }
+                if "epex_spot" in entry:
+                    item["epex_spot"] = entry["epex_spot"]
+                extended.append(item)
             except (ValueError, TypeError, KeyError):
                 continue
 
         epex_markup = self.coordinator.data.get("epex_markup")
+        epex_tv = self.coordinator.data.get("epex_terminal_value_ct")
 
         return {
             "prices": prices_list,
@@ -597,6 +613,7 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
             "extended_forecast": extended,
             "extended_count": len(extended),
             "epex_regression": epex_markup,
+            "epex_terminal_value_ct": epex_tv,
         }
 
 

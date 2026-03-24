@@ -77,17 +77,29 @@ class BatteryPlanCard extends HTMLElement {
       return;
     }
 
-    // Determine EPEX boundary from price entity
+    // Get EPEX visualization data from price entity (separate from plan)
     const priceForecastEntity = this._config.price_entity || "";
     const priceState = priceForecastEntity ? this._hass.states[priceForecastEntity] : null;
     const extForecast = priceState?.attributes?.extended_forecast || [];
-    const epexSlotSet = new Set(
-      extForecast.filter(e => e.source === "epex_predictor").map(e => e.time)
-    );
-    const hasEpexSlots = fullPlan.some(e => epexSlotSet.has(e.hour));
+    const epexEntries = extForecast.filter(e => e.source === "epex_predictor");
+    const hasEpexSlots = epexEntries.length > 0;
+    const epexSlotSet = new Set(epexEntries.map(e => e.time));
 
-    // Filter plan based on EPEX toggle
-    const plan = this._showEpex ? fullPlan : fullPlan.filter(e => !epexSlotSet.has(e.hour));
+    // Build plan: Tibber plan + optional EPEX price-only visualization
+    let plan = [...fullPlan];
+    if (this._showEpex && epexEntries.length > 0) {
+      // Append EPEX entries as visualization-only slots (idle action, price shown)
+      for (const e of epexEntries) {
+        plan.push({
+          hour: e.time,
+          price: e.price,
+          solar_kwh: 0,
+          expected_soc: null,
+          action: "idle",
+          reason: "EPEX Predictor (Prognose)",
+        });
+      }
+    }
 
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });

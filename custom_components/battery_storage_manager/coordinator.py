@@ -158,7 +158,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._epex_cache: list[dict] = []  # cached EPEX predictions
         self._epex_cache_time: datetime | None = None
         self._epex_cache_ttl = timedelta(hours=2)  # EPEX predictions change slowly
-        self._epex_markup: float | None = None  # Tibber/EPEX scaling factor
+        self._epex_markup: dict | None = None  # regression coefficients {a, b}
+        self._epex_terminal_value_per_kwh: float = 0.0  # EUR/kWh incentive for end SOC
+        self._epex_visualization: list[dict] = []  # scaled prices for UI only
 
         # Battery economics
         self._cycle_cost = self._config.get(
@@ -975,20 +977,19 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._fallback_price_range = None
 
     async def _extend_prices_with_epex(self) -> None:
-        """Extend Tibber price forecast with EPEX Predictor data.
+        """Use EPEX Predictor to set DP terminal value and provide visualization data.
 
-        Uses linear regression on the overlap between Tibber and EPEX to
-        derive the fixed and variable cost components:
+        EPEX predictions are NOT added to the price forecast for DP planning.
+        Instead, they determine the terminal value of the DP: should the
+        battery end the Tibber window full or empty?
 
-            Tibber = a + b × EPEX
+        - High EPEX prices ahead → high terminal SOC value → DP keeps battery full
+        - Low EPEX prices ahead → low terminal value → DP discharges everything
 
-        Where a ≈ grid fees + taxes + margin (fixed ct/kWh) and
-        b ≈ 1 + VAT rate (variable multiplier).
-
-        A simple multiplicative factor would fail for negative EPEX prices
-        (grid fees don't become negative just because the spot price does).
+        The scaled EPEX prices are stored separately for UI visualization only.
         """
         if not self._epex_enabled or not self._price_forecast:
+            self._epex_terminal_value_per_kwh = 0.0
             return
 
         # Refresh EPEX cache if stale
@@ -998,6 +999,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             await self._fetch_epex_prices()
 
         if not self._epex_cache:
+            self._epex_terminal_value_per_kwh = 0.0
             return
 
         # Find the end of Tibber data
@@ -1012,9 +1014,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 continue
 
         if tibber_end is None:
+            self._epex_terminal_value_per_kwh = 0.0
             return
 
-        # Build lookup of Tibber prices by hour key
+        # Build lookups for regression
         tibber_by_hour: dict[str, list[float]] = {}
         for p in self._price_forecast:
             try:
@@ -1026,7 +1029,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             except (ValueError, TypeError):
                 continue
 
-        # Build lookup of EPEX prices by hour key
         epex_by_hour: dict[str, list[float]] = {}
         epex_future: list[dict] = []
         for p in self._epex_cache:
@@ -1042,11 +1044,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 continue
 
         if not epex_future:
-            _LOGGER.debug("EPEX: no data beyond Tibber window")
+            self._epex_terminal_value_per_kwh = 0.0
             return
 
-        # Collect overlapping (EPEX, Tibber) price pairs for regression
-        pairs: list[tuple[float, float]] = []  # (epex, tibber)
+        # Linear regression: Tibber = a + b × EPEX
+        pairs: list[tuple[float, float]] = []
         for hk in tibber_by_hour:
             if hk in epex_by_hour:
                 t_avg = sum(tibber_by_hour[hk]) / len(tibber_by_hour[hk])
@@ -1054,65 +1056,74 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 pairs.append((e_avg, t_avg))
 
         if len(pairs) < 3:
-            _LOGGER.debug(
-                "EPEX: only %d overlapping hours, need at least 3 for regression",
-                len(pairs),
-            )
+            self._epex_terminal_value_per_kwh = 0.0
             return
 
-        # Linear regression: Tibber = a + b × EPEX
-        # Using least squares: b = Σ((x-x̄)(y-ȳ)) / Σ((x-x̄)²), a = ȳ - b×x̄
-        n = len(pairs)
+        n_pairs = len(pairs)
         x_vals = [p[0] for p in pairs]
         y_vals = [p[1] for p in pairs]
-        x_mean = sum(x_vals) / n
-        y_mean = sum(y_vals) / n
+        x_mean = sum(x_vals) / n_pairs
+        y_mean = sum(y_vals) / n_pairs
 
         num = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_vals, y_vals))
         den = sum((x - x_mean) ** 2 for x in x_vals)
 
         if abs(den) < 1e-10:
-            # All EPEX prices identical → can't determine slope, use offset only
             b = 1.0
             a = y_mean - x_mean
         else:
             b = num / den
             a = y_mean - b * x_mean
 
-        # Sanity: b should be positive (typically 1.0-1.25 with VAT)
-        # a should be positive (grid fees + taxes, typically 0.10-0.20 EUR/kWh)
         b = max(0.5, min(3.0, b))
         a = max(-0.05, min(0.50, a))
 
         self._epex_markup = {"a": round(a, 4), "b": round(b, 4)}
 
-        # Append scaled EPEX predictions: predicted_tibber = a + b × epex_price
-        added = 0
-        existing_starts = {p["start"] for p in self._price_forecast}
+        # Build EPEX visualization data (NOT added to _price_forecast)
+        self._epex_visualization: list[dict] = []
         for p in epex_future:
-            if p["start"] not in existing_starts:
-                predicted = a + b * p["total"]
-                self._price_forecast.append({
-                    "start": p["start"],
-                    "total": round(max(0, predicted), 4),
-                    "source": "epex_predictor",
-                    "epex_spot": round(p["total"], 4),
-                })
-                added += 1
+            predicted = a + b * p["total"]
+            self._epex_visualization.append({
+                "start": p["start"],
+                "total": round(max(0, predicted), 4),
+                "source": "epex_predictor",
+                "epex_spot": round(p["total"], 4),
+            })
 
-        if added > 0:
-            epex_sig = f"{added}:{a:.4f}:{b:.4f}"
-            if epex_sig != getattr(self, "_last_epex_signature", ""):
-                self._last_epex_signature = epex_sig
-                a_ct = a * 100
-                msg = (
-                    f"EPEX-Prognose: +{added} Slots "
-                    f"(Tibber \u2248 {self._fmt_ct(a_ct)} ct + "
-                    f"{b:.2f} \u00d7 EPEX, "
-                    f"{n} Überlappungsstunden)"
-                )
-                _LOGGER.info(msg)
-                self._log_optimization(msg)
+        # Calculate terminal value: expected profit per kWh of stored energy
+        # based on EPEX predicted prices after Tibber window.
+        # Average predicted Tibber price from EPEX
+        predicted_prices = [max(0, a + b * p["total"]) for p in epex_future]
+        avg_future_price = sum(predicted_prices) / len(predicted_prices)
+
+        # Average Tibber charge cost (what it costs to fill the battery now)
+        tibber_prices = [p["total"] for p in self._price_forecast]
+        avg_charge_cost = sum(tibber_prices) / len(tibber_prices) if tibber_prices else 0.20
+
+        # Terminal value = potential profit from having energy stored:
+        # sell at future price × efficiency − cycle cost
+        # Minus: the energy could have been sold during Tibber window already
+        # Net incentive to keep energy = future_price × η − current_avg_price
+        efficiency = self._battery_efficiency
+        half_cycle = self._cycle_cost / 100 / 2
+        self._epex_terminal_value_per_kwh = max(
+            0.0,
+            avg_future_price * efficiency - half_cycle - avg_charge_cost
+        )
+
+        epex_sig = f"{len(epex_future)}:{a:.4f}:{b:.4f}:{self._epex_terminal_value_per_kwh:.4f}"
+        if epex_sig != getattr(self, "_last_epex_signature", ""):
+            self._last_epex_signature = epex_sig
+            tv_ct = self._epex_terminal_value_per_kwh * 100
+            msg = (
+                f"EPEX Terminal-Value: {self._fmt_ct(tv_ct)} ct/kWh "
+                f"(Zukunft \u00d8 {self._fmt_ct(avg_future_price * 100)} ct, "
+                f"Tibber \u00d8 {self._fmt_ct(avg_charge_cost * 100)} ct, "
+                f"Regression: {self._fmt_ct(a * 100)} ct + {b:.2f}\u00d7EPEX)"
+            )
+            _LOGGER.info(msg)
+            self._log_optimization(msg)
 
     async def _fetch_epex_prices(self) -> None:
         """Fetch price predictions from EPEX Predictor API."""
@@ -1501,9 +1512,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         dp = [[INF] * num_soc for _ in range(n + 1)]
         action_dp = [["idle"] * num_soc for _ in range(n)]
 
-        # Terminal condition: no profit from end
+        # Terminal condition: value of stored energy at end of planning horizon.
+        # Without EPEX: 0 (no value to ending at any SOC).
+        # With EPEX: higher SOC = more energy to sell at predicted future prices.
+        tv_per_kwh = getattr(self, "_epex_terminal_value_per_kwh", 0.0)
         for s in range(num_soc):
-            dp[n][s] = 0.0
+            if tv_per_kwh > 0:
+                stored_kwh = (soc_levels[s] - self._min_soc) / 100 * cap
+                dp[n][s] = stored_kwh * tv_per_kwh
+            else:
+                dp[n][s] = 0.0
 
         # Backward pass
         for t in range(n - 1, -1, -1):
@@ -2653,7 +2671,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "consumption_forecast": self.get_hourly_consumption_forecast(),
             "optimization_log": list(self._optimization_log),
             "epex_markup": self._epex_markup,
-            "epex_slots": len(self._epex_cache),
+            "epex_terminal_value_ct": round(
+                getattr(self, "_epex_terminal_value_per_kwh", 0) * 100, 1
+            ),
+            "epex_visualization": getattr(self, "_epex_visualization", []),
         }
 
     # Properties for entities

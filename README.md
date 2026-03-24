@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.3.7-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -272,15 +272,18 @@ Für jeden Slot werden vier Optionen bewertet:
 
 ### EPEX Predictor (optional)
 
-Wenn aktiviert, erweitert die Integration das Planungsfenster über Tibber's Day-Ahead-Preise hinaus:
+Wenn aktiviert, beeinflusst die EPEX-Prognose die Planung über einen **Terminal-Value** – es werden **keine** Lade-/Entlade-Aktionen für prognostizierte Zeiträume erzeugt:
 
 - **Datenquelle:** [EpexPredictor](https://github.com/b3nn0/EpexPredictor) – statistisches Modell basierend auf Wetter- und Lastdaten
-- **Lineare Regression:** Berechnet `Tibber ≈ a + b × EPEX` aus dem Überlappungsbereich, wobei `a` = Fixkosten (Netzentgelte, Steuern, Marge) und `b` = variabler Faktor (inkl. MwSt)
-- **Anwendung:** Geschätzter Preis = Fixkosten + Faktor × EPEX-Spot (auch bei negativen Spotpreisen korrekt)
-- **Caching:** Alle 30 Minuten aktualisiert, bis 96h Vorhersage
+- **Lineare Regression:** Berechnet `Tibber ≈ a + b × EPEX` aus dem Überlappungsbereich (Fixkosten + MwSt)
+- **Terminal-Value:** Bestimmt ob der Akku am Ende des Tibber-Fensters voll oder leer sein soll
+  - Hohe EPEX-Preise vorhergesagt → DP bewertet hohen End-SOC positiv → lädt mehr
+  - Niedrige EPEX-Preise → End-SOC neutral → entlädt alles Profitable
+- **Visualisierung:** EPEX-Preise optional in der Plan-Card einblendbar (Button "Prognose anzeigen")
+- **Caching:** Alle 2 Stunden aktualisiert
 - **Regionen:** DE (Standard), AT, BE, NL, SE1-4, DK1-2
 
-**Beispiel:** Tibber liefert Preise bis morgen 23:45. Aus der Überlappung ergibt sich: `a = 0,18 EUR` (Fixkosten) + `b = 1,19` (MwSt). EPEX-Spot von 0,05 EUR → geschätzter Tibber-Preis = 0,18 + 1,19 × 0,05 = 0,24 EUR. Auch bei negativem EPEX-Spot von −0,02 EUR → 0,18 + 1,19 × (−0,02) = 0,156 EUR (bleibt positiv dank Fixkosten).
+**Beispiel:** Tibber endet morgen 23:45. EPEX sagt hohe Preise für übermorgen vorher → Terminal-Value 5 ct/kWh → DP entscheidet sich, den Akku am Tibber-Ende bei 80% statt 20% zu belassen.
 
 ### Solar-Laden (AC-gekoppelt)
 
