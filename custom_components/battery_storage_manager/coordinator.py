@@ -1942,6 +1942,32 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 dp[t][si] = best_val
                 action_dp[t][si] = best_act
 
+        # Debug: log dp value differences at key slots to diagnose
+        # why the DP doesn't charge early enough
+        if n > 20:
+            start_level = soc_to_idx(current_soc)
+            charge_levels = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
+            target_level = min(start_level + charge_levels, num_soc - 1)
+            # Find a few representative slots to log
+            for check_t in range(min(n, 200)):
+                h_check = hourly_data[check_t]
+                if h_check["price"] < 0.20 and action_dp[check_t][start_level] == "idle":
+                    dp_here = dp[check_t + 1][start_level]
+                    dp_charged = dp[check_t + 1][target_level]
+                    gf = h_check.get("_scn_grid_frac", h_check["grid_fraction"])
+                    delta = min(charge_kwh_slot, (self._max_soc - soc_levels[start_level]) / 100 * cap)
+                    cost = delta * gf * h_check["price"] + delta * half_cycle_eur
+                    _LOGGER.info(
+                        "DP debug t=%d (%s) price=%.1f gf=%.2f: "
+                        "idle_val=%.4f charge_val=%.4f (dp[%d]=%.4f dp[%d]=%.4f cost=%.4f) → %s",
+                        check_t, h_check.get("time", "?"), h_check["price"] * 100, gf,
+                        dp_here, -cost + dp_charged,
+                        start_level, dp_here, target_level, dp_charged, cost,
+                        action_dp[check_t][start_level],
+                    )
+                    if check_t > 5:  # log max ~5 slots
+                        break
+
         # Forward pass
         start_si = soc_to_idx(current_soc)
         actions = []
