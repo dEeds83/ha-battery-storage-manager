@@ -53,7 +53,7 @@ class BatteryPlanCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { entity: "" };
+    return { entity: "", price_entity: "" };
   }
 
   getCardSize() {
@@ -125,7 +125,7 @@ class BatteryPlanCard extends HTMLElement {
           ${this._getStyles()}
         </style>
         <div class="card-content">
-          ${showLegend ? this._renderLegend(counts, slotMinutes) : ""}
+          ${showLegend ? this._renderLegend(counts, slotMinutes, plan) : ""}
           <div class="summary">${stateObj.state || ""}</div>
           <div class="chart-container">
             ${this._renderChart(plan, nowSlot, minPrice, maxPrice, priceRange, showSolar)}
@@ -208,7 +208,7 @@ class BatteryPlanCard extends HTMLElement {
     return `${totalMin}min`;
   }
 
-  _renderLegend(counts, slotMinutes) {
+  _renderLegend(counts, slotMinutes, plan) {
     let html = '<div class="legend">';
     for (const [action, cfg] of Object.entries(ACTION_CONFIG)) {
       const count = counts[action] || 0;
@@ -217,6 +217,19 @@ class BatteryPlanCard extends HTMLElement {
         <span class="legend-item">
           <span class="legend-dot" style="background:${cfg.color}"></span>
           ${cfg.short} (${this._formatDuration(count, slotMinutes)})
+        </span>
+      `;
+    }
+    // Check if EPEX slots exist (plan extends beyond Tibber)
+    const priceForecastEntity = this._config.price_entity || "";
+    const priceState = priceForecastEntity && this._hass ? this._hass.states[priceForecastEntity] : null;
+    const extForecast = priceState?.attributes?.extended_forecast || [];
+    const epexCount = extForecast.filter(e => e.source === "epex").length;
+    if (epexCount > 0) {
+      html += `
+        <span class="legend-item">
+          <span class="legend-dot" style="background:repeating-linear-gradient(135deg,#ff9800,#ff9800 2px,transparent 2px,transparent 4px); border:1px solid #ff9800"></span>
+          EPEX (${this._formatDuration(epexCount, 60)})
         </span>
       `;
     }
@@ -235,18 +248,31 @@ class BatteryPlanCard extends HTMLElement {
     // Find max solar for scaling
     const maxSolar = Math.max(...plan.map(e => e.solar_kwh || 0), 0.1);
 
+    // Check which plan slots fall in EPEX range (beyond Tibber)
+    // We get this from the price_forecast source markers
+    const priceForecastEntity = this._config.price_entity || "";
+    const priceState = priceForecastEntity ? this._hass.states[priceForecastEntity] : null;
+    const extForecast = priceState?.attributes?.extended_forecast || [];
+    const epexSlots = new Set(
+      extForecast.filter(e => e.source === "epex").map(e => e.time)
+    );
+
     plan.forEach((entry, i) => {
       const cfg = ACTION_CONFIG[entry.action] || ACTION_CONFIG.idle;
       const pricePct = ((entry.price - minPrice) / priceRange) * 80 + 15;
       const left = (i / plan.length) * 100;
       const isCurrent = entry.hour && entry.hour === nowSlot;
+      const isEpex = epexSlots.has(entry.hour);
 
-      // Price bar
+      // Price bar (EPEX slots get striped pattern + lower opacity)
+      const epexStyle = isEpex
+        ? `background:repeating-linear-gradient(135deg,${cfg.color},${cfg.color} 3px,transparent 3px,transparent 6px); opacity:0.55`
+        : `background:${cfg.color}; opacity:${isCurrent ? 1 : 0.75}`;
+      const epexLabel = isEpex ? " (EPEX)" : "";
       barsHtml += `
         <div class="bar${isCurrent ? " current" : ""}"
-             style="left:${left}%; width:${barWidth}%; height:${pricePct}%;
-                    background:${cfg.color}; opacity:${isCurrent ? 1 : 0.75}"
-             title="${this._formatHour(entry.hour)} - ${(entry.price * 100).toFixed(1)} ct/kWh\n${cfg.label}: ${entry.reason}">
+             style="left:${left}%; width:${barWidth}%; height:${pricePct}%; ${epexStyle}"
+             title="${this._formatHour(entry.hour)} - ${(entry.price * 100).toFixed(1)} ct/kWh${epexLabel}\n${cfg.label}: ${entry.reason}">
         </div>
       `;
 
@@ -302,6 +328,14 @@ class BatteryPlanCard extends HTMLElement {
       nowMarkerHtml = `<div class="now-marker" style="left:${nowLeft}%"></div>`;
     }
 
+    // EPEX boundary marker (where Tibber ends and EPEX begins)
+    let epexMarkerHtml = "";
+    const firstEpexIdx = plan.findIndex(e => epexSlots.has(e.hour));
+    if (firstEpexIdx > 0) {
+      const epexLeft = (firstEpexIdx / plan.length) * 100;
+      epexMarkerHtml = `<div class="epex-marker" style="left:${epexLeft}%" title="Ab hier: EPEX-Prognose"></div>`;
+    }
+
     return `
       <div class="chart" style="height:${chartHeight}px">
         ${priceAxisHtml}
@@ -309,6 +343,7 @@ class BatteryPlanCard extends HTMLElement {
           ${barsHtml}
           ${solarOverlay}
           ${nowMarkerHtml}
+          ${epexMarkerHtml}
         </div>
         <div class="time-labels">
           ${labelsHtml}
@@ -444,6 +479,16 @@ class BatteryPlanCard extends HTMLElement {
         background: var(--primary-color, #03a9f4);
         opacity: 0.6;
         pointer-events: none;
+      }
+      .epex-marker {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: var(--warning-color, #ff9800);
+        opacity: 0.7;
+        pointer-events: none;
+        border-left: 1px dashed var(--warning-color, #ff9800);
       }
       .price-axis {
         position: absolute;

@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.2.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -189,6 +189,7 @@ entity: sensor.battery_storage_manager_speicherplan
 title: Speicherplan
 show_legend: true    # optional, Standard: true
 show_solar: true     # optional, Standard: true
+price_entity: sensor.battery_storage_manager_preisprognose  # optional, für EPEX-Markierung
 ```
 
 **Funktionen:**
@@ -199,6 +200,7 @@ show_solar: true     # optional, Standard: true
 - Legende mit Dauer pro Aktionstyp (z.B. "Laden (2h15)", "Solar (1h30)")
 - Aufklappbare Detailtabelle mit Preis, Solar, erwartetem SOC, Aktion und Begründung
 - Tooltip mit Details bei Hover
+- EPEX-Prognose-Slots visuell markiert (gestreiftes Muster + orangene Trennlinie)
 
 ### Battery Status Card
 

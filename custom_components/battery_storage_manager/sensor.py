@@ -565,6 +565,28 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
                 slot_minutes = diff
 
         all_prices = [p["price"] for p in prices_list]
+
+        # Extended forecast: ALL available prices (Tibber + EPEX) with source marker
+        extended = []
+        for entry in forecast:
+            try:
+                start = datetime.fromisoformat(entry["start"])
+                if start.tzinfo is not None:
+                    start = dt_util.as_local(start)
+                if start >= now.replace(second=0, microsecond=0):
+                    item = {
+                        "time": start.strftime("%Y-%m-%dT%H:%M"),
+                        "price": round(entry.get("total", 0), 4),
+                        "source": entry.get("source", "tibber"),
+                    }
+                    if "epex_spot" in entry:
+                        item["epex_spot"] = entry["epex_spot"]
+                    extended.append(item)
+            except (ValueError, TypeError, KeyError):
+                continue
+
+        epex_markup = self.coordinator.data.get("epex_markup")
+
         return {
             "prices": prices_list,
             "count": len(prices_list),
@@ -572,6 +594,9 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
             "min_price": round(min(all_prices), 4) if all_prices else None,
             "max_price": round(max(all_prices), 4) if all_prices else None,
             "avg_price": round(sum(all_prices) / len(all_prices), 4) if all_prices else None,
+            "extended_forecast": extended,
+            "extended_count": len(extended),
+            "epex_regression": epex_markup,
         }
 
 
