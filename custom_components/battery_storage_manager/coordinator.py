@@ -1505,18 +1505,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             num_soc, soc_step, charge_soc_pct, discharge_soc_pct, n,
         )
 
-        # Discharge threshold: only discharge when price is above median.
-        # This prevents draining the battery at moderate prices and
-        # creates natural hold phases between cheap and expensive periods.
-        sorted_prices = sorted(h["price"] for h in hourly_data)
-        median_price = sorted_prices[len(sorted_prices) // 2]
-        discharge_min_price = median_price
-
-        _LOGGER.debug(
-            "DP: discharge threshold = %.1f ct (median of %d slots)",
-            median_price * 100, n,
-        )
-
         # dp[t][s] = max cumulative profit achievable from slot t to end,
         #            starting at SOC level s
         # action_dp[t][s] = best action at slot t with SOC level s
@@ -1525,15 +1513,30 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         action_dp = [["idle"] * num_soc for _ in range(n)]
 
         # Terminal condition: value of stored energy at end of planning horizon.
-        # Without EPEX: 0 (no value to ending at any SOC).
-        # With EPEX: higher SOC = more energy to sell at predicted future prices.
-        tv_per_kwh = getattr(self, "_epex_terminal_value_per_kwh", 0.0)
+        #
+        # Even without EPEX, stored energy has value: tomorrow will likely
+        # have expensive peak hours too. A base terminal value prevents
+        # the DP from dumping all energy at moderate prices just because
+        # it's "technically profitable" — holding for unknown future peaks
+        # has option value.
+        #
+        # Base value = average Tibber price × efficiency − half cycle cost
+        # EPEX value adds to this if predictions show high future prices.
+        all_prices = [h["price"] for h in hourly_data]
+        avg_price = sum(all_prices) / len(all_prices) if all_prices else 0.20
+        half_cycle_eur = cycle_cost_eur / 2
+        base_tv = max(0.0, avg_price * efficiency - half_cycle_eur)
+        epex_tv = getattr(self, "_epex_terminal_value_per_kwh", 0.0)
+        tv_per_kwh = max(base_tv, epex_tv)
+
         for s in range(num_soc):
-            if tv_per_kwh > 0:
-                stored_kwh = (soc_levels[s] - self._min_soc) / 100 * cap
-                dp[n][s] = stored_kwh * tv_per_kwh
-            else:
-                dp[n][s] = 0.0
+            stored_kwh = (soc_levels[s] - self._min_soc) / 100 * cap
+            dp[n][s] = stored_kwh * tv_per_kwh
+
+        _LOGGER.debug(
+            "DP terminal value: %.1f ct/kWh (base=%.1f, epex=%.1f, avg_price=%.1f ct)",
+            tv_per_kwh * 100, base_tv * 100, epex_tv * 100, avg_price * 100,
+        )
 
         # Backward pass
         for t in range(n - 1, -1, -1):
@@ -1577,8 +1580,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                             best_val = val
                             best_act = "charge"
 
-                # Option 3: discharge (only above median price)
-                if soc > self._min_soc and discharge_kwh_slot > 0 and price >= discharge_min_price:
+                # Option 3: discharge
+                if soc > self._min_soc and discharge_kwh_slot > 0:
                     delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
                     delivered = delta * efficiency
                     new_soc = soc - delta / cap * 100
