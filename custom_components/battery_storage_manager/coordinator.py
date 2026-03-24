@@ -1888,13 +1888,20 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     best_val = val
                     best_act = "idle"
 
+                # Tie-breaker: when charge/discharge have the same value as idle
+                # (e.g. identical prices across many slots), prefer action over
+                # waiting. This ensures the DP charges at the EARLIEST cheap slot
+                # instead of deferring to identical-price slots later, which may
+                # not have enough slots to fill the battery.
+                eps = 0.0001  # ~0.01 ct tie-breaker, doesn't affect real decisions
+
                 if soc < self._max_soc and charge_kwh_slot > 0:
                     delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
                     new_soc = soc + delta / cap * 100
                     new_si = soc_to_idx(new_soc)
                     if new_si > si:
                         cost = delta * grid_frac * price + delta * half_cycle_eur
-                        val = -cost + dp[t + 1][new_si]
+                        val = -cost + dp[t + 1][new_si] + eps
                         if val > best_val:
                             best_val = val
                             best_act = "charge"
@@ -1906,7 +1913,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     new_si = soc_to_idx(new_soc)
                     if new_si < si:
                         revenue = delivered * price - delta * half_cycle_eur
-                        val = revenue + dp[t + 1][new_si]
+                        val = revenue + dp[t + 1][new_si] + eps
                         if val > best_val:
                             best_val = val
                             best_act = "discharge"
