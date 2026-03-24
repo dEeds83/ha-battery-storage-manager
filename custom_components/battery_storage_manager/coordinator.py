@@ -1661,8 +1661,38 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     actions[i] = "idle"
                     smoothed += 1
 
+        # Pass 3: Swap cheap discharge slots with more expensive idle slots.
+        # With the median filter, both candidates are already above the
+        # discharge threshold. This just ensures the most expensive slots
+        # are actually used for discharge (not wasted because battery ran empty).
+        swapped = 0
+        while True:
+            cheapest_d_idx = None
+            cheapest_d_price = float("inf")
+            for i in range(n):
+                if actions[i] == "discharge" and hourly_data[i]["price"] < cheapest_d_price:
+                    cheapest_d_price = hourly_data[i]["price"]
+                    cheapest_d_idx = i
+
+            best_idle_idx = None
+            best_idle_price = 0.0
+            for i in range(n):
+                if actions[i] == "idle" and hourly_data[i]["price"] > best_idle_price:
+                    best_idle_price = hourly_data[i]["price"]
+                    best_idle_idx = i
+
+            if (cheapest_d_idx is not None
+                    and best_idle_idx is not None
+                    and best_idle_price > cheapest_d_price):
+                actions[cheapest_d_idx] = "idle"
+                actions[best_idle_idx] = "discharge"
+                swapped += 1
+            else:
+                break
+
+        smoothed += swapped
         if smoothed:
-            _LOGGER.info("Plan smoothing: %d slots adjusted", smoothed)
+            _LOGGER.info("Plan smoothing: %d slots adjusted (%d swaps)", smoothed, swapped)
 
         # Log DP result (only when plan changes)
         total_profit = dp[0][start_si]
