@@ -1649,8 +1649,45 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     actions[i] = "idle"
                     smoothed += 1
 
+        # Pass 3: Swap cheap discharge slots with expensive idle slots.
+        # If we discharge at 18.6 ct but sit idle at 19.8 ct later (because
+        # the battery ran empty), we should skip the cheap one and discharge
+        # at the expensive one instead.
+        swapped = 0
+        while True:
+            # Find cheapest discharge slot and most expensive idle slot
+            cheapest_discharge = None
+            cheapest_d_price = float("inf")
+            for i in range(n):
+                if actions[i] == "discharge":
+                    if hourly_data[i]["price"] < cheapest_d_price:
+                        cheapest_d_price = hourly_data[i]["price"]
+                        cheapest_discharge = i
+
+            most_expensive_idle = None
+            most_expensive_i_price = 0.0
+            for i in range(n):
+                if actions[i] == "idle":
+                    if hourly_data[i]["price"] > most_expensive_i_price:
+                        most_expensive_i_price = hourly_data[i]["price"]
+                        most_expensive_idle = i
+
+            # Swap if idle price > discharge price (net gain)
+            if (cheapest_discharge is not None
+                    and most_expensive_idle is not None
+                    and most_expensive_i_price > cheapest_d_price):
+                actions[cheapest_discharge] = "idle"
+                actions[most_expensive_idle] = "discharge"
+                swapped += 1
+            else:
+                break
+
+        smoothed += swapped
         if smoothed:
-            _LOGGER.info("Plan smoothing: %d slots adjusted (min-run + spread filter)", smoothed)
+            _LOGGER.info(
+                "Plan smoothing: %d slots adjusted (%d swaps)",
+                smoothed, swapped,
+            )
 
         # Log DP result (only when plan changes)
         total_profit = dp[0][start_si]
