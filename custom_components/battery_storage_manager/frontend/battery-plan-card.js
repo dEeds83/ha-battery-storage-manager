@@ -323,16 +323,22 @@ class BatteryPlanCard extends HTMLElement {
       }
     });
 
-    // Render solar as SVG polyline (no circles — they scale badly)
+    // Render solar as inline SVG with percentage-based viewBox
+    // Using viewBox="0 0 1000 100" gives good resolution at any width.
+    // The SVG stretches to fill the container; the polyline coordinates
+    // are in the 1000×100 space. No vector-effect needed.
     let solarOverlay = "";
     if (showSolar && solarPoints.length > 1) {
-      const polyPoints = solarPoints.map(p => `${p.x},${p.y}`).join(" ");
+      const svgW = 1000;
+      const svgH = 100;
+      const polyPoints = solarPoints
+        .map(p => `${(p.x / 100 * svgW).toFixed(1)},${(p.y / 100 * svgH).toFixed(1)}`)
+        .join(" ");
       solarOverlay = `<div class="solar-layer">
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+        <svg viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none"
              style="width:100%;height:100%;position:absolute;top:0;left:0">
           <polyline points="${polyPoints}" fill="none" stroke="#FFD600"
-                    stroke-width="2" vector-effect="non-scaling-stroke"
-                    stroke-linejoin="round"/>
+                    stroke-width="1.5" stroke-linejoin="round"/>
         </svg>
       </div>`;
     }
