@@ -798,6 +798,39 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     )
                     self._inverter_active = actual_on
 
+        # Sync inverter power: after restart, internal target is 0 but the
+        # real entity may still have the old value.  Read the actual value
+        # and push 0 if we're idle, or adopt the real value if we're active.
+        if self._inverter_power_entity:
+            pw_state = self.hass.states.get(self._inverter_power_entity)
+            if pw_state and pw_state.state not in ("unknown", "unavailable"):
+                try:
+                    actual_power = float(pw_state.state)
+                except (ValueError, TypeError):
+                    actual_power = None
+                if actual_power is not None:
+                    if self._operating_mode == MODE_IDLE and actual_power > 10:
+                        # Inverter still running from before restart → shut it down
+                        _LOGGER.warning(
+                            "Inverter power entity shows %.0fW but mode is IDLE "
+                            "→ resetting to 0",
+                            actual_power,
+                        )
+                        self.hass.async_create_task(
+                            self._set_inverter_power(0)
+                        )
+                    elif (self._inverter_active
+                          and self._inverter_target_power == 0
+                          and actual_power > 10):
+                        # After restart: adopt the real value so regulation
+                        # can adjust from here instead of ignoring it
+                        _LOGGER.info(
+                            "Inverter power: adopting actual value %.0fW "
+                            "(internal was 0 after restart)",
+                            actual_power,
+                        )
+                        self._inverter_target_power = actual_power
+
     def _validate_operating_mode(self) -> None:
         """Ensure operating mode matches actual device states.
 
