@@ -1505,6 +1505,18 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             num_soc, soc_step, charge_soc_pct, discharge_soc_pct, n,
         )
 
+        # Discharge threshold: only discharge when price is above median.
+        # This prevents draining the battery at moderate prices and
+        # creates natural hold phases between cheap and expensive periods.
+        sorted_prices = sorted(h["price"] for h in hourly_data)
+        median_price = sorted_prices[len(sorted_prices) // 2]
+        discharge_min_price = median_price
+
+        _LOGGER.debug(
+            "DP: discharge threshold = %.1f ct (median of %d slots)",
+            median_price * 100, n,
+        )
+
         # dp[t][s] = max cumulative profit achievable from slot t to end,
         #            starting at SOC level s
         # action_dp[t][s] = best action at slot t with SOC level s
@@ -1565,8 +1577,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                             best_val = val
                             best_act = "charge"
 
-                # Option 3: discharge
-                if soc > self._min_soc and discharge_kwh_slot > 0:
+                # Option 3: discharge (only above median price)
+                if soc > self._min_soc and discharge_kwh_slot > 0 and price >= discharge_min_price:
                     delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
                     delivered = delta * efficiency
                     new_soc = soc - delta / cap * 100
@@ -1649,45 +1661,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     actions[i] = "idle"
                     smoothed += 1
 
-        # Pass 3: Swap cheap discharge slots with expensive idle slots.
-        # If we discharge at 18.6 ct but sit idle at 19.8 ct later (because
-        # the battery ran empty), we should skip the cheap one and discharge
-        # at the expensive one instead.
-        swapped = 0
-        while True:
-            # Find cheapest discharge slot and most expensive idle slot
-            cheapest_discharge = None
-            cheapest_d_price = float("inf")
-            for i in range(n):
-                if actions[i] == "discharge":
-                    if hourly_data[i]["price"] < cheapest_d_price:
-                        cheapest_d_price = hourly_data[i]["price"]
-                        cheapest_discharge = i
-
-            most_expensive_idle = None
-            most_expensive_i_price = 0.0
-            for i in range(n):
-                if actions[i] == "idle":
-                    if hourly_data[i]["price"] > most_expensive_i_price:
-                        most_expensive_i_price = hourly_data[i]["price"]
-                        most_expensive_idle = i
-
-            # Swap if idle price > discharge price (net gain)
-            if (cheapest_discharge is not None
-                    and most_expensive_idle is not None
-                    and most_expensive_i_price > cheapest_d_price):
-                actions[cheapest_discharge] = "idle"
-                actions[most_expensive_idle] = "discharge"
-                swapped += 1
-            else:
-                break
-
-        smoothed += swapped
         if smoothed:
-            _LOGGER.info(
-                "Plan smoothing: %d slots adjusted (%d swaps)",
-                smoothed, swapped,
-            )
+            _LOGGER.info("Plan smoothing: %d slots adjusted", smoothed)
 
         # Log DP result (only when plan changes)
         total_profit = dp[0][start_si]
