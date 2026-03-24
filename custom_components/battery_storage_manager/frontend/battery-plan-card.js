@@ -46,6 +46,7 @@ class BatteryPlanCard extends HTMLElement {
   setConfig(config) {
     this._config = config;
     this._showTable = false;
+    this._showEpex = false;
   }
 
   static getConfigElement() {
@@ -70,11 +71,23 @@ class BatteryPlanCard extends HTMLElement {
       return;
     }
 
-    const plan = stateObj.attributes.plan;
-    if (!plan || !plan.length) {
+    const fullPlan = stateObj.attributes.plan;
+    if (!fullPlan || !fullPlan.length) {
       this._renderError("Kein Plan verfügbar");
       return;
     }
+
+    // Determine EPEX boundary from price entity
+    const priceForecastEntity = this._config.price_entity || "";
+    const priceState = priceForecastEntity ? this._hass.states[priceForecastEntity] : null;
+    const extForecast = priceState?.attributes?.extended_forecast || [];
+    const epexSlotSet = new Set(
+      extForecast.filter(e => e.source === "epex_predictor").map(e => e.time)
+    );
+    const hasEpexSlots = fullPlan.some(e => epexSlotSet.has(e.hour));
+
+    // Filter plan based on EPEX toggle
+    const plan = this._showEpex ? fullPlan : fullPlan.filter(e => !epexSlotSet.has(e.hour));
 
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
@@ -125,16 +138,19 @@ class BatteryPlanCard extends HTMLElement {
           ${this._getStyles()}
         </style>
         <div class="card-content">
-          ${showLegend ? this._renderLegend(counts, slotMinutes, plan) : ""}
+          ${showLegend ? this._renderLegend(counts, slotMinutes, hasEpexSlots) : ""}
           <div class="summary">${stateObj.state || ""}</div>
           <div class="chart-container">
-            ${this._renderChart(plan, nowSlot, minPrice, maxPrice, priceRange, showSolar)}
+            ${this._renderChart(plan, nowSlot, minPrice, maxPrice, priceRange, showSolar, epexSlotSet)}
           </div>
           <div class="toggle-row">
             <button class="toggle-btn" id="toggleTable">
               ${this._showTable ? "Tabelle ausblenden" : "Details anzeigen"}
             </button>
             ${this._showTable ? `<button class="toggle-btn" id="exportCsv" style="margin-left:8px">CSV Export</button>` : ""}
+            ${hasEpexSlots ? `<button class="toggle-btn${this._showEpex ? " active" : ""}" id="toggleEpex" style="margin-left:8px">
+              ${this._showEpex ? "Prognose ausblenden" : "Prognose anzeigen"}
+            </button>` : ""}
           </div>
           ${this._showTable ? this._renderTable(plan, nowSlot) : ""}
         </div>
@@ -155,6 +171,14 @@ class BatteryPlanCard extends HTMLElement {
     if (exportBtn) {
       exportBtn.addEventListener("click", () => {
         this._exportCsv(plan);
+      });
+    }
+
+    const epexBtn = this.shadowRoot.getElementById("toggleEpex");
+    if (epexBtn) {
+      epexBtn.addEventListener("click", () => {
+        this._showEpex = !this._showEpex;
+        this._render();
       });
     }
   }
@@ -208,7 +232,7 @@ class BatteryPlanCard extends HTMLElement {
     return `${totalMin}min`;
   }
 
-  _renderLegend(counts, slotMinutes, plan) {
+  _renderLegend(counts, slotMinutes, hasEpexSlots) {
     let html = '<div class="legend">';
     for (const [action, cfg] of Object.entries(ACTION_CONFIG)) {
       const count = counts[action] || 0;
@@ -220,16 +244,11 @@ class BatteryPlanCard extends HTMLElement {
         </span>
       `;
     }
-    // Check if EPEX slots exist (plan extends beyond Tibber)
-    const priceForecastEntity = this._config.price_entity || "";
-    const priceState = priceForecastEntity && this._hass ? this._hass.states[priceForecastEntity] : null;
-    const extForecast = priceState?.attributes?.extended_forecast || [];
-    const epexCount = extForecast.filter(e => e.source === "epex_predictor").length;
-    if (epexCount > 0) {
+    if (hasEpexSlots) {
       html += `
         <span class="legend-item">
           <span class="legend-dot" style="background:repeating-linear-gradient(135deg,#ff9800,#ff9800 2px,transparent 2px,transparent 4px); border:1px solid #ff9800"></span>
-          Prognose (${this._formatDuration(epexCount, 60)})
+          Prognose
         </span>
       `;
     }
@@ -237,7 +256,7 @@ class BatteryPlanCard extends HTMLElement {
     return html;
   }
 
-  _renderChart(plan, nowSlot, minPrice, maxPrice, priceRange, showSolar) {
+  _renderChart(plan, nowSlot, minPrice, maxPrice, priceRange, showSolar, epexSlots) {
     const barWidth = Math.max(100 / plan.length, 2);
     const chartHeight = 120;
 
@@ -247,15 +266,7 @@ class BatteryPlanCard extends HTMLElement {
 
     // Find max solar for scaling
     const maxSolar = Math.max(...plan.map(e => e.solar_kwh || 0), 0.1);
-
-    // Check which plan slots fall in EPEX range (beyond Tibber)
-    // We get this from the price_forecast source markers
-    const priceForecastEntity = this._config.price_entity || "";
-    const priceState = priceForecastEntity ? this._hass.states[priceForecastEntity] : null;
-    const extForecast = priceState?.attributes?.extended_forecast || [];
-    const epexSlots = new Set(
-      extForecast.filter(e => e.source === "epex_predictor").map(e => e.time)
-    );
+    epexSlots = epexSlots || new Set();
 
     plan.forEach((entry, i) => {
       const cfg = ACTION_CONFIG[entry.action] || ACTION_CONFIG.idle;
@@ -537,6 +548,11 @@ class BatteryPlanCard extends HTMLElement {
       }
       .toggle-btn:hover {
         background: var(--bsm-border);
+      }
+      .toggle-btn.active {
+        background: var(--warning-color, #ff9800);
+        color: #fff;
+        border-color: var(--warning-color, #ff9800);
       }
 
       /* Table */
