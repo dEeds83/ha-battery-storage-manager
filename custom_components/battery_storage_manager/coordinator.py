@@ -1101,15 +1101,18 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 added += 1
 
         if added > 0:
-            a_ct = a * 100
-            msg = (
-                f"EPEX-Prognose: +{added} Slots "
-                f"(Tibber \u2248 {self._fmt_ct(a_ct)} ct + "
-                f"{b:.2f} \u00d7 EPEX, "
-                f"{n} Überlappungsstunden)"
-            )
-            _LOGGER.info(msg)
-            self._log_optimization(msg)
+            epex_sig = f"{added}:{a:.4f}:{b:.4f}"
+            if epex_sig != getattr(self, "_last_epex_signature", ""):
+                self._last_epex_signature = epex_sig
+                a_ct = a * 100
+                msg = (
+                    f"EPEX-Prognose: +{added} Slots "
+                    f"(Tibber \u2248 {self._fmt_ct(a_ct)} ct + "
+                    f"{b:.2f} \u00d7 EPEX, "
+                    f"{n} Überlappungsstunden)"
+                )
+                _LOGGER.info(msg)
+                self._log_optimization(msg)
 
     async def _fetch_epex_prices(self) -> None:
         """Fetch price predictions from EPEX Predictor API."""
