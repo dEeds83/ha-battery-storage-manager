@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.5.9-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -16,7 +16,13 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Roundtrip-Effizienz** – Konfigurierbarer Effizienzfaktor (Standard 90%) in der Entlade-Bewertung
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
 - **Solarbasierte Ladepriorisierung** – DP bevorzugt automatisch Solar-Stunden (niedrige `grid_fraction`) über Nacht-Laden (voller Netzpreis), kein künstlicher Tie-Breaker nötig
-- **4-Pass Smoothing** – Min-Run + Break-Even-Spread + Slot-Swap + Rückwärts-Verschiebung (Laden so spät wie möglich → Platz für Solar)
+- **5-Pass Smoothing Pipeline:**
+  - Pass 1: Min-Run (Mindestlaufzeit 2 Slots für Aktionswechsel)
+  - Pass 2: Break-Even-Spread (Filtert unprofitable Lade↔Entlade-Übergänge)
+  - Pass 3: Slot-Swap (Tauscht günstige gegen teure Entlade-Slots)
+  - Pass 4: Zielbasierte Rückwärts-Auffüllung (füllt Idle/Hold-Slots vor jedem Entlade-Block bis max_soc)
+  - Pass 5: Mini-Insel-Bereinigung (entfernt isolierte Lade-Blöcke < 4 Slots)
+- **Terminal-Value mit Unsicherheitsabschlag** – Basis-Wert aus Tibber-Median (70% Konfidenz), EPEX-Wert überschreibt wenn höher
 - **Optimierungs-Log** – Alle Entscheidungen (Szenarien, Kalman, Swaps) als Sensor im UI einsehbar
 
 ### Steuerung
@@ -191,14 +197,13 @@ price_entity: sensor.battery_storage_manager_preisprognose  # optional, für EPE
 ```
 
 **Funktionen:**
-- Farbige Balken pro Zeitslot (Grün = Laden, Orange = Entladen, Gold = Solar, Blau = Halten, Grau = Idle)
+- Farbige Balken pro Zeitslot (Grün = Laden, Orange = Entladen, Blau = Halten, Grau = Idle)
 - Preisachse links in ct/kWh
-- Solarproduktion als goldene Linie
+- Solarproduktion als goldene SVG-Linie (responsive, skaliert korrekt bei jeder Breite)
 - Aktueller Zeitslot hervorgehoben mit blauem Jetzt-Marker
-- Legende mit Dauer pro Aktionstyp (z.B. "Laden (2h15)", "Solar (1h30)")
+- Legende mit Dauer pro Aktionstyp (z.B. "Laden (2h15)")
 - Aufklappbare Detailtabelle mit Preis, Solar, erwartetem SOC, Aktion und Begründung
-- Tooltip mit Details bei Hover
-- EPEX-Prognose-Slots visuell markiert (gestreiftes Muster + orangene Trennlinie)
+- EPEX-Prognose-Slots optional einblendbar (Button "Prognose anzeigen", gestreiftes Muster)
 
 ### Battery Status Card
 
@@ -230,26 +235,27 @@ title: Batteriespeicher
 
 ## Funktionsweise
 
-### Planungszyklus (alle 30 Sekunden)
+### Planungszyklus (alle 15 Sekunden)
 
 1. **Sensoren lesen** – SOC, Netzleistung, Strompreis, Switch-Zustände
 2. **Geräte synchronisieren** – Interne Flags mit echten Switch-Zuständen abgleichen
 3. **Verbrauch erfassen** – Aktuellen Hausverbrauch für rollende Statistik aufzeichnen
 4. **Preise laden** – 15-Min-Preise via `tibber.get_prices` Action (oder Fallback auf Attribute)
 5. **Solarprognose lesen** – Alle konfigurierten Solar-Sensoren aufsummieren
-6. **Intraday Solar-Korrektur** – Restprognose anhand bisheriger Ist/Forecast-Ratio anpassen
+6. **Intraday Solar-Korrektur** – Restprognose anhand bisheriger Ist/Forecast-Ratio anpassen (Kalman-Filter)
 7. **Batterieplan erstellen (DP):**
-   - Effektive Ladekosten pro Slot (Netzpreis × Grid-Anteil)
-   - Dynamic Programming über alle Slots (bis 48h): SOC diskretisiert in 5%-Stufen
-   - Jeder Slot wird mit 4 Optionen bewertet (Laden/Solar/Entladen/Idle)
-   - Zykluskosten und Roundtrip-Effizienz in der Bewertung
-   - Pre-Solar-Entladung (Platz für Solar schaffen)
+   - Effektive Ladekosten pro Slot (Netzpreis × Grid-Anteil, Solar reduziert Kosten)
+   - Dynamic Programming über alle Tibber-Slots: SOC diskretisiert in 1%-Stufen
+   - 3 Szenarien (erwartet/optimistisch/pessimistisch) mit asymmetrischem Vote
+   - Zykluskosten (½ auf Laden, ½ auf Entladen) und Roundtrip-Effizienz
+   - Terminal-Value am Planende (Basis + EPEX) mit Unsicherheitsabschlag
+   - 5-Pass Smoothing (Min-Run → Spread → Swap → Rückwärts-Auffüllung → Insel-Bereinigung)
    - Optimaler SOC-Pfad mit maximalem Profit extrahiert
-7. **Aktion ausführen** – Ladegeräte/Wechselrichter entsprechend schalten
+8. **Aktion ausführen** – Ladegeräte/Wechselrichter entsprechend schalten
 
 ### Dynamic Programming Optimierung
 
-Statt einfachem greedy Pairing nutzt der Algorithmus **Dynamic Programming** (Bellman-Rückwärtsinduktion) über diskretisierte SOC-Stufen (5%-Schritte):
+Statt einfachem greedy Pairing nutzt der Algorithmus **Dynamic Programming** (Bellman-Rückwärtsinduktion) über diskretisierte SOC-Stufen (1%-Schritte):
 
 ```
 dp[t][soc] = maximaler Profit erreichbar ab Zeitpunkt t mit Ladezustand soc
@@ -257,8 +263,21 @@ dp[t][soc] = maximaler Profit erreichbar ab Zeitpunkt t mit Ladezustand soc
 
 Für jeden Slot werden drei Optionen bewertet:
 - **Idle**: Nichts tun (kein Gewinn/Verlust)
-- **Laden**: Strom kaufen (Kosten = effektiver Preis × Grid-Anteil × kWh + ½ Zykluskosten). Solar-Überschuss reduziert den Grid-Anteil automatisch → günstigere effektive Kosten bei Sonnenstunden
-- **Entladen**: Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − ½ Zykluskosten)
+- **Laden** (≥ bei Gleichstand): Strom kaufen (Kosten = effektiver Preis × Grid-Anteil × kWh + ½ Zykluskosten). Solar reduziert den Grid-Anteil automatisch → günstigere effektive Kosten bei Sonnenstunden
+- **Entladen** (> strikt): Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − ½ Zykluskosten)
+
+**Szenario-DP:** Das DP wird 3× ausgeführt (Solar ×0.6/×1.0/×1.2, Verbrauch ×1.2/×1.0/×0.8). Asymmetrischer Vote: Expected-Szenario bestimmt **Laden**, Mehrheit bestimmt **Entladen** (konservativ).
+
+**Terminal-Value:** Am Planende hat gespeicherte Energie einen Wert:
+```
+Basis-TV = Median(Tibber-Preise) × Effizienz × 0.7 − ½ Zykluskosten
+EPEX-TV  = Median(EPEX-Prognose) × Effizienz × 0.7 − ½ Zykluskosten
+TV = max(Basis, EPEX)  →  DP bevorzugt hohen End-SOC wenn morgen teuer
+```
+
+**Pass 4 (Rückwärts-Auffüllung):** Nach dem DP simuliert Pass 4 den SOC-Verlauf. Wenn ein Entlade-Block unter max_soc startet, werden Idle/Hold-Slots davor zu Charge konvertiert (günstigste zuerst, späteste bei gleichem Preis → Platz für Solar morgens).
+
+**Pass 5 (Insel-Bereinigung):** Isolierte Mini-Lade-Blöcke (< 4 Slots, > 2 Slot Gap zum Hauptblock) werden entfernt – DP-Artefakte aus dem Break-Even-Bereich.
 
 Zusätzlich wird bei idle/hold zur Laufzeit **opportunistisches Solar-Laden** aktiviert wenn freier Überschuss vorhanden ist.
 
@@ -266,8 +285,9 @@ Zusätzlich wird bei idle/hold zur Laufzeit **opportunistisches Solar-Laden** ak
 - Findet das **globale Optimum** über alle Zeitslots
 - Berücksichtigt **SOC-Limits** in der Bewertung (statt nachträglicher Korrektur)
 - Integriert **Effizienz und Zykluskosten** direkt in die Bewertung
-- Optimiert automatisch über **48h+** wenn morgen-Preise oder EPEX-Prognosen verfügbar sind
-- Bei 96 Slots (24h × 15min) × 19 SOC-Stufen = ~1800 Zustände (< 1ms Rechenzeit)
+- Optimiert automatisch über **48h+** wenn morgen-Preise verfügbar sind
+- EPEX Terminal-Value erweitert den Horizont ohne falsche Aktionen zu erzeugen
+- Bei 96 Slots (24h × 15min) × 79 SOC-Stufen × 3 Szenarien ≈ 23.000 Zustände (< 5ms Rechenzeit)
 
 ### EPEX Predictor (optional)
 
