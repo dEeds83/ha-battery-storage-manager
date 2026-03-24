@@ -1630,7 +1630,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         estimated_soc = current_soc
         charge_count = 0
         discharge_count = 0
-        solar_count = 0
         grid_charge_kwh = 0.0
 
         for i, h in enumerate(hourly_data):
@@ -1643,21 +1642,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 else:
                     delta_kwh = min(charge_kwh_slot, (self._max_soc - estimated_soc) / 100 * cap)
                     grid_charge_kwh += delta_kwh * h["grid_fraction"]
-                    # Relabel for display: if solar covers >80% → show as solar_charge
-                    if h["grid_fraction"] < 0.2 and h["solar_surplus_kwh"] > 0.05:
-                        action = "solar_charge"
             elif action == "discharge":
                 if estimated_soc <= self._min_soc:
                     action = "idle"
                 else:
                     delta_kwh = min(discharge_kwh_slot, (estimated_soc - self._min_soc) / 100 * cap)
 
-            if action in ("solar_charge", "charge"):
+            if action == "charge":
                 estimated_soc += delta_kwh / cap * 100
-                if action == "solar_charge":
-                    solar_count += 1
-                else:
-                    charge_count += 1
+                charge_count += 1
             elif action == "discharge":
                 estimated_soc -= delta_kwh / cap * 100
                 discharge_count += 1
@@ -1697,8 +1690,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 return f"{total_min // 60}h{total_min % 60:02d}"
             return f"{total_min}min"
 
-        if solar_count:
-            parts.append(f"{_fmt_duration(solar_count)} Solar")
         if charge_count:
             parts.append(f"{_fmt_duration(charge_count)} Laden ({self._fmt_ct(grid_charge_kwh)} kWh)")
         if discharge_count:
