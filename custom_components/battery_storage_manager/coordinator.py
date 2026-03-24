@@ -1942,31 +1942,31 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 dp[t][si] = best_val
                 action_dp[t][si] = best_act
 
-        # Debug: log dp value differences at key slots to diagnose
-        # why the DP doesn't charge early enough
-        if n > 20:
-            start_level = soc_to_idx(current_soc)
-            charge_levels = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
-            target_level = min(start_level + charge_levels, num_soc - 1)
-            # Find a few representative slots to log
-            for check_t in range(min(n, 200)):
-                h_check = hourly_data[check_t]
-                if h_check["price"] < 0.20 and action_dp[check_t][start_level] == "idle":
-                    dp_here = dp[check_t + 1][start_level]
-                    dp_charged = dp[check_t + 1][target_level]
-                    gf = h_check.get("_scn_grid_frac", h_check["grid_fraction"])
-                    delta = min(charge_kwh_slot, (self._max_soc - soc_levels[start_level]) / 100 * cap)
-                    cost = delta * gf * h_check["price"] + delta * half_cycle_eur
-                    _LOGGER.info(
-                        "DP debug t=%d (%s) price=%.1f gf=%.2f: "
-                        "idle_val=%.4f charge_val=%.4f (dp[%d]=%.4f dp[%d]=%.4f cost=%.4f) → %s",
-                        check_t, h_check.get("time", "?"), h_check["price"] * 100, gf,
-                        dp_here, -cost + dp_charged,
-                        start_level, dp_here, target_level, dp_charged, cost,
-                        action_dp[check_t][start_level],
-                    )
-                    if check_t > 5:  # log max ~5 slots
-                        break
+        # Debug: log dp values unconditionally for cheap slots
+        _LOGGER.warning(
+            "DP debug: n=%d soc_step=%.1f num_soc=%d current_soc=%.1f "
+            "charge_kwh=%.3f cap=%.1f tv=%.4f",
+            n, soc_step, num_soc, current_soc, charge_kwh_slot, cap, tv_per_kwh,
+        )
+        # Log first 10 cheap slots showing action + dp delta
+        logged = 0
+        for check_t in range(min(n, 200)):
+            h_check = hourly_data[check_t]
+            if h_check["price"] < 0.20 and logged < 10:
+                si_low = soc_to_idx(current_soc)
+                cl = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
+                si_high = min(si_low + cl, num_soc - 1)
+                dp_low = dp[check_t + 1][si_low]
+                dp_high = dp[check_t + 1][si_high]
+                gf = h_check.get("_scn_grid_frac", h_check["grid_fraction"])
+                act = action_dp[check_t][si_low]
+                _LOGGER.warning(
+                    "DP debug t=%d price=%.1f gf=%.2f act=%s "
+                    "dp[si=%d]=%.4f dp[si=%d]=%.4f delta=%.4f",
+                    check_t, h_check["price"] * 100, gf, act,
+                    si_low, dp_low, si_high, dp_high, dp_high - dp_low,
+                )
+                logged += 1
 
         # Forward pass
         start_si = soc_to_idx(current_soc)
