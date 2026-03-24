@@ -1659,53 +1659,69 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         smoothed += swapped
 
-        # Pass 4: Backward shift of charge slots.
-        # Problem: the DP may start charging too early (e.g. midnight)
-        # when later slots have the same price. This fills the battery
-        # before solar hours, wasting free solar surplus.
+        # Pass 4: Target-based backward charge fill.
+        # Problem: the DP may plan too few charge slots (break-even floating
+        # point issue) AND start them too early. This pass ensures the battery
+        # reaches max_soc by the discharge start, charging as late as possible.
         #
-        # Fix: for each contiguous block of same-price charge+idle slots,
-        # shift charge slots to the LATEST positions. This leaves early
-        # slots as idle where opportunistic solar charging can fill them.
-        #
-        # Example: [idle idle charge charge charge discharge]
-        #       → [idle idle idle charge charge+charge discharge]
-        # Wait that doesn't work for blocks. Let me think differently.
-        #
-        # Approach: find all charge slots, for each one check if there's
-        # a later idle slot at the same or lower price that could take
-        # over. Swap them (charge moves later, idle moves earlier).
-        shifted = 0
-        charge_price_threshold = 0.005  # max price difference for "same price band"
+        # Algorithm:
+        # 1. Find first discharge slot → that's the deadline
+        # 2. Simulate SOC from start, counting existing charge slots
+        # 3. If SOC at deadline < max_soc, add more charge slots
+        # 4. Pick idle slots BACKWARDS from deadline at cheapest prices
+        # 5. Among equal-price candidates, prefer latest (room for solar)
+        filled = 0
+
+        # Find first discharge slot index
+        first_discharge = None
         for i in range(n):
-            if actions[i] != "charge":
-                continue
-            p_i = hourly_data[i]["price"]
-            # Find the LATEST idle slot at similar or lower price
-            best_j = None
-            for j in range(n - 1, i, -1):
-                if actions[j] == "idle" and j < n:
-                    p_j = hourly_data[j]["price"]
-                    # Must be before any discharge block that follows charge
-                    # (don't push charge past discharge)
-                    has_discharge_between = any(
-                        actions[k] == "discharge" for k in range(i + 1, j)
+            if actions[i] == "discharge":
+                first_discharge = i
+                break
+
+        if first_discharge is not None and charge_kwh_slot > 0:
+            # Simulate SOC at discharge start with current plan
+            sim_soc = current_soc
+            for i in range(first_discharge):
+                if actions[i] == "charge":
+                    delta = min(charge_kwh_slot, (self._max_soc - sim_soc) / 100 * cap)
+                    sim_soc += delta / cap * 100
+                elif actions[i] == "discharge":
+                    delta = min(discharge_kwh_slot, (sim_soc - self._min_soc) / 100 * cap)
+                    sim_soc -= delta / cap * 100
+
+            # How many more charge slots needed to reach max_soc?
+            soc_gap = self._max_soc - sim_soc
+            if soc_gap > 1.0:  # more than 1% gap
+                charge_pct_per_slot = charge_kwh_slot / cap * 100
+                slots_needed = int(soc_gap / charge_pct_per_slot) + 1
+
+                # Collect idle slots before discharge, sorted by:
+                # 1. Price (cheapest first)
+                # 2. Time (latest first within same price, for solar room)
+                candidates = []
+                for i in range(first_discharge):
+                    if actions[i] == "idle":
+                        candidates.append((hourly_data[i]["price"], -i, i))
+                candidates.sort()  # cheapest price first, latest time first (neg index)
+
+                for _, _, idx in candidates[:slots_needed]:
+                    actions[idx] = "charge"
+                    filled += 1
+
+                if filled:
+                    _LOGGER.info(
+                        "Pass 4 backward fill: SOC at discharge was %.1f%%, "
+                        "needed %.1f%% more → added %d charge slots (target %d)",
+                        sim_soc, soc_gap, filled, slots_needed,
                     )
-                    if has_discharge_between:
-                        continue
-                    if p_j <= p_i + charge_price_threshold:
-                        best_j = j
-                        break  # found latest suitable idle
-            if best_j is not None:
-                actions[i] = "idle"
-                actions[best_j] = "charge"
-                shifted += 1
-        smoothed += shifted
+
+        smoothed += filled
 
         if smoothed:
             _LOGGER.info(
-                "Plan smoothing: %d slots adjusted (%d swaps, %d shifted)",
-                smoothed, swapped, shifted,
+                "Plan smoothing: %d slots adjusted (%d swaps, %d filled)",
+                smoothed, swapped, filled,
             )
 
         # Log DP result (only when plan changes)
@@ -2019,6 +2035,35 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Profit = DP value − terminal value of starting energy
         start_stored_kwh = (current_soc - self._min_soc) / 100 * cap
         profit = dp[0][soc_to_idx(current_soc)] - start_stored_kwh * tv_per_kwh
+
+        # Debug dump: log full forward pass (only when plan changes)
+        action_sig = "".join(a[0] for a in actions)
+        prev_sig = getattr(self, "_dp_dump_last_sig", "")
+        if action_sig != prev_sig:
+            self._dp_dump_last_sig = action_sig
+            rows = []
+            fwd_si = soc_to_idx(current_soc)
+            for t in range(n):
+                h = hourly_data[t]
+                soc = soc_levels[fwd_si]
+                gf = h.get("_scn_grid_frac", h["grid_fraction"])
+                cl = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
+                hi = min(fwd_si + cl, num_soc - 1)
+                rows.append(
+                    f"t={t} p={h['price']*100:.1f} gf={gf:.2f} "
+                    f"sol={h.get('solar_kwh',0):.3f} soc={soc:.1f}% "
+                    f"act={actions[t]} Δchg={dp[t+1][hi]-dp[t+1][fwd_si]:.4f}"
+                )
+                if actions[t] == "charge":
+                    d = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
+                    fwd_si = soc_to_idx(soc + d / cap * 100)
+                elif actions[t] == "discharge":
+                    d = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
+                    fwd_si = soc_to_idx(soc - d / cap * 100)
+            _LOGGER.warning(
+                "DP DUMP: n=%d step=%.1f soc0=%.1f tv=%.4f profit=%.4f\n%s",
+                n, soc_step, current_soc, tv_per_kwh, profit, "\n".join(rows),
+            )
 
         return actions, profit
 
