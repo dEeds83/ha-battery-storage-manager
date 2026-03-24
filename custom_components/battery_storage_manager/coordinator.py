@@ -1585,23 +1585,54 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             current_si = soc_to_idx(new_soc)
 
         # ── Smooth micro-cycles ─────────────────────────────────
-        # Remove single-slot "enclaves" where action differs from neighbors
-        # e.g. charge→discharge→charge or discharge→charge→discharge.
-        # These are DP artifacts from SOC quantization near limits and
-        # always lose money due to round-trip efficiency + cycle costs.
+        # The DP can create rapid charge↔discharge cycling when price
+        # differences are small (e.g. 1-2 ct), especially with EPEX data.
+        # This loses money due to efficiency + cycle costs.
+        #
+        # Two-pass smoothing:
+        # Pass 1: Require minimum run length of 2 slots (30 min) for
+        #         charge/discharge. Short runs become idle.
+        # Pass 2: Remove charge↔discharge transitions where the price
+        #         spread is below the break-even threshold.
         smoothed = 0
-        for i in range(1, n - 1):
-            prev_a, cur_a, next_a = actions[i - 1], actions[i], actions[i + 1]
-            # Single discharge between charges
-            if cur_a == "discharge" and prev_a == "charge" and next_a == "charge":
-                actions[i] = "charge"
-                smoothed += 1
-            # Single charge between discharges
-            elif cur_a == "charge" and prev_a == "discharge" and next_a == "discharge":
-                actions[i] = "discharge"
-                smoothed += 1
+
+        # Pass 1: Minimum run length for charge/discharge
+        min_run = 2  # at least 2 consecutive slots (30 min at 15-min resolution)
+        i = 0
+        while i < n:
+            act = actions[i]
+            if act in ("charge", "discharge"):
+                # Find run length
+                j = i + 1
+                while j < n and actions[j] == act:
+                    j += 1
+                run_len = j - i
+                if run_len < min_run:
+                    # Short run → convert to idle
+                    for k in range(i, j):
+                        actions[k] = "idle"
+                    smoothed += run_len
+                i = j
+            else:
+                i += 1
+
+        # Pass 2: Remove rapid charge↔discharge alternation
+        # If charge is immediately followed by discharge (or vice versa)
+        # and the price spread is below break-even, convert to idle.
+        break_even_spread = (self._cycle_cost / 100) + (1 - self._battery_efficiency) * 0.25
+        for i in range(1, n):
+            prev_a, cur_a = actions[i - 1], actions[i]
+            if (prev_a == "charge" and cur_a == "discharge") or \
+               (prev_a == "discharge" and cur_a == "charge"):
+                p_prev = hourly_data[i - 1]["price"]
+                p_cur = hourly_data[i]["price"]
+                spread = abs(p_cur - p_prev)
+                if spread < break_even_spread:
+                    actions[i] = "idle"
+                    smoothed += 1
+
         if smoothed:
-            _LOGGER.info("Plan smoothing: removed %d micro-cycle enclaves", smoothed)
+            _LOGGER.info("Plan smoothing: %d slots adjusted (min-run + spread filter)", smoothed)
 
         # Log DP result (only when plan changes)
         total_profit = dp[0][start_si]
