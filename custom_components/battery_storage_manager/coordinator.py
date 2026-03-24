@@ -351,23 +351,33 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
     def get_hourly_consumption_forecast(self, target_date: datetime | None = None) -> dict[int, float]:
         """Get predicted consumption per hour-of-day (0-23) in watts.
 
-        Returns a dict mapping hour (int) → average consumption (W).
-        Uses weekday/weekend split based on the target date.
-        Falls back to configured house_consumption_w for hours without data.
+        Uses exponentially weighted average (EWA) where recent days have
+        more influence than older days. This captures trends (e.g. new
+        appliance, seasonal changes) better than a simple average.
+
+        Weight for sample i (0=oldest, n-1=newest): w = α^(n-1-i)
+        with α = 0.85 (15% decay per day → 7-day half-life).
         """
         if target_date is None:
             target_date = dt_util.now()
         day_type = "wd" if target_date.weekday() < 5 else "we"
         other_type = "we" if day_type == "wd" else "wd"
+        alpha = 0.85  # decay factor: recent days weighted more
 
         forecast: dict[int, float] = {}
         for hour in range(24):
-            # Prefer same day type, fall back to other, then config default
             samples = self._consumption_stats.get(f"{day_type}_{hour}", [])
             if not samples:
                 samples = self._consumption_stats.get(f"{other_type}_{hour}", [])
             if samples:
-                forecast[hour] = sum(samples) / len(samples)
+                # Exponentially weighted average (newest sample = highest weight)
+                n = len(samples)
+                if n == 1:
+                    forecast[hour] = samples[0]
+                else:
+                    weights = [alpha ** (n - 1 - i) for i in range(n)]
+                    w_sum = sum(weights)
+                    forecast[hour] = sum(w * s for w, s in zip(weights, samples)) / w_sum
             else:
                 forecast[hour] = self._house_consumption_w
         return forecast
@@ -504,20 +514,26 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         )
 
     def _apply_intraday_solar_correction(self) -> None:
-        """Adjust remaining solar forecast based on actual vs predicted production so far.
+        """Adjust remaining solar forecast using a Kalman filter.
 
-        If by 11:00 only 30% of the day's forecast has materialized but 50% was
-        expected, the remaining forecast is scaled down by 0.6. This gives much
-        better afternoon planning on cloudy days.
+        The Kalman filter combines the forecast (prediction) with actual
+        production (measurement) to estimate the true correction factor.
+        It reacts quickly to weather changes but doesn't overshoot on
+        short fluctuations (unlike a simple ratio).
+
+        State: x = solar correction factor (1.0 = forecast is accurate)
+        Measurement: z = actual_so_far / forecast_so_far
         """
         if not self._solar_energy_today_entity:
             self._intraday_solar_factor = 1.0
             return
 
         now = dt_util.now()
-        # Only useful during daylight hours with some forecast
         if now.hour < 8 or now.hour >= 20:
             self._intraday_solar_factor = 1.0
+            # Reset Kalman state at night
+            self._kalman_x = 1.0
+            self._kalman_p = 0.1
             return
 
         state = self.hass.states.get(self._solar_energy_today_entity)
@@ -529,7 +545,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         except (ValueError, TypeError):
             return
 
-        # Calculate forecast for hours already passed today
         today_prefix = now.strftime("%Y-%m-%dT")
         now_key = now.strftime("%Y-%m-%dT%H")
         forecast_so_far_wh = sum(
@@ -539,23 +554,42 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         forecast_so_far_kwh = forecast_so_far_wh / 1000
 
         if forecast_so_far_kwh < 0.5:
-            # Not enough forecast data to compare yet
             self._intraday_solar_factor = 1.0
             return
 
-        # Ratio of actual/predicted so far
-        intraday_ratio = actual_so_far_kwh / forecast_so_far_kwh
-        # Clamp to reasonable range
-        intraday_ratio = max(0.2, min(3.0, intraday_ratio))
+        # Measurement: actual ratio
+        measurement = actual_so_far_kwh / forecast_so_far_kwh
+        measurement = max(0.2, min(3.0, measurement))
 
-        # Blend with daily calibration factor (70% intraday, 30% daily)
-        # This ensures we respond to today's weather while keeping some stability
-        self._intraday_solar_factor = intraday_ratio
+        # Kalman filter update
+        # x = state estimate (correction factor), p = error covariance
+        # Q = process noise (how fast the true factor can change)
+        # R = measurement noise (how noisy the ratio measurement is)
+        x = getattr(self, "_kalman_x", 1.0)
+        p = getattr(self, "_kalman_p", 0.1)
+        Q = 0.005  # process noise: factor changes slowly
+        R = 0.05   # measurement noise: ratio can be noisy
 
-        # Apply to remaining forecast hours (future only)
+        # Predict
+        p = p + Q
+
+        # Update
+        K = p / (p + R)  # Kalman gain
+        x = x + K * (measurement - x)  # updated estimate
+        p = (1 - K) * p  # updated covariance
+
+        # Clamp
+        x = max(0.2, min(3.0, x))
+        self._kalman_x = x
+        self._kalman_p = p
+
+        old_factor = self._intraday_solar_factor
+        self._intraday_solar_factor = x
+
+        # Apply to remaining forecast hours
         for key in self._solar_forecast:
             if key.startswith(today_prefix) and key >= now_key:
-                self._solar_forecast[key] *= intraday_ratio
+                self._solar_forecast[key] *= x
 
         # Recalculate expected solar
         remaining = {
@@ -564,13 +598,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         }
         self._expected_solar_kwh = sum(remaining.values()) / 1000
 
-        # Only log when factor changes significantly (>5% shift)
-        if (abs(intraday_ratio - 1.0) > 0.1
-                and abs(intraday_ratio - self._intraday_solar_factor) > 0.05):
+        # Log only on significant changes
+        if abs(x - old_factor) > 0.05 and abs(x - 1.0) > 0.1:
             msg = (
-                f"Intraday Solar-Korrektur: Ist={actual_so_far_kwh:.1f} kWh, "
-                f"Forecast bisher={forecast_so_far_kwh:.1f} kWh \u2192 "
-                f"Faktor {intraday_ratio:.2f}, Rest={self._expected_solar_kwh:.1f} kWh"
+                f"Kalman Solar: Ist={actual_so_far_kwh:.1f} kWh, "
+                f"Forecast={forecast_so_far_kwh:.1f} kWh, "
+                f"Messung={measurement:.2f}, Kalman={x:.2f} "
+                f"(K={K:.2f}), Rest={self._expected_solar_kwh:.1f} kWh"
             )
             _LOGGER.info(msg)
             self._log_optimization(msg)
@@ -1472,149 +1506,71 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         n = len(slot_data)
         hourly_data = slot_data
 
-        # ── Dynamic Programming ──────────────────────────────────
-        # SOC discretization: step size must be fine enough that:
-        # 1. Every charge/discharge transition moves at least 1 level
-        # 2. Full charge (grid+solar) and partial charge (solar only)
-        #    land on DIFFERENT levels - otherwise the DP can't distinguish
-        #    between free solar charge and paid grid charge.
-        # Using min_delta * 0.45 ensures full charge moves ~2 levels
-        # while typical solar-only charge moves ~1 level.
-        charge_soc_pct = charge_kwh_slot / cap * 100 if cap > 0 else 5
-        discharge_soc_pct = discharge_kwh_slot / cap * 100 if cap > 0 else 5
-        min_delta_pct = min(charge_soc_pct, discharge_soc_pct) if charge_soc_pct > 0 else discharge_soc_pct
-        # Step = ~45% of min delta → full charge ≈ 2 levels, solar ≈ 1 level
-        # Clamp between 0.5% and 3% for resolution vs performance
-        soc_step = max(0.5, min(3.0, min_delta_pct * 0.45))
-        soc_step = round(soc_step, 1) or 0.5
-
-        soc_levels = []
-        s = float(self._min_soc)
-        while s <= self._max_soc + 0.01:
-            soc_levels.append(round(s, 1))
-            s += soc_step
-        num_soc = len(soc_levels)
-
-        def soc_to_idx(soc: float) -> int:
-            idx = round((soc - self._min_soc) / soc_step)
-            return max(0, min(num_soc - 1, idx))
-
-        _LOGGER.debug(
-            "DP grid: %d SOC levels (step=%.1f%%), charge=%.1f%%/slot, "
-            "discharge=%.1f%%/slot, %d time slots",
-            num_soc, soc_step, charge_soc_pct, discharge_soc_pct, n,
-        )
-
-        # dp[t][s] = max cumulative profit achievable from slot t to end,
-        #            starting at SOC level s
-        # action_dp[t][s] = best action at slot t with SOC level s
-        INF = float("-inf")
-        dp = [[INF] * num_soc for _ in range(n + 1)]
-        action_dp = [["idle"] * num_soc for _ in range(n)]
-
-        # Terminal condition: value of stored energy at end of planning horizon.
+        # ── Scenario-based DP ────────────────────────────────────
+        # Run the DP for 3 scenarios with different solar/consumption
+        # assumptions. Pick the plan that is profitable in ALL scenarios
+        # (conservative/robust approach).
         #
-        # Even without EPEX, stored energy has value: tomorrow will likely
-        # have expensive peak hours too. A base terminal value prevents
-        # the DP from dumping all energy at moderate prices just because
-        # it's "technically profitable" — holding for unknown future peaks
-        # has option value.
+        # - Expected:    solar 100%, consumption 100%
+        # - Pessimistic: solar  60%, consumption 120%
+        # - Optimistic:  solar 120%, consumption  80%
         #
-        # Base value = average Tibber price × efficiency − half cycle cost
-        # EPEX value adds to this if predictions show high future prices.
-        # Use upper-third average as reference (we'd discharge at peak prices,
-        # not at the average). This prevents over-valuing stored energy when
-        # many cheap night slots pull the average down.
-        all_prices = sorted(h["price"] for h in hourly_data)
-        upper_third_start = len(all_prices) * 2 // 3
-        upper_prices = all_prices[upper_third_start:] or all_prices
-        avg_peak_price = sum(upper_prices) / len(upper_prices) if upper_prices else 0.25
-        half_cycle_eur = cycle_cost_eur / 2
-        base_tv = max(0.0, avg_peak_price * efficiency - half_cycle_eur)
-        epex_tv = getattr(self, "_epex_terminal_value_per_kwh", 0.0)
-        tv_per_kwh = max(base_tv, epex_tv)
+        # For each scenario, adjust grid_fraction per slot and re-run DP.
+        # The final plan uses the action that appears in at least 2 of 3
+        # scenarios (majority vote), defaulting to idle on disagreement.
 
-        for s in range(num_soc):
-            stored_kwh = (soc_levels[s] - self._min_soc) / 100 * cap
-            dp[n][s] = stored_kwh * tv_per_kwh
+        scenarios = [
+            {"name": "expected",    "solar_factor": 1.0, "consumption_factor": 1.0},
+            {"name": "pessimistic", "solar_factor": 0.6, "consumption_factor": 1.2},
+            {"name": "optimistic",  "solar_factor": 1.2, "consumption_factor": 0.8},
+        ]
 
-        _LOGGER.debug(
-            "DP terminal value: %.1f ct/kWh (base=%.1f, epex=%.1f, peak_avg=%.1f ct)",
-            tv_per_kwh * 100, base_tv * 100, epex_tv * 100, avg_peak_price * 100,
-        )
+        scenario_actions: list[list[str]] = []
+        scenario_profits: list[float] = []
 
-        # Backward pass
-        for t in range(n - 1, -1, -1):
-            h = hourly_data[t]
-            price = h["price"]
-            grid_frac = h["grid_fraction"]
+        for scenario in scenarios:
+            sf = scenario["solar_factor"]
+            cf = scenario["consumption_factor"]
 
-            for si in range(num_soc):
-                soc = soc_levels[si]
-                best_val = INF
-                best_act = "idle"
+            # Adjust slot data for this scenario
+            for h in hourly_data:
+                adj_solar = h["solar_kwh"] * sf
+                adj_house = h["house_w"] * cf / 1000 * slot_h
+                adj_surplus = max(0, adj_solar - adj_house)
+                if charge_kwh_slot > 0:
+                    h["_scn_grid_frac"] = max(0, charge_kwh_slot - adj_surplus) / charge_kwh_slot
+                else:
+                    h["_scn_grid_frac"] = 1.0
 
-                # Option 1: idle
-                val = dp[t + 1][si]
-                if val > best_val:
-                    best_val = val
-                    best_act = "idle"
+            actions, profit = self._solve_dp(
+                hourly_data, n, current_soc, charge_kwh_slot, discharge_kwh_slot,
+                cap, efficiency, cycle_cost_eur, slot_h,
+            )
+            scenario_actions.append(actions)
+            scenario_profits.append(profit)
 
-                # Option 2: charge at full charger power
-                # Solar reduces the effective cost via grid_fraction (already
-                # computed per slot). No separate solar_charge option in the DP
-                # because: (a) solar forecasts are unreliable, (b) planning
-                # grid charge at cheap prices is conservative – if solar delivers
-                # more than predicted, it automatically reduces grid draw at
-                # runtime, and (c) _try_solar_opportunistic captures free solar
-                # during idle/hold slots regardless.
-                if soc < self._max_soc and charge_kwh_slot > 0:
-                    delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
-                    new_soc = soc + delta / cap * 100
-                    new_si = soc_to_idx(new_soc)
-                    if new_si > si:  # must actually increase SOC level
-                        cost = delta * grid_frac * price + delta * half_cycle_eur
-                        val = -cost + dp[t + 1][new_si]
-                        if val > best_val:
-                            best_val = val
-                            best_act = "charge"
+        # Restore original grid_fraction for plan building
+        for h in hourly_data:
+            h["_scn_grid_frac"] = h["grid_fraction"]
 
-                # Option 3: discharge
-                if soc > self._min_soc and discharge_kwh_slot > 0:
-                    delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
-                    delivered = delta * efficiency
-                    new_soc = soc - delta / cap * 100
-                    new_si = soc_to_idx(new_soc)
-                    if new_si < si:  # must actually decrease SOC level
-                        revenue = delivered * price - delta * half_cycle_eur
-                        val = revenue + dp[t + 1][new_si]
-                        if val > best_val:
-                            best_val = val
-                            best_act = "discharge"
-
-                dp[t][si] = best_val
-                action_dp[t][si] = best_act
-
-        # ── Forward pass: extract optimal actions ────────────────
-        start_si = soc_to_idx(current_soc)
+        # Majority vote: action must appear in ≥2 of 3 scenarios
         actions = []
-        current_si = start_si
         for t in range(n):
-            act = action_dp[t][current_si]
-            actions.append(act)
-
-            soc = soc_levels[current_si]
-            h = hourly_data[t]
-            if act == "charge":
-                delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
-                new_soc = soc + delta / cap * 100
-            elif act == "discharge":
-                delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
-                new_soc = soc - delta / cap * 100
+            votes = [sa[t] for sa in scenario_actions]
+            for candidate in ["charge", "discharge", "idle"]:
+                if votes.count(candidate) >= 2:
+                    actions.append(candidate)
+                    break
             else:
-                new_soc = soc
+                actions.append("idle")  # no majority → safe default
 
-            current_si = soc_to_idx(new_soc)
+        # Use the pessimistic profit as the reported profit (conservative)
+        actual_profit = scenario_profits[1]  # pessimistic scenario
+
+        _LOGGER.debug(
+            "Scenario DP: expected=%.3f, pessimistic=%.3f, optimistic=%.3f EUR",
+            scenario_profits[0], scenario_profits[1], scenario_profits[2],
+        )
 
         # ── Smooth micro-cycles ─────────────────────────────────
         # The DP can create rapid charge↔discharge cycling when price
@@ -1699,10 +1655,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             _LOGGER.info("Plan smoothing: %d slots adjusted (%d swaps)", smoothed, swapped)
 
         # Log DP result (only when plan changes)
-        # Subtract terminal value of starting SOC to get actual arbitrage profit
-        start_stored_kwh = (current_soc - self._min_soc) / 100 * cap
-        total_dp_value = dp[0][start_si]
-        actual_profit = total_dp_value - start_stored_kwh * tv_per_kwh
         charge_slots = sum(1 for a in actions if a == "charge")
         discharge_slots = sum(1 for a in actions if a == "discharge")
         dp_signature = f"{charge_slots}:{discharge_slots}:{actual_profit:.2f}"
@@ -1877,6 +1829,126 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         if action == "hold":
             return "Halten für teure Stunden"
         return "Keine Aktion"
+
+    def _solve_dp(
+        self,
+        hourly_data: list[dict],
+        n: int,
+        current_soc: float,
+        charge_kwh_slot: float,
+        discharge_kwh_slot: float,
+        cap: float,
+        efficiency: float,
+        cycle_cost_eur: float,
+        slot_h: float,
+    ) -> tuple[list[str], float]:
+        """Run the core DP optimization. Returns (actions, profit).
+
+        Uses _scn_grid_frac from hourly_data for the current scenario.
+        """
+        # SOC discretization
+        charge_soc_pct = charge_kwh_slot / cap * 100 if cap > 0 else 5
+        discharge_soc_pct = discharge_kwh_slot / cap * 100 if cap > 0 else 5
+        min_delta_pct = min(charge_soc_pct, discharge_soc_pct) if charge_soc_pct > 0 else discharge_soc_pct
+        soc_step = max(0.5, min(3.0, min_delta_pct * 0.45))
+        soc_step = round(soc_step, 1) or 0.5
+
+        soc_levels = []
+        s = float(self._min_soc)
+        while s <= self._max_soc + 0.01:
+            soc_levels.append(round(s, 1))
+            s += soc_step
+        num_soc = len(soc_levels)
+
+        def soc_to_idx(soc: float) -> int:
+            idx = round((soc - self._min_soc) / soc_step)
+            return max(0, min(num_soc - 1, idx))
+
+        half_cycle_eur = cycle_cost_eur / 2
+
+        # Terminal value
+        all_prices = sorted(h["price"] for h in hourly_data)
+        upper_third_start = len(all_prices) * 2 // 3
+        upper_prices = all_prices[upper_third_start:] or all_prices
+        avg_peak_price = sum(upper_prices) / len(upper_prices) if upper_prices else 0.25
+        base_tv = max(0.0, avg_peak_price * efficiency - half_cycle_eur)
+        epex_tv = getattr(self, "_epex_terminal_value_per_kwh", 0.0)
+        tv_per_kwh = max(base_tv, epex_tv)
+
+        INF = float("-inf")
+        dp = [[INF] * num_soc for _ in range(n + 1)]
+        action_dp = [["idle"] * num_soc for _ in range(n)]
+
+        for s_idx in range(num_soc):
+            stored_kwh = (soc_levels[s_idx] - self._min_soc) / 100 * cap
+            dp[n][s_idx] = stored_kwh * tv_per_kwh
+
+        # Backward pass
+        for t in range(n - 1, -1, -1):
+            h = hourly_data[t]
+            price = h["price"]
+            grid_frac = h.get("_scn_grid_frac", h["grid_fraction"])
+
+            for si in range(num_soc):
+                soc = soc_levels[si]
+                best_val = INF
+                best_act = "idle"
+
+                val = dp[t + 1][si]
+                if val > best_val:
+                    best_val = val
+                    best_act = "idle"
+
+                if soc < self._max_soc and charge_kwh_slot > 0:
+                    delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
+                    new_soc = soc + delta / cap * 100
+                    new_si = soc_to_idx(new_soc)
+                    if new_si > si:
+                        cost = delta * grid_frac * price + delta * half_cycle_eur
+                        val = -cost + dp[t + 1][new_si]
+                        if val > best_val:
+                            best_val = val
+                            best_act = "charge"
+
+                if soc > self._min_soc and discharge_kwh_slot > 0:
+                    delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
+                    delivered = delta * efficiency
+                    new_soc = soc - delta / cap * 100
+                    new_si = soc_to_idx(new_soc)
+                    if new_si < si:
+                        revenue = delivered * price - delta * half_cycle_eur
+                        val = revenue + dp[t + 1][new_si]
+                        if val > best_val:
+                            best_val = val
+                            best_act = "discharge"
+
+                dp[t][si] = best_val
+                action_dp[t][si] = best_act
+
+        # Forward pass
+        start_si = soc_to_idx(current_soc)
+        actions = []
+        current_si = start_si
+        for t in range(n):
+            act = action_dp[t][current_si]
+            actions.append(act)
+
+            soc = soc_levels[current_si]
+            if act == "charge":
+                delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
+                new_soc = soc + delta / cap * 100
+            elif act == "discharge":
+                delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
+                new_soc = soc - delta / cap * 100
+            else:
+                new_soc = soc
+            current_si = soc_to_idx(new_soc)
+
+        # Profit = DP value − terminal value of starting energy
+        start_stored_kwh = (current_soc - self._min_soc) / 100 * cap
+        profit = dp[0][soc_to_idx(current_soc)] - start_stored_kwh * tv_per_kwh
+
+        return actions, profit
 
     def _build_slot_data(self, now: datetime) -> tuple[list[dict], float]:
         """Build list of time slots from price forecast.
@@ -2715,6 +2787,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "solar_power": self._solar_power,
             "solar_calibration_factor": self._solar_calibration_factor,
             "intraday_solar_factor": self._intraday_solar_factor,
+            "kalman_gain": round(getattr(self, "_kalman_p", 0.1) / (getattr(self, "_kalman_p", 0.1) + 0.05), 3),
             "battery_efficiency": round(self._battery_efficiency * 100),
             "cycle_cost_ct": self._cycle_cost,
             "consumption_forecast": self.get_hourly_consumption_forecast(),

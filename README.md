@@ -1,25 +1,23 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.4.2-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
 ## Features
 
 ### Optimierung
-- **Dynamic Programming Optimierung** – Findet den global optimalen SOC-Pfad über alle Zeitslots (statt greedy Pairing)
-- **EPEX Predictor Integration** – Erweitert das Planungsfenster über Tibber Day-Ahead hinaus mit skalierten EPEX-Spot-Prognosen (bis 4 Tage)
-- **48h+ Lookahead** – Optimiert über morgen hinaus: Tibber-Preise + EPEX-Prognose automatisch kombiniert
+- **Szenario-DP Optimierung** – Dynamic Programming über 3 Szenarien (erwartet/pessimistisch/optimistisch), Majority-Vote für robuste Planung
+- **Kalman-Filter Solar-Korrektur** – Kombiniert Forecast mit Ist-Messung: reagiert schnell auf Wetteränderungen ohne Überschwingen
+- **Exponentielle Verbrauchsprognose** – Gewichteter Durchschnitt (α=0,85) bevorzugt aktuelle Tage, erkennt Trends
+- **EPEX Predictor Terminal-Value** – Bestimmt ob Akku am Tibber-Ende voll oder leer sein soll (keine falschen Aktionen)
 - **Batterie-Zykluskosten** – Konfigurierbarer Degradationskostenparameter (ct/kWh) verhindert unprofitable Mini-Arbitrage
-- **Roundtrip-Effizienz** – Konfigurierbarer Effizienzfaktor (Standard 90%) wird in die Entlade-Bewertung einberechnet
-- **15-Minuten-Preisauflösung** – Nutzt die volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
-- **Effektive Ladekosten** – Solar-unterstützte Stunden werden bevorzugt (z.B. 50% Solar → halber Netzpreis)
-- **Pre-Solar-Entladung** – Entlädt proaktiv vor Solar-Stunden um Platz für kostenlose Solarenergie zu schaffen
-- **Lernende Verbrauchsprognose** – 14-Tage rollender Durchschnitt, getrennt nach Wochentag/Wochenende
-- **Solar-Prognose-Kalibrierung** – Lernt aus Abweichung Forecast vs. Ist, mit Intraday-Korrektur bei Wetterumschwung
-- **Intraday Solar-Korrektur** – Passt die Restprognose laufend an (Ist-Produktion vs. bisheriger Forecast)
-- **Optimierungs-Log** – Alle Entscheidungen (Umplanungen, Korrekturen) als Sensor im UI einsehbar
+- **Roundtrip-Effizienz** – Konfigurierbarer Effizienzfaktor (Standard 90%) in der Entlade-Bewertung
+- **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
+- **Effektive Ladekosten** – Solar reduziert den Netzanteil (z.B. 50% Solar → halber Netzpreis)
+- **3-Pass Smoothing** – Min-Run + Break-Even-Spread + Slot-Swap eliminiert Mikro-Zyklen
+- **Optimierungs-Log** – Alle Entscheidungen (Szenarien, Kalman, Swaps) als Sensor im UI einsehbar
 
 ### Steuerung
 - **Dynamische Ladegeräte-Anzahl** – Beliebig viele Ladegeräte mit individueller Leistung konfigurierbar
