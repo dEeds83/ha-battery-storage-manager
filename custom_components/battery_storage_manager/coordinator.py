@@ -1546,16 +1546,37 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         for h in hourly_data:
             h["_scn_grid_frac"] = h["grid_fraction"]
 
-        # Majority vote: action must appear in ≥2 of 3 scenarios
+        # Asymmetric vote: charge follows expected scenario (index 0),
+        # discharge requires majority (≥2 of 3 scenarios).
+        #
+        # Rationale: charging at cheap prices is low-risk (worst case: battery
+        # is full and solar surplus gets curtailed, but _try_solar_opportunistic
+        # handles that at runtime). Discharging at the wrong time loses money
+        # directly, so we require consensus.
+        expected = scenario_actions[0]
         actions = []
         for t in range(n):
-            votes = [sa[t] for sa in scenario_actions]
-            for candidate in ["charge", "discharge", "idle"]:
-                if votes.count(candidate) >= 2:
-                    actions.append(candidate)
-                    break
+            exp_act = expected[t]
+            if exp_act == "charge":
+                # Trust expected scenario for charge decisions
+                actions.append("charge")
+            elif exp_act == "discharge":
+                # Require majority for discharge (conservative)
+                votes = [sa[t] for sa in scenario_actions]
+                if votes.count("discharge") >= 2:
+                    actions.append("discharge")
+                else:
+                    actions.append("idle")
             else:
-                actions.append("idle")  # no majority → safe default
+                # idle/hold: check if any scenario wants to charge here
+                # (pessimistic might want to charge where expected doesn't)
+                votes = [sa[t] for sa in scenario_actions]
+                if votes.count("charge") >= 2:
+                    actions.append("charge")
+                elif votes.count("discharge") >= 2:
+                    actions.append("discharge")
+                else:
+                    actions.append("idle")
 
         # Use the pessimistic profit as the reported profit (conservative)
         actual_profit = scenario_profits[1]  # pessimistic scenario

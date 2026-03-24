@@ -1,14 +1,14 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.5.6-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.5.7-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
 ## Features
 
 ### Optimierung
-- **Szenario-DP Optimierung** – Dynamic Programming über 3 Szenarien (erwartet/pessimistisch/optimistisch), Majority-Vote für robuste Planung
+- **Szenario-DP Optimierung** – Dynamic Programming über 3 Szenarien (erwartet/pessimistisch/optimistisch), asymmetrischer Vote: Expected bestimmt Laden, Majority bestimmt Entladen
 - **Kalman-Filter Solar-Korrektur** – Kombiniert Forecast mit Ist-Messung: reagiert schnell auf Wetteränderungen ohne Überschwingen
 - **Exponentielle Verbrauchsprognose** – Gewichteter Durchschnitt (α=0,85) bevorzugt aktuelle Tage, erkennt Trends
 - **EPEX Predictor Terminal-Value** – Bestimmt ob Akku am Tibber-Ende voll oder leer sein soll (keine falschen Aktionen)
