@@ -1522,10 +1522,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         #
         # Base value = average Tibber price × efficiency − half cycle cost
         # EPEX value adds to this if predictions show high future prices.
-        all_prices = [h["price"] for h in hourly_data]
-        avg_price = sum(all_prices) / len(all_prices) if all_prices else 0.20
+        # Use upper-third average as reference (we'd discharge at peak prices,
+        # not at the average). This prevents over-valuing stored energy when
+        # many cheap night slots pull the average down.
+        all_prices = sorted(h["price"] for h in hourly_data)
+        upper_third_start = len(all_prices) * 2 // 3
+        upper_prices = all_prices[upper_third_start:] or all_prices
+        avg_peak_price = sum(upper_prices) / len(upper_prices) if upper_prices else 0.25
         half_cycle_eur = cycle_cost_eur / 2
-        base_tv = max(0.0, avg_price * efficiency - half_cycle_eur)
+        base_tv = max(0.0, avg_peak_price * efficiency - half_cycle_eur)
         epex_tv = getattr(self, "_epex_terminal_value_per_kwh", 0.0)
         tv_per_kwh = max(base_tv, epex_tv)
 
@@ -1556,10 +1561,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 if val > best_val:
                     best_val = val
                     best_act = "idle"
-
-                # Cycle cost split: half on charge, half on discharge
-                # so configured value = total cost per full cycle (charge+discharge)
-                half_cycle_eur = cycle_cost_eur / 2
 
                 # Option 2: charge at full charger power
                 # Solar reduces the effective cost via grid_fraction (already
@@ -1630,7 +1631,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         smoothed = 0
 
         # Pass 1: Minimum run length for charge/discharge
-        min_run = 2  # at least 2 consecutive slots (30 min at 15-min resolution)
+        min_run = 1  # 1 slot = 15 min, physically feasible for chargers
         i = 0
         while i < n:
             act = actions[i]
@@ -1665,9 +1666,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     smoothed += 1
 
         # Pass 3: Swap cheap discharge slots with more expensive idle slots.
-        # With the median filter, both candidates are already above the
-        # discharge threshold. This just ensures the most expensive slots
-        # are actually used for discharge (not wasted because battery ran empty).
+        # Only swap if the idle slot comes AFTER the discharge slot (so
+        # the saved energy is available later) and the price gain is
+        # meaningful (> 1 ct difference to avoid pointless swaps).
         swapped = 0
         while True:
             cheapest_d_idx = None
@@ -1686,7 +1687,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
             if (cheapest_d_idx is not None
                     and best_idle_idx is not None
-                    and best_idle_price > cheapest_d_price):
+                    and best_idle_price > cheapest_d_price + 0.01  # >1ct gain
+                    and best_idle_idx > cheapest_d_idx):  # idle must be later
                 actions[cheapest_d_idx] = "idle"
                 actions[best_idle_idx] = "discharge"
                 swapped += 1
@@ -1698,13 +1700,16 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             _LOGGER.info("Plan smoothing: %d slots adjusted (%d swaps)", smoothed, swapped)
 
         # Log DP result (only when plan changes)
-        total_profit = dp[0][start_si]
+        # Subtract terminal value of starting SOC to get actual arbitrage profit
+        start_stored_kwh = (current_soc - self._min_soc) / 100 * cap
+        total_dp_value = dp[0][start_si]
+        actual_profit = total_dp_value - start_stored_kwh * tv_per_kwh
         charge_slots = sum(1 for a in actions if a == "charge")
         discharge_slots = sum(1 for a in actions if a == "discharge")
-        dp_signature = f"{charge_slots}:{discharge_slots}:{total_profit:.2f}"
+        dp_signature = f"{charge_slots}:{discharge_slots}:{actual_profit:.2f}"
 
         if dp_signature != self._last_dp_signature:
-            profit_str = f"{total_profit:.3f}".replace(".", ",")
+            profit_str = f"{actual_profit:.3f}".replace(".", ",")
             # Count how many charge slots have solar contribution
             solar_assisted = sum(
                 1 for i, a in enumerate(actions)
@@ -1812,7 +1817,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             parts.append(f"{_fmt_duration(discharge_count)} Entladen")
         self._plan_summary = " | ".join(parts) if parts else "Kein Plan erstellt"
 
-        self._estimated_savings = round(max(0, total_profit), 2)
+        self._estimated_savings = round(max(0, actual_profit), 2)
 
         _LOGGER.debug(
             "Battery plan (DP): %s | Profit: %.2f EUR "
