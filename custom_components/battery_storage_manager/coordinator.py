@@ -1888,12 +1888,17 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     best_val = val
                     best_act = "idle"
 
-                # Tie-breaker: when charge/discharge have the same value as idle
-                # (e.g. identical prices across many slots), prefer action over
-                # waiting. This ensures the DP charges at the EARLIEST cheap slot
-                # instead of deferring to identical-price slots later, which may
-                # not have enough slots to fill the battery.
-                eps = 0.0001  # ~0.01 ct tie-breaker, doesn't affect real decisions
+                # Tie-breaker: when charge/discharge have the same value as idle,
+                # prefer WAITING (negative eps). This defers charging to the
+                # latest possible slot at a given price, leaving earlier slots
+                # as idle/hold where free solar surplus can fill the battery.
+                #
+                # The DP backward pass naturally starts charging when future
+                # discharge revenue makes it strictly profitable. The negative
+                # eps just ensures "charge at midnight" doesn't beat "charge
+                # at 10:00" when both have the same price — solar gets first
+                # chance in the morning.
+                eps = -0.0001  # prefer late charging → room for solar
 
                 if soc < self._max_soc and charge_kwh_slot > 0:
                     delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
