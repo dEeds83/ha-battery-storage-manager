@@ -1916,6 +1916,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 # correctly propagates the value of earlier charging when it
                 # enables additional profitable discharge slots.
 
+                # Charge: use >= so that break-even ties prefer charging.
+                # When the marginal discharge slot exactly covers charge cost,
+                # it's better to charge (battery has energy) than idle (doesn't).
                 if soc < self._max_soc and charge_kwh_slot > 0:
                     delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
                     new_soc = soc + delta / cap * 100
@@ -1923,10 +1926,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     if new_si > si:
                         cost = delta * grid_frac * price + delta * half_cycle_eur
                         val = -cost + dp[t + 1][new_si]
-                        if val > best_val:
+                        if val >= best_val:
                             best_val = val
                             best_act = "charge"
 
+                # Discharge: keep strict > (conservative — don't discharge
+                # at break-even, prefer holding energy for uncertain future).
                 if soc > self._min_soc and discharge_kwh_slot > 0:
                     delta = min(discharge_kwh_slot, (soc - self._min_soc) / 100 * cap)
                     delivered = delta * efficiency
@@ -1946,30 +1951,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         start_si = soc_to_idx(current_soc)
         actions = []
         current_si = start_si
-
-        # Collect full forward pass debug data
-        _fwd_rows = []
-
         for t in range(n):
             act = action_dp[t][current_si]
             actions.append(act)
-
             soc = soc_levels[current_si]
-            h = hourly_data[t]
-            gf = h.get("_scn_grid_frac", h["grid_fraction"])
-            cl = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
-            hi_si = min(current_si + cl, num_soc - 1)
-            lo_si = max(current_si - cl, 0)
-            dp_here = dp[t + 1][current_si]
-            dp_charge = dp[t + 1][hi_si]
-            dp_discharge = dp[t + 1][lo_si]
-
-            _fwd_rows.append(
-                f"t={t} p={h['price']*100:.1f} gf={gf:.2f} sol={h.get('solar_kwh',0):.3f} "
-                f"soc={soc:.1f}% si={current_si} act={act} "
-                f"dp_idle={dp_here:.4f} dp_chg={dp_charge:.4f} dp_dis={dp_discharge:.4f} "
-                f"Δchg={dp_charge-dp_here:.4f} Δdis={dp_discharge-dp_here:.4f}"
-            )
 
             if act == "charge":
                 delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
@@ -1984,21 +1969,6 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Profit = DP value − terminal value of starting energy
         start_stored_kwh = (current_soc - self._min_soc) / 100 * cap
         profit = dp[0][soc_to_idx(current_soc)] - start_stored_kwh * tv_per_kwh
-
-        # Full forward pass dump — only log when plan changes
-        action_sig = "".join(a[0] for a in actions)  # e.g. "cccdddiiihhh..."
-        prev_sig = getattr(self, "_dp_dump_last_sig", "")
-        if action_sig != prev_sig:
-            self._dp_dump_last_sig = action_sig
-            header = (
-                f"DP DUMP: n={n} soc_step={soc_step:.1f} num_soc={num_soc} "
-                f"start_soc={current_soc:.1f}% si={start_si} "
-                f"charge_kwh={charge_kwh_slot:.3f} discharge_kwh={discharge_kwh_slot:.3f} "
-                f"cap={cap:.1f} eff={efficiency:.2f} cycle={cycle_cost_eur:.4f} "
-                f"tv={tv_per_kwh:.4f} profit={profit:.4f}"
-            )
-            body = "\n".join(_fwd_rows)
-            _LOGGER.warning("%s\n%s", header, body)
 
         return actions, profit
 
