@@ -1539,16 +1539,14 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             dp[n][s] = stored_kwh * tv_per_kwh
 
         _LOGGER.debug(
-            "DP terminal value: %.1f ct/kWh (base=%.1f, epex=%.1f, avg_price=%.1f ct)",
-            tv_per_kwh * 100, base_tv * 100, epex_tv * 100, avg_price * 100,
+            "DP terminal value: %.1f ct/kWh (base=%.1f, epex=%.1f, peak_avg=%.1f ct)",
+            tv_per_kwh * 100, base_tv * 100, epex_tv * 100, avg_peak_price * 100,
         )
 
         # Backward pass
         for t in range(n - 1, -1, -1):
             h = hourly_data[t]
             price = h["price"]
-            eff_cost = h["effective_charge_cost"]
-            solar_surplus = h["solar_surplus_kwh"]
             grid_frac = h["grid_fraction"]
 
             for si in range(num_soc):
@@ -1653,7 +1651,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Pass 2: Remove rapid charge↔discharge alternation
         # If charge is immediately followed by discharge (or vice versa)
         # and the price spread is below break-even, convert to idle.
-        break_even_spread = (self._cycle_cost / 100) + (1 - self._battery_efficiency) * 0.25
+        avg_plan_price = sum(h["price"] for h in hourly_data) / n if n else 0.25
+        break_even_spread = cycle_cost_eur + (1 - efficiency) * avg_plan_price
         for i in range(1, n):
             prev_a, cur_a = actions[i - 1], actions[i]
             if (prev_a == "charge" and cur_a == "discharge") or \
@@ -1744,9 +1743,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     presolar_discharge_hours.add(i)
 
         # ── Build plan with SOC simulation and reasons ───────────
-        # The DP only outputs "charge", "discharge", "idle".
-        # For display, we relabel charge slots with significant solar
-        # as "solar_charge" so the UI can show them differently.
+        # The DP outputs "charge", "discharge", "idle".
+        # The SOC simulation validates feasibility and converts
+        # infeasible actions to idle (e.g. discharge at min_soc).
         self._battery_plan = []
         estimated_soc = current_soc
         charge_count = 0
@@ -1823,7 +1822,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "Battery plan (DP): %s | Profit: %.2f EUR "
             "(SOC: %.0f%%, Solar: %.1f kWh, Efficiency: %.0f%%)",
             self._plan_summary,
-            total_profit,
+            actual_profit,
             current_soc,
             self._expected_solar_kwh,
             efficiency * 100,
