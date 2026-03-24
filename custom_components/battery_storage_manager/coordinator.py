@@ -27,9 +27,11 @@ from .const import (
     ATTR_PLAN_SUMMARY,
     ATTR_STRATEGY,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_CURRENT_ENTITY,
     CONF_BATTERY_CYCLE_COST,
     CONF_BATTERY_EFFICIENCY,
     CONF_BATTERY_SOC_ENTITY,
+    CONF_BATTERY_VOLTAGE_ENTITY,
     CONF_CHARGERS,
     CONF_EPEX_PREDICTOR_ENABLED,
     CONF_EPEX_PREDICTOR_REGION,
@@ -39,6 +41,7 @@ from .const import (
     STORAGE_KEY_CONSUMPTION,
     STORAGE_VERSION_CONSUMPTION,
     CONF_HOUSE_CONSUMPTION_W,
+    CONF_OUTSIDE_TEMPERATURE_ENTITY,
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_BATTERY_EFFICIENCY,
     CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
@@ -149,6 +152,19 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._house_consumption_w = self._config.get(
             CONF_HOUSE_CONSUMPTION_W, DEFAULT_HOUSE_CONSUMPTION_W
         )
+
+        # Optional sensors: outside temperature + Smartshunt
+        self._outside_temp_entity = self._config.get(CONF_OUTSIDE_TEMPERATURE_ENTITY, "")
+        self._outside_temp: float | None = None
+        self._battery_voltage_entity = self._config.get(CONF_BATTERY_VOLTAGE_ENTITY, "")
+        self._battery_current_entity = self._config.get(CONF_BATTERY_CURRENT_ENTITY, "")
+        self._battery_voltage: float | None = None
+        self._battery_current: float | None = None
+        self._battery_real_power: float | None = None  # V × A
+        # Efficiency tracking: accumulated charge/discharge energy
+        self._efficiency_charge_kwh: float = 0.0
+        self._efficiency_discharge_kwh: float = 0.0
+        self._efficiency_last_reset: str | None = None  # date string
 
         # EPEX Predictor for long-term price forecast
         self._epex_enabled = bool(self._config.get(CONF_EPEX_PREDICTOR_ENABLED, False))
@@ -357,12 +373,28 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         Weight for sample i (0=oldest, n-1=newest): w = α^(n-1-i)
         with α = 0.85 (15% decay per day → 7-day half-life).
+
+        If an outside temperature sensor is configured, applies a
+        temperature correction: below 15°C heating increases consumption,
+        above 25°C cooling increases consumption. The correction is
+        ~2% per °C deviation from the 15-25°C comfort zone.
         """
         if target_date is None:
             target_date = dt_util.now()
         day_type = "wd" if target_date.weekday() < 5 else "we"
         other_type = "we" if day_type == "wd" else "wd"
         alpha = 0.85  # decay factor: recent days weighted more
+
+        # Temperature correction factor
+        temp_factor = 1.0
+        if self._outside_temp is not None:
+            if self._outside_temp < 15.0:
+                # Cold: heating adds ~2% per degree below 15°C
+                temp_factor = 1.0 + (15.0 - self._outside_temp) * 0.02
+            elif self._outside_temp > 25.0:
+                # Hot: cooling adds ~2% per degree above 25°C
+                temp_factor = 1.0 + (self._outside_temp - 25.0) * 0.02
+            temp_factor = max(0.8, min(1.5, temp_factor))  # clamp
 
         forecast: dict[int, float] = {}
         for hour in range(24):
@@ -380,6 +412,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     forecast[hour] = sum(w * s for w, s in zip(weights, samples)) / w_sum
             else:
                 forecast[hour] = self._house_consumption_w
+
+            # Apply temperature correction
+            forecast[hour] *= temp_factor
+
         return forecast
 
     # ── Solar forecast calibration ───────────────────────────
@@ -794,6 +830,45 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     self._solar_power = None
             else:
                 self._solar_power = None
+
+        # Outside temperature (for consumption forecast)
+        if self._outside_temp_entity:
+            temp_state = self.hass.states.get(self._outside_temp_entity)
+            if temp_state and temp_state.state not in ("unknown", "unavailable"):
+                try:
+                    self._outside_temp = float(temp_state.state)
+                except (ValueError, TypeError):
+                    self._outside_temp = None
+            else:
+                self._outside_temp = None
+
+        # Smartshunt battery voltage + current → real power
+        if self._battery_voltage_entity:
+            v_state = self.hass.states.get(self._battery_voltage_entity)
+            if v_state and v_state.state not in ("unknown", "unavailable"):
+                try:
+                    self._battery_voltage = float(v_state.state)
+                except (ValueError, TypeError):
+                    self._battery_voltage = None
+            else:
+                self._battery_voltage = None
+
+        if self._battery_current_entity:
+            c_state = self.hass.states.get(self._battery_current_entity)
+            if c_state and c_state.state not in ("unknown", "unavailable"):
+                try:
+                    self._battery_current = float(c_state.state)
+                except (ValueError, TypeError):
+                    self._battery_current = None
+            else:
+                self._battery_current = None
+
+        if self._battery_voltage is not None and self._battery_current is not None:
+            self._battery_real_power = abs(
+                self._battery_voltage * self._battery_current
+            )
+        else:
+            self._battery_real_power = None
 
         # Sync charger active flags with actual switch states
         self._sync_device_states()
@@ -2896,6 +2971,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._epex_region = options.get(
             CONF_EPEX_PREDICTOR_REGION, self._epex_region
         )
+        self._outside_temp_entity = options.get(
+            CONF_OUTSIDE_TEMPERATURE_ENTITY, self._outside_temp_entity
+        )
+        self._battery_voltage_entity = options.get(
+            CONF_BATTERY_VOLTAGE_ENTITY, self._battery_voltage_entity
+        )
+        self._battery_current_entity = options.get(
+            CONF_BATTERY_CURRENT_ENTITY, self._battery_current_entity
+        )
         _LOGGER.info("Configuration updated from options flow")
 
     def set_strategy(self, strategy: str) -> None:
@@ -2961,6 +3045,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 getattr(self, "_epex_terminal_value_per_kwh", 0) * 100, 1
             ),
             "epex_visualization": getattr(self, "_epex_visualization", []),
+            "outside_temperature": self._outside_temp,
+            "battery_real_power_w": round(self._battery_real_power, 1) if self._battery_real_power else None,
+            "battery_voltage": round(self._battery_voltage, 2) if self._battery_voltage else None,
+            "battery_current": round(self._battery_current, 2) if self._battery_current else None,
         }
 
     # Properties for entities

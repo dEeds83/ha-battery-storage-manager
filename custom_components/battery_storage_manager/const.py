@@ -37,6 +37,9 @@ CONF_BATTERY_CYCLE_COST = "battery_cycle_cost"  # ct/kWh cost per charge/dischar
 DEFAULT_BATTERY_CYCLE_COST = 10.0  # ct/kWh (typical LFP: ~3000€ / 6000 cycles / 5 kWh)
 CONF_BATTERY_EFFICIENCY = "battery_efficiency"  # round-trip efficiency in percent
 DEFAULT_BATTERY_EFFICIENCY = 90  # percent
+CONF_OUTSIDE_TEMPERATURE_ENTITY = "outside_temperature_entity"  # outdoor temp for consumption model
+CONF_BATTERY_VOLTAGE_ENTITY = "battery_voltage_entity"  # Smartshunt voltage
+CONF_BATTERY_CURRENT_ENTITY = "battery_current_entity"  # Smartshunt current
 
 # Defaults
 DEFAULT_MIN_SOC = 10  # percent

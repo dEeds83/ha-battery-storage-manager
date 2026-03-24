@@ -13,6 +13,7 @@
           "solar_forecast_entities": "Weitere Solar-Prognose-Sensoren (optional, für mehrere Anlagen/Dienste)",
           "solar_power_entity": "Solar-Leistung Sensor (optional, aktuelle Produktion in W)",
           "solar_energy_today_entity": "Solar-Energie heute Sensor (optional, tägliche kWh für Prognose-Kalibrierung)",
+          "outside_temperature_entity": "Außentemperatur-Sensor (optional, verbessert Verbrauchsprognose)",
           "epex_predictor_enabled": "EPEX Predictor aktivieren (erweitert Preisprognose über Tibber Day-Ahead hinaus)",
           "epex_predictor_region": "EPEX Predictor Region"
         }
@@ -41,7 +42,9 @@
           "price_high_threshold": "Preisschwelle hoch (ct/kWh) - darüber wird entladen",
           "house_consumption_w": "Durchschnittlicher Hausverbrauch (W) - wird für Planung verwendet",
           "battery_cycle_cost": "Batterie-Zykluskosten (ct/kWh) - Degradationskosten pro Lade-/Entladezyklus",
-          "battery_efficiency": "Batterie Roundtrip-Effizienz (%)"
+          "battery_efficiency": "Batterie Roundtrip-Effizienz (%)",
+          "battery_voltage_entity": "Batterie-Spannungs-Sensor (optional, z.B. Victron Smartshunt)",
+          "battery_current_entity": "Batterie-Strom-Sensor (optional, z.B. Victron Smartshunt)"
         }
       }
     }
@@ -60,6 +63,7 @@
           "solar_forecast_entities": "Weitere Solar-Prognose-Sensoren (optional)",
           "solar_power_entity": "Solar-Leistung Sensor (optional, aktuelle Produktion in W)",
           "solar_energy_today_entity": "Solar-Energie heute Sensor (optional, tägliche kWh für Prognose-Kalibrierung)",
+          "outside_temperature_entity": "Außentemperatur-Sensor (optional)",
           "epex_predictor_enabled": "EPEX Predictor aktivieren (erweitert Prognose über Tibber hinaus)",
           "epex_predictor_region": "EPEX Predictor Region"
         }
@@ -88,7 +92,9 @@
           "price_high_threshold": "Preisschwelle hoch (ct/kWh)",
           "house_consumption_w": "Durchschnittlicher Hausverbrauch (W)",
           "battery_cycle_cost": "Batterie-Zykluskosten (ct/kWh)",
-          "battery_efficiency": "Batterie Roundtrip-Effizienz (%)"
+          "battery_efficiency": "Batterie Roundtrip-Effizienz (%)",
+          "battery_voltage_entity": "Batterie-Spannungs-Sensor (optional)",
+          "battery_current_entity": "Batterie-Strom-Sensor (optional)"
         }
       }
     }

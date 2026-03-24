@@ -10,15 +10,18 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_CURRENT_ENTITY,
     CONF_BATTERY_CYCLE_COST,
     CONF_BATTERY_EFFICIENCY,
     CONF_BATTERY_SOC_ENTITY,
+    CONF_BATTERY_VOLTAGE_ENTITY,
     CONF_CHARGER_ENTITIES,
     CONF_CHARGER_POWER_DEFAULT,
     CONF_CHARGERS,
     CONF_EPEX_PREDICTOR_ENABLED,
     CONF_EPEX_PREDICTOR_REGION,
     CONF_HOUSE_CONSUMPTION_W,
+    CONF_OUTSIDE_TEMPERATURE_ENTITY,
     DEFAULT_EPEX_PREDICTOR_REGION,
     CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY,
     CONF_INVERTER_FEED_POWER,
@@ -74,6 +77,9 @@ STEP_TIBBER_SCHEMA = vol.Schema(
         ),
         vol.Optional(CONF_SOLAR_ENERGY_TODAY_ENTITY, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_OUTSIDE_TEMPERATURE_ENTITY, default=""): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
         ),
         vol.Optional(CONF_EPEX_PREDICTOR_ENABLED, default=False): selector.BooleanSelector(),
         vol.Optional(
@@ -170,6 +176,12 @@ STEP_BATTERY_SCHEMA = vol.Schema(
             selector.NumberSelectorConfig(
                 min=50, max=100, step=1, unit_of_measurement="%"
             )
+        ),
+        vol.Optional(CONF_BATTERY_VOLTAGE_ENTITY, default=""): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_BATTERY_CURRENT_ENTITY, default=""): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
         ),
     }
 )
@@ -335,6 +347,12 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         default=self._current(CONF_SOLAR_ENERGY_TODAY_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(
+                        CONF_OUTSIDE_TEMPERATURE_ENTITY,
+                        default=self._current(CONF_OUTSIDE_TEMPERATURE_ENTITY, ""),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
                     ),
                     vol.Optional(
                         CONF_EPEX_PREDICTOR_ENABLED,
@@ -513,6 +531,18 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         selector.NumberSelectorConfig(
                             min=50, max=100, step=1, unit_of_measurement="%"
                         )
+                    ),
+                    vol.Optional(
+                        CONF_BATTERY_VOLTAGE_ENTITY,
+                        default=self._current(CONF_BATTERY_VOLTAGE_ENTITY, ""),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(
+                        CONF_BATTERY_CURRENT_ENTITY,
+                        default=self._current(CONF_BATTERY_CURRENT_ENTITY, ""),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
                     ),
                 }
             ),
