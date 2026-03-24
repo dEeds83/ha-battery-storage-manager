@@ -157,7 +157,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         )
         self._epex_cache: list[dict] = []  # cached EPEX predictions
         self._epex_cache_time: datetime | None = None
-        self._epex_cache_ttl = timedelta(minutes=30)  # refresh every 30 min
+        self._epex_cache_ttl = timedelta(hours=2)  # EPEX predictions change slowly
         self._epex_markup: float | None = None  # Tibber/EPEX scaling factor
 
         # Battery economics
