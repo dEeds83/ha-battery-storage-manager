@@ -1,5 +1,11 @@
 __pycache__/
 *.pyc
 
+# IDE
+.idea/
+
+# Claude Code
+.claude/
+
 # ESPHome secrets (enthält WiFi-Passwörter, API-Keys)
 esphome/secrets.yaml
