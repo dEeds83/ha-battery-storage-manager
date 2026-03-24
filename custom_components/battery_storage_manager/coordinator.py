@@ -1888,17 +1888,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     best_val = val
                     best_act = "idle"
 
-                # Tie-breaker: when charge/discharge have the same value as idle,
-                # prefer WAITING (negative eps). This defers charging to the
-                # latest possible slot at a given price, leaving earlier slots
-                # as idle/hold where free solar surplus can fill the battery.
-                #
-                # The DP backward pass naturally starts charging when future
-                # discharge revenue makes it strictly profitable. The negative
-                # eps just ensures "charge at midnight" doesn't beat "charge
-                # at 10:00" when both have the same price — solar gets first
-                # chance in the morning.
-                eps = -0.0001  # prefer late charging → room for solar
+                # No epsilon tie-breaker needed. The DP naturally prefers
+                # solar-hour charging over night charging because grid_fraction
+                # is lower during solar hours (e.g. 0.3 vs 1.0), making the
+                # effective charge cost much cheaper. The backward pass
+                # correctly propagates the value of earlier charging when it
+                # enables additional profitable discharge slots.
 
                 if soc < self._max_soc and charge_kwh_slot > 0:
                     delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
@@ -1906,7 +1901,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     new_si = soc_to_idx(new_soc)
                     if new_si > si:
                         cost = delta * grid_frac * price + delta * half_cycle_eur
-                        val = -cost + dp[t + 1][new_si] + eps
+                        val = -cost + dp[t + 1][new_si]
                         if val > best_val:
                             best_val = val
                             best_act = "charge"
@@ -1918,7 +1913,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     new_si = soc_to_idx(new_soc)
                     if new_si < si:
                         revenue = delivered * price - delta * half_cycle_eur
-                        val = revenue + dp[t + 1][new_si] + eps
+                        val = revenue + dp[t + 1][new_si]
                         if val > best_val:
                             best_val = val
                             best_act = "discharge"
