@@ -1459,17 +1459,20 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         hourly_data = slot_data
 
         # ── Dynamic Programming ──────────────────────────────────
-        # SOC discretization: step size adapts to battery so that one
-        # charge/discharge slot always moves at least one SOC level.
-        # This prevents the quantization bug where round() maps the
-        # new SOC back to the same level, creating "free" energy.
+        # SOC discretization: step size must be fine enough that:
+        # 1. Every charge/discharge transition moves at least 1 level
+        # 2. Full charge (grid+solar) and partial charge (solar only)
+        #    land on DIFFERENT levels - otherwise the DP can't distinguish
+        #    between free solar charge and paid grid charge.
+        # Using min_delta * 0.45 ensures full charge moves ~2 levels
+        # while typical solar-only charge moves ~1 level.
         charge_soc_pct = charge_kwh_slot / cap * 100 if cap > 0 else 5
         discharge_soc_pct = discharge_kwh_slot / cap * 100 if cap > 0 else 5
         min_delta_pct = min(charge_soc_pct, discharge_soc_pct) if charge_soc_pct > 0 else discharge_soc_pct
-        # Step must be <= min delta so transitions always move at least 1 level
-        # Clamp between 1% and 5% for reasonable resolution/performance
-        soc_step = max(1.0, min(5.0, min_delta_pct * 0.9))
-        soc_step = round(soc_step, 1)
+        # Step = ~45% of min delta → full charge ≈ 2 levels, solar ≈ 1 level
+        # Clamp between 0.5% and 3% for resolution vs performance
+        soc_step = max(0.5, min(3.0, min_delta_pct * 0.45))
+        soc_step = round(soc_step, 1) or 0.5
 
         soc_levels = []
         s = float(self._min_soc)
