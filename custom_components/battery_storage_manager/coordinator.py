@@ -1690,10 +1690,10 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
                 slots_needed = int(soc_gap / charge_pct_per_slot) + 1
 
-                # Collect idle slots BEFORE this discharge block
+                # Collect idle/hold slots BEFORE this discharge block
                 candidates = []
                 for i in range(block_start):
-                    if actions[i] == "idle":
+                    if actions[i] in ("idle", "hold"):
                         candidates.append((hourly_data[i]["price"], -i, i))
                 # Sort: cheapest price first, latest time first (for solar room)
                 candidates.sort()
