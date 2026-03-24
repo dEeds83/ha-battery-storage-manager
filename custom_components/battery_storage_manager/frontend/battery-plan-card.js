@@ -159,7 +159,6 @@ class BatteryPlanCard extends HTMLElement {
             <button class="toggle-btn" id="toggleTable">
               ${this._showTable ? "Tabelle ausblenden" : "Details anzeigen"}
             </button>
-            ${this._showTable ? `<button class="toggle-btn" id="exportCsv" style="margin-left:8px">CSV Export</button>` : ""}
             ${hasEpexSlots ? `<button class="toggle-btn${this._showEpex ? " active" : ""}" id="toggleEpex" style="margin-left:8px">
               ${this._showEpex ? "Prognose ausblenden" : "Prognose anzeigen"}
             </button>` : ""}
@@ -179,13 +178,6 @@ class BatteryPlanCard extends HTMLElement {
         this._render();
       });
 
-    const exportBtn = this.shadowRoot.getElementById("exportCsv");
-    if (exportBtn) {
-      exportBtn.addEventListener("click", () => {
-        this._exportCsv(plan);
-      });
-    }
-
     const epexBtn = this.shadowRoot.getElementById("toggleEpex");
     if (epexBtn) {
       epexBtn.addEventListener("click", () => {
@@ -193,26 +185,6 @@ class BatteryPlanCard extends HTMLElement {
         this._render();
       });
     }
-  }
-
-  _exportCsv(plan) {
-    const header = "Zeit;Preis (ct);Solar (kWh);SOC (%);Aktion;Grund";
-    const rows = plan.map(e => {
-      const price = (e.price * 100).toFixed(1);
-      const solar = e.solar_kwh > 0 ? e.solar_kwh.toFixed(3) : "0";
-      const soc = e.expected_soc || "";
-      const action = e.action || "";
-      const reason = e.reason || "";
-      return `${e.hour};${price};${solar};${soc};${action};${reason}`;
-    });
-    const csv = [header, ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `speicherplan_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
   }
 
   _renderPlaceholder() {
