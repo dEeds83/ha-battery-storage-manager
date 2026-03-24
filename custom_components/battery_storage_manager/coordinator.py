@@ -1714,11 +1714,12 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         smoothed += filled
 
-        # Pass 5: Remove isolated mini-charge islands.
-        # If a small charge block (< 4 slots) is separated from the main
-        # charge block by idle/hold slots, convert it to idle. Pass 4 will
-        # have already ensured enough charge slots near the discharge block.
-        # Find all charge blocks
+        # Pass 5: Merge separated charge blocks at same price.
+        # If a non-main charge block has similar price to the main block
+        # AND there are enough hold/idle slots between them, dissolve the
+        # earlier block and expand the main block backward instead.
+        # This prevents night charging when morning slots at the same price
+        # are available (leaving room for solar).
         charge_blocks = []
         block_s = None
         for i in range(n):
@@ -1727,24 +1728,61 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     block_s = i
             else:
                 if block_s is not None:
-                    charge_blocks.append((block_s, i - block_s))  # (start, length)
+                    charge_blocks.append((block_s, i - block_s))
                     block_s = None
         if block_s is not None:
             charge_blocks.append((block_s, n - block_s))
 
         if len(charge_blocks) > 1:
-            # Find the largest charge block (the "main" one)
             main_block = max(charge_blocks, key=lambda b: b[1])
+            main_start, main_len = main_block
+            main_price = hourly_data[main_start]["price"] if main_start < n else 0
             removed_islands = 0
+
             for start, length in charge_blocks:
                 if (start, length) == main_block:
                     continue
-                if length < 4:
-                    # Check: is this block separated from main by > 2 slots gap?
-                    main_start, main_len = main_block
+                block_price = hourly_data[start]["price"] if start < n else 0
+
+                # Check if block is BEFORE main and at similar price
+                if start < main_start and abs(block_price - main_price) < 0.005:
+                    # Count available hold/idle slots between this block
+                    # and the main block that could replace it
+                    gap_slots = []
+                    for j in range(start + length, main_start):
+                        if actions[j] in ("idle", "hold"):
+                            p = hourly_data[j]["price"]
+                            if abs(p - main_price) < 0.02:  # within 2ct
+                                gap_slots.append(j)
+
+                    if len(gap_slots) >= length:
+                        # Dissolve this block
+                        for j in range(start, start + length):
+                            actions[j] = "idle"
+                            removed_islands += 1
+                        # Expand main block backward using latest gap slots
+                        gap_slots.sort(reverse=True)  # latest first
+                        for j in gap_slots[:length]:
+                            actions[j] = "charge"
+                        _LOGGER.info(
+                            "Pass 5: merged %d charge slots from t=%d "
+                            "into main block (shifted to latest slots)",
+                            length, start,
+                        )
+                elif start >= main_start + main_len:
+                    # Block AFTER main: remove if small and separated
                     main_end = main_start + main_len
-                    gap = min(abs(start - main_end), abs(main_start - (start + length)))
-                    if gap > 2:
+                    gap = start - main_end
+                    if length < 4 and gap > 2:
+                        for j in range(start, start + length):
+                            actions[j] = "idle"
+                            removed_islands += 1
+                else:
+                    # Block before main, different price: remove if small
+                    main_end = main_start + main_len
+                    gap = min(abs(start - main_end),
+                              abs(main_start - (start + length)))
+                    if length < 4 and gap > 2:
                         for j in range(start, start + length):
                             actions[j] = "idle"
                             removed_islands += 1
@@ -1752,7 +1790,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             if removed_islands:
                 smoothed += removed_islands
                 _LOGGER.info(
-                    "Pass 5: removed %d isolated mini-charge slots",
+                    "Pass 5: adjusted %d charge slots total",
                     removed_islands,
                 )
 
