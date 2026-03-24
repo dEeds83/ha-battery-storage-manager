@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import BatteryStorageCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -31,8 +36,8 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class BatteryStorageBaseNumber(CoordinatorEntity, NumberEntity):
-    """Base number entity for battery storage manager."""
+class BatteryStorageBaseNumber(CoordinatorEntity, RestoreEntity, NumberEntity):
+    """Base number entity with state restore support."""
 
     _attr_has_entity_name = True
     _attr_mode = NumberMode.SLIDER
@@ -56,6 +61,23 @@ class BatteryStorageBaseNumber(CoordinatorEntity, NumberEntity):
             "sw_version": "1.0.0",
         }
 
+    async def async_added_to_hass(self) -> None:
+        """Restore last known value on startup."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in ("unknown", "unavailable", None):
+            try:
+                restored = float(last_state.state)
+                self._apply_restored_value(restored)
+                _LOGGER.debug(
+                    "Restored %s = %s", self._attr_name, restored
+                )
+            except (ValueError, TypeError):
+                pass
+
+    def _apply_restored_value(self, value: float) -> None:
+        """Apply the restored value to the coordinator. Override in subclass."""
+
 
 class MinSOCNumber(BatteryStorageBaseNumber):
     """Number entity for minimum SOC threshold."""
@@ -77,6 +99,9 @@ class MinSOCNumber(BatteryStorageBaseNumber):
         self.coordinator.min_soc = int(value)
         self.async_write_ha_state()
 
+    def _apply_restored_value(self, value: float) -> None:
+        self.coordinator.min_soc = int(value)
+
 
 class MaxSOCNumber(BatteryStorageBaseNumber):
     """Number entity for maximum SOC threshold."""
@@ -97,6 +122,9 @@ class MaxSOCNumber(BatteryStorageBaseNumber):
     async def async_set_native_value(self, value: float) -> None:
         self.coordinator.max_soc = int(value)
         self.async_write_ha_state()
+
+    def _apply_restored_value(self, value: float) -> None:
+        self.coordinator.max_soc = int(value)
 
 
 class PriceLowThresholdNumber(BatteryStorageBaseNumber):
@@ -121,6 +149,9 @@ class PriceLowThresholdNumber(BatteryStorageBaseNumber):
         self.coordinator.price_low_threshold = value
         self.async_write_ha_state()
 
+    def _apply_restored_value(self, value: float) -> None:
+        self.coordinator.price_low_threshold = value
+
 
 class PriceHighThresholdNumber(BatteryStorageBaseNumber):
     """Number entity for high price threshold."""
@@ -143,3 +174,6 @@ class PriceHighThresholdNumber(BatteryStorageBaseNumber):
     async def async_set_native_value(self, value: float) -> None:
         self.coordinator.price_high_threshold = value
         self.async_write_ha_state()
+
+    def _apply_restored_value(self, value: float) -> None:
+        self.coordinator.price_high_threshold = value

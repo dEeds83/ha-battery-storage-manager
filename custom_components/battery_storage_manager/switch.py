@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -15,6 +18,8 @@ from .const import (
     STRATEGY_SELF_CONSUMPTION,
 )
 from .coordinator import BatteryStorageCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -37,8 +42,8 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class BatteryStorageBaseSwitch(CoordinatorEntity, SwitchEntity):
-    """Base switch for battery storage manager."""
+class BatteryStorageBaseSwitch(CoordinatorEntity, RestoreEntity, SwitchEntity):
+    """Base switch with state restore support."""
 
     _attr_has_entity_name = True
 
@@ -61,6 +66,18 @@ class BatteryStorageBaseSwitch(CoordinatorEntity, SwitchEntity):
             "model": "Battery Storage Manager",
             "sw_version": "1.0.0",
         }
+
+    async def async_added_to_hass(self) -> None:
+        """Restore last known state on startup."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in ("unknown", "unavailable", None):
+            restored_on = last_state.state == "on"
+            self._apply_restored_state(restored_on)
+            _LOGGER.debug("Restored %s = %s", self._attr_name, last_state.state)
+
+    def _apply_restored_state(self, is_on: bool) -> None:
+        """Apply restored state to coordinator. Override in subclass."""
 
 
 class AutoModeSwitch(BatteryStorageBaseSwitch):
@@ -132,6 +149,9 @@ class AllowGridChargingSwitch(BatteryStorageBaseSwitch):
         self.coordinator.allow_grid_charging = False
         self.async_write_ha_state()
 
+    def _apply_restored_state(self, is_on: bool) -> None:
+        self.coordinator.allow_grid_charging = is_on
+
 
 class AllowDischargingSwitch(BatteryStorageBaseSwitch):
     """Switch to allow/disallow battery discharging."""
@@ -152,6 +172,9 @@ class AllowDischargingSwitch(BatteryStorageBaseSwitch):
     async def async_turn_off(self, **kwargs) -> None:
         self.coordinator.allow_discharging = False
         self.async_write_ha_state()
+
+    def _apply_restored_state(self, is_on: bool) -> None:
+        self.coordinator.allow_discharging = is_on
 
 
 class UseSolarForecastSwitch(BatteryStorageBaseSwitch):
@@ -175,6 +198,9 @@ class UseSolarForecastSwitch(BatteryStorageBaseSwitch):
     async def async_turn_off(self, **kwargs) -> None:
         self.coordinator.use_solar_forecast = False
         self.async_write_ha_state()
+
+    def _apply_restored_state(self, is_on: bool) -> None:
+        self.coordinator.use_solar_forecast = is_on
 
 
 class ForceDischargeSwitch(BatteryStorageBaseSwitch):
