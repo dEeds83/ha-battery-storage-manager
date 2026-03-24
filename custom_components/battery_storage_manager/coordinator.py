@@ -1942,61 +1942,34 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 dp[t][si] = best_val
                 action_dp[t][si] = best_act
 
-        # Debug: log dp values unconditionally for cheap slots
-        _LOGGER.warning(
-            "DP debug: n=%d soc_step=%.1f num_soc=%d current_soc=%.1f "
-            "charge_kwh=%.3f cap=%.1f tv=%.4f",
-            n, soc_step, num_soc, current_soc, charge_kwh_slot, cap, tv_per_kwh,
-        )
-        # Log first 10 cheap slots showing action + dp delta
-        logged = 0
-        for check_t in range(min(n, 200)):
-            h_check = hourly_data[check_t]
-            if h_check["price"] < 0.20 and logged < 10:
-                si_low = soc_to_idx(current_soc)
-                cl = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
-                si_high = min(si_low + cl, num_soc - 1)
-                dp_low = dp[check_t + 1][si_low]
-                dp_high = dp[check_t + 1][si_high]
-                gf = h_check.get("_scn_grid_frac", h_check["grid_fraction"])
-                act = action_dp[check_t][si_low]
-                _LOGGER.warning(
-                    "DP debug t=%d price=%.1f gf=%.2f act=%s "
-                    "dp[si=%d]=%.4f dp[si=%d]=%.4f delta=%.4f",
-                    check_t, h_check["price"] * 100, gf, act,
-                    si_low, dp_low, si_high, dp_high, dp_high - dp_low,
-                )
-                logged += 1
-
         # Forward pass
         start_si = soc_to_idx(current_soc)
         actions = []
         current_si = start_si
-        fwd_debug_logged = 0
+
+        # Collect full forward pass debug data
+        _fwd_rows = []
+
         for t in range(n):
             act = action_dp[t][current_si]
             actions.append(act)
 
             soc = soc_levels[current_si]
+            h = hourly_data[t]
+            gf = h.get("_scn_grid_frac", h["grid_fraction"])
+            cl = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
+            hi_si = min(current_si + cl, num_soc - 1)
+            lo_si = max(current_si - cl, 0)
+            dp_here = dp[t + 1][current_si]
+            dp_charge = dp[t + 1][hi_si]
+            dp_discharge = dp[t + 1][lo_si]
 
-            # Debug: log from forward pass perspective at cheap idle slots
-            if (act == "idle" and hourly_data[t]["price"] < 0.20
-                    and soc < self._max_soc - 5 and fwd_debug_logged < 8):
-                cl = round(charge_soc_pct / soc_step) if soc_step > 0 else 1
-                hi_si = min(current_si + cl, num_soc - 1)
-                gf = hourly_data[t].get("_scn_grid_frac", hourly_data[t]["grid_fraction"])
-                d = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
-                cst = d * gf * hourly_data[t]["price"] + d * half_cycle_eur
-                dp_lo = dp[t + 1][current_si]
-                dp_hi = dp[t + 1][hi_si]
-                _LOGGER.warning(
-                    "DP fwd t=%d soc=%.1f si=%d price=%.1f gf=%.2f: "
-                    "idle=%.4f charge=%.4f (dp[%d]=%.4f dp[%d]=%.4f cost=%.4f delta=%.4f)",
-                    t, soc, current_si, hourly_data[t]["price"] * 100, gf,
-                    dp_lo, -cst + dp_hi,
-                    current_si, dp_lo, hi_si, dp_hi, cst, dp_hi - dp_lo,
-                )
-                fwd_debug_logged += 1
+            _fwd_rows.append(
+                f"t={t} p={h['price']*100:.1f} gf={gf:.2f} sol={h.get('solar_kwh',0):.3f} "
+                f"soc={soc:.1f}% si={current_si} act={act} "
+                f"dp_idle={dp_here:.4f} dp_chg={dp_charge:.4f} dp_dis={dp_discharge:.4f} "
+                f"Δchg={dp_charge-dp_here:.4f} Δdis={dp_discharge-dp_here:.4f}"
+            )
 
             if act == "charge":
                 delta = min(charge_kwh_slot, (self._max_soc - soc) / 100 * cap)
@@ -2011,6 +1984,17 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Profit = DP value − terminal value of starting energy
         start_stored_kwh = (current_soc - self._min_soc) / 100 * cap
         profit = dp[0][soc_to_idx(current_soc)] - start_stored_kwh * tv_per_kwh
+
+        # Full forward pass dump (one log per DP call, ~3 calls per cycle)
+        header = (
+            f"DP DUMP: n={n} soc_step={soc_step:.1f} num_soc={num_soc} "
+            f"start_soc={current_soc:.1f}% si={start_si} "
+            f"charge_kwh={charge_kwh_slot:.3f} discharge_kwh={discharge_kwh_slot:.3f} "
+            f"cap={cap:.1f} eff={efficiency:.2f} cycle={cycle_cost_eur:.4f} "
+            f"tv={tv_per_kwh:.4f} profit={profit:.4f}"
+        )
+        body = "\n".join(_fwd_rows)
+        _LOGGER.warning("%s\n%s", header, body)
 
         return actions, profit
 
