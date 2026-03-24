@@ -1866,12 +1866,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         half_cycle_eur = cycle_cost_eur / 2
 
-        # Terminal value
+        # Terminal value: what is stored energy worth beyond the planning horizon?
+        # Use MEDIAN price (not upper-third) as conservative reference, plus a
+        # 30% uncertainty discount. The future is not guaranteed — tomorrow
+        # might have cheaper charging opportunities that make today's expensive
+        # charging unnecessary.
         all_prices = sorted(h["price"] for h in hourly_data)
-        upper_third_start = len(all_prices) * 2 // 3
-        upper_prices = all_prices[upper_third_start:] or all_prices
-        avg_peak_price = sum(upper_prices) / len(upper_prices) if upper_prices else 0.25
-        base_tv = max(0.0, avg_peak_price * efficiency - half_cycle_eur)
+        median_price = all_prices[len(all_prices) // 2] if all_prices else 0.25
+        uncertainty_discount = 0.7  # 30% discount for future uncertainty
+        base_tv = max(0.0, median_price * efficiency * uncertainty_discount - half_cycle_eur)
         epex_tv = getattr(self, "_epex_terminal_value_per_kwh", 0.0)
         tv_per_kwh = max(base_tv, epex_tv)
 
