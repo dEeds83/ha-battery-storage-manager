@@ -198,33 +198,25 @@ def smooth_plan(
 
     The DP solution is mathematically optimal on its discretised grid but can
     produce plans with artefacts that look erratic or waste switching cycles.
-    This function cleans them up in six sequential passes:
+    This function cleans them up in six sequential passes (execution order):
 
-    * **Pass 1 -- Enclave removal:** Single-slot charge or discharge actions
-      that are surrounded by different actions on both sides are replaced with
-      idle.  This eliminates isolated one-slot spikes.
-    * **Pass 2 -- Alternation dampening:** Back-to-back charge/discharge (or
-      discharge/charge) pairs whose price spread is below the break-even
-      threshold are collapsed by setting the second slot to idle.
-    * **Pass 3 -- Discharge slot swap:** Iteratively swaps the cheapest
-      discharge slot with a more expensive idle slot that occurs later,
-      moving discharge energy to higher-priced times.
-    * **Pass 5 -- Charge-block merging:** When multiple separated charge
-      blocks exist, small satellite blocks at the same price are merged into
-      the main (largest) block.  Blocks after the main block that are small
-      and far away are removed entirely.
-    * **Pass 6 -- Late-shift of charge blocks:** Within each contiguous
-      charge block, slots are shifted to the latest available idle/hold slots
-      at the same price, so charging happens as late as possible before
-      discharge (reducing self-discharge losses).
-    * **Pass 4 -- Target-based backward charge fill (run last):** For every
-      discharge block whose entry SOC is below ``max_soc``, the cheapest
-      idle slots *before* that block are converted to charge slots so the
-      battery is full when discharge begins.
-
-    Note:
-        The passes are numbered in the order they were historically added, not
-        the order they execute.  Execution order is 1-2-3-5-6-4.
+    1. **Enclave removal:** Single-slot charge or discharge actions
+       surrounded by different actions are replaced with idle.
+    2. **Alternation dampening:** Back-to-back charge/discharge pairs
+       whose price spread is below break-even are collapsed to idle.
+    3. **Discharge slot swap:** Iteratively swaps the cheapest discharge
+       slot with a more expensive idle slot later in time.
+    4. **Charge-block merging:** Small satellite charge blocks at the
+       same price are merged into the main (largest) block. Isolated
+       blocks after the main block are removed.
+    5. **Late-shift of charge blocks:** Charge slots are shifted to the
+       latest available idle/hold slots at the same price, so charging
+       happens as late as possible before discharge (room for solar).
+    6. **Target-based backward fill (runs last):** For every discharge
+       block whose entry SOC is below ``max_soc``, the cheapest idle
+       slots before that block are converted to charge so the battery
+       is full when discharge begins. Runs last so no subsequent pass
+       can remove its additions.
 
     Args:
         actions: Mutable list of ``n`` action strings produced by ``solve_dp``.
@@ -248,7 +240,7 @@ def smooth_plan(
     """
     smoothed = 0
 
-    # Pass 1: Remove single-slot charge/discharge enclaves.
+    # Pass 1/6: Remove single-slot charge/discharge enclaves.
     for i in range(1, n - 1):
         act = actions[i]
         if act in ("charge", "discharge"):
@@ -258,7 +250,7 @@ def smooth_plan(
                 actions[i] = "idle"
                 smoothed += 1
 
-    # Pass 2: Remove rapid charge<->discharge alternation
+    # Pass 2/6: Remove rapid charge<->discharge alternation
     avg_plan_price = sum(h["price"] for h in hourly_data) / n if n else 0.25
     break_even_spread = cycle_cost_eur + (1 - efficiency) * avg_plan_price
     for i in range(1, n):
@@ -272,7 +264,7 @@ def smooth_plan(
                 actions[i] = "idle"
                 smoothed += 1
 
-    # Pass 3: Swap cheap discharge slots with more expensive idle slots.
+    # Pass 3/6: Swap cheap discharge slots with more expensive idle slots.
     swapped = 0
     while True:
         cheapest_d_idx = None
@@ -301,7 +293,7 @@ def smooth_plan(
 
     smoothed += swapped
 
-    # Pass 5: Merge separated charge blocks at same price.
+    # Pass 4/6: Merge separated charge blocks at same price.
     charge_blocks: list[tuple[int, int]] = []
     block_s = None
     for i in range(n):
@@ -342,7 +334,7 @@ def smooth_plan(
                     for j in gap_slots[:length]:
                         actions[j] = "charge"
                     _LOGGER.info(
-                        "Pass 5: merged %d charge slots from t=%d "
+                        "Pass 4: merged %d charge slots from t=%d "
                         "into main block (shifted to latest slots)",
                         length, start,
                     )
@@ -365,11 +357,11 @@ def smooth_plan(
         if removed_islands:
             smoothed += removed_islands
             _LOGGER.info(
-                "Pass 5: adjusted %d charge slots total",
+                "Pass 4: adjusted %d charge slots total",
                 removed_islands,
             )
 
-    # Pass 6: Shift charge block to latest position within same price band.
+    # Pass 5/6: Shift charge block to latest position within same price band.
     charge_blocks_final: list[tuple[int, int]] = []
     block_s = None
     for i in range(n):
@@ -416,7 +408,7 @@ def smooth_plan(
             actions[j] = "charge"
         shifted += shift_count
         _LOGGER.info(
-            "Pass 6: shifted %d charge slots later "
+            "Pass 5: shifted %d charge slots later "
             "(from t=%d to t=%d-%d, price %.1f ct)",
             shift_count, cb_start,
             min(slots_to_fill), max(slots_to_fill),
@@ -425,7 +417,7 @@ def smooth_plan(
 
     smoothed += shifted
 
-    # Pass 4 (LAST): Target-based backward charge fill.
+    # Pass 6/6 (LAST): Target-based backward charge fill.
     filled = 0
     charge_pct_per_slot = charge_kwh_slot / cap * 100 if cap > 0 else 0
 
@@ -463,7 +455,7 @@ def smooth_plan(
 
             if block_filled:
                 _LOGGER.info(
-                    "Pass 4 fill block@t=%d: SOC was %.1f%%, gap %.1f%% "
+                    "Pass 6 fill block@t=%d: SOC was %.1f%%, gap %.1f%% "
                     "-> added %d charge slots (needed %d)",
                     block_start, soc_at_start, soc_gap,
                     block_filled, slots_needed,
