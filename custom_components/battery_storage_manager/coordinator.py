@@ -1083,6 +1083,21 @@ class BatteryStorageCoordinator(
             if entry["hour"].startswith(now_hour):
                 return entry["action"]
 
+        # Fallback: if current time is just before the plan starts,
+        # use the first plan entry's action (avoids threshold-based
+        # charging when the plan says hold).
+        if self._battery_plan:
+            first_time = self._battery_plan[0]["hour"]
+            try:
+                first_dt = datetime.fromisoformat(first_time)
+                if hasattr(now, "tzinfo") and now.tzinfo and not first_dt.tzinfo:
+                    first_dt = first_dt.replace(tzinfo=now.tzinfo)
+                diff_min = (first_dt - now).total_seconds() / 60
+                if 0 < diff_min <= slot_minutes:
+                    return self._battery_plan[0]["action"]
+            except (ValueError, TypeError):
+                pass
+
         return None
 
     @staticmethod
