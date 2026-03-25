@@ -17,6 +17,7 @@ from .const import (
     CONF_BATTERY_VOLTAGE_ENTITY,
     CONF_CHARGER_ENTITIES,
     CONF_CHARGER_POWER_DEFAULT,
+    CONF_CHARGER_POWER_ENTITIES,
     CONF_CHARGERS,
     CONF_EPEX_PREDICTOR_ENABLED,
     CONF_EPEX_PREDICTOR_REGION,
@@ -102,6 +103,9 @@ STEP_DEVICES_SCHEMA = vol.Schema(
             selector.NumberSelectorConfig(
                 min=0, max=5000, step=100, unit_of_measurement="W"
             )
+        ),
+        vol.Optional(CONF_CHARGER_POWER_ENTITIES, default=[]): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", multiple=True)
         ),
         vol.Optional(CONF_INVERTER_FEED_SWITCH, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
@@ -191,17 +195,26 @@ def _build_chargers_list(
     entities: list[str],
     default_power: int,
     existing_chargers: list[dict] | None = None,
+    power_entities: list[str] | None = None,
 ) -> list[dict]:
     """Build chargers list, preserving per-charger power for known entities."""
     existing_map = {}
     if existing_chargers:
-        existing_map = {c["switch"]: c["power"] for c in existing_chargers}
+        existing_map = {c["switch"]: c for c in existing_chargers}
 
-    return [
-        {"switch": eid, "power": existing_map.get(eid, int(default_power))}
-        for eid in entities
-        if eid  # skip empty strings
-    ]
+    power_ents = power_entities or []
+    result = []
+    for i, eid in enumerate(entities):
+        if not eid:
+            continue
+        existing = existing_map.get(eid, {})
+        power_entity = power_ents[i] if i < len(power_ents) else existing.get("power_entity", "")
+        result.append({
+            "switch": eid,
+            "power": existing.get("power", int(default_power)),
+            "power_entity": power_entity,
+        })
+    return result
 
 
 class BatteryStorageManagerConfigFlow(
@@ -234,8 +247,9 @@ class BatteryStorageManagerConfigFlow(
         if user_input is not None:
             charger_entities = user_input.pop(CONF_CHARGER_ENTITIES, [])
             default_power = user_input.pop(CONF_CHARGER_POWER_DEFAULT, 800)
+            power_entities = user_input.pop(CONF_CHARGER_POWER_ENTITIES, [])
             self._data[CONF_CHARGERS] = _build_chargers_list(
-                charger_entities, default_power
+                charger_entities, default_power, power_entities=power_entities
             )
             self._data.update(user_input)
             return await self.async_step_battery()
@@ -376,8 +390,10 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             charger_entities = user_input.pop(CONF_CHARGER_ENTITIES, [])
             default_power = user_input.pop(CONF_CHARGER_POWER_DEFAULT, 800)
+            power_entities = user_input.pop(CONF_CHARGER_POWER_ENTITIES, [])
             self._data[CONF_CHARGERS] = _build_chargers_list(
-                charger_entities, default_power, self._current_chargers()
+                charger_entities, default_power, self._current_chargers(),
+                power_entities=power_entities,
             )
             self._data.update(user_input)
             return await self.async_step_battery()
@@ -409,6 +425,12 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         selector.NumberSelectorConfig(
                             min=0, max=5000, step=100, unit_of_measurement="W"
                         )
+                    ),
+                    vol.Optional(
+                        CONF_CHARGER_POWER_ENTITIES,
+                        default=[c.get("power_entity", "") for c in current_chargers],
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor", multiple=True)
                     ),
                     vol.Optional(
                         CONF_INVERTER_FEED_SWITCH,

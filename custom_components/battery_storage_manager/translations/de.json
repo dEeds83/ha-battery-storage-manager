@@ -24,6 +24,7 @@
         "data": {
           "charger_entities": "Ladegeräte Schalter",
           "charger_power_default": "Standard-Leistung pro Ladegerät (W)",
+          "charger_power_entities": "Leistungssensoren der Ladegeräte (optional, gemessene W pro Lader)",
           "inverter_feed_switch": "Einspeise-Wechselrichter Schalter (optional, nur Ein/Aus)",
           "inverter_feed_power_entity": "Einspeise-Wechselrichter Leistungs-Entity (optional, für Nulleinspeisung)",
           "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)",
@@ -74,6 +75,7 @@
         "data": {
           "charger_entities": "Ladegeräte Schalter",
           "charger_power_default": "Standard-Leistung pro Ladegerät (W)",
+          "charger_power_entities": "Leistungssensoren der Ladegeräte (optional, gemessene W pro Lader)",
           "inverter_feed_switch": "Einspeise-Wechselrichter Schalter (optional)",
           "inverter_feed_power_entity": "Einspeise-Wechselrichter Leistungs-Entity (optional)",
           "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)",

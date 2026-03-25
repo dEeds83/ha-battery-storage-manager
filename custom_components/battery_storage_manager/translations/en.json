@@ -24,6 +24,7 @@
         "data": {
           "charger_entities": "Charger switches",
           "charger_power_default": "Default charger power (W)",
+          "charger_power_entities": "Charger power sensors (optional, measured W per charger)",
           "inverter_feed_switch": "Feed inverter switch (optional, on/off only)",
           "inverter_feed_power_entity": "Feed inverter power entity (optional, for zero-feed control)",
           "inverter_feed_power": "Feed inverter max power (W)",
@@ -74,6 +75,7 @@
         "data": {
           "charger_entities": "Charger switches",
           "charger_power_default": "Default charger power (W)",
+          "charger_power_entities": "Charger power sensors (optional, measured W per charger)",
           "inverter_feed_switch": "Feed inverter switch (optional)",
           "inverter_feed_power_entity": "Feed inverter power entity (optional)",
           "inverter_feed_power": "Feed inverter max power (W)",

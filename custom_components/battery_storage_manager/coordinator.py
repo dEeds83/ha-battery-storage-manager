@@ -138,12 +138,13 @@ class BatteryStorageCoordinator(
         self._pulse_consumption_entity = self._config.get(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, "")
         self._pulse_production_entity = self._config.get(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, "")
 
-        # Chargers: list of {"switch": entity_id, "power": int, "active": bool}
+        # Chargers: list of {"switch": entity_id, "power": int, "power_entity": str, "active": bool}
         self._chargers: list[dict] = []
         for c in self._config.get(CONF_CHARGERS, []):
             self._chargers.append({
                 "switch": c.get("switch", ""),
                 "power": c.get("power", 0),
+                "power_entity": c.get("power_entity", ""),
                 "active": False,
             })
 
@@ -506,6 +507,21 @@ class BatteryStorageCoordinator(
             else:
                 self._outside_temp = None
 
+        # Read measured charger power from per-charger power sensors
+        for c in self._chargers:
+            power_entity = c.get("power_entity", "")
+            if power_entity:
+                cp_state = self.hass.states.get(power_entity)
+                if cp_state and cp_state.state not in ("unknown", "unavailable"):
+                    try:
+                        c["measured_power"] = abs(float(cp_state.state))
+                    except (ValueError, TypeError):
+                        c["measured_power"] = None
+                else:
+                    c["measured_power"] = None
+            else:
+                c["measured_power"] = None
+
         # Smartshunt battery voltage + current -> real power
         if self._battery_voltage_entity:
             v_state = self.hass.states.get(self._battery_voltage_entity)
@@ -586,7 +602,11 @@ class BatteryStorageCoordinator(
 
         if self._operating_mode in (MODE_CHARGING, MODE_SOLAR_CHARGING) and battery_power_w > 10:
             # Charging: grid→chargers→battery
-            grid_power_w = sum(c["power"] for c in self._chargers if c["active"])
+            # Prefer measured charger power, fallback to configured
+            grid_power_w = sum(
+                c.get("measured_power") or c["power"]
+                for c in self._chargers if c["active"]
+            )
             if grid_power_w > 0:
                 self._eff_charge_grid_kwh += grid_power_w * dt_hours / 1000
                 self._eff_charge_battery_kwh += battery_power_w * dt_hours / 1000
@@ -1324,6 +1344,7 @@ class BatteryStorageCoordinator(
                 new_chargers.append({
                     "switch": c.get("switch", ""),
                     "power": c.get("power", 0),
+                    "power_entity": c.get("power_entity", ""),
                     "active": False,
                 })
             self._chargers = new_chargers
@@ -1426,7 +1447,11 @@ class BatteryStorageCoordinator(
             "battery_soc": self._battery_soc,
             "grid_power": self._grid_power,
             "chargers": [
-                {"index": i, "switch": c["switch"], "power": c["power"], "active": c["active"]}
+                {
+                    "index": i, "switch": c["switch"], "power": c["power"],
+                    "active": c["active"],
+                    "measured_power": c.get("measured_power"),
+                }
                 for i, c in enumerate(self._chargers)
             ],
             "inverter_active": self._inverter_active,
