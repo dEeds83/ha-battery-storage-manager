@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.8.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.9.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -16,12 +16,13 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Roundtrip-Effizienz** – Konfigurierbarer Effizienzfaktor (Standard 90%) in der Entlade-Bewertung
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
 - **Solarbasierte Ladepriorisierung** – DP bevorzugt automatisch Solar-Stunden (niedrige `grid_fraction`) über Nacht-Laden (voller Netzpreis), kein künstlicher Tie-Breaker nötig
-- **5-Pass Smoothing Pipeline:**
-  - Pass 1: Min-Run (Mindestlaufzeit 2 Slots für Aktionswechsel)
-  - Pass 2: Break-Even-Spread (Filtert unprofitable Lade↔Entlade-Übergänge)
-  - Pass 3: Slot-Swap (Tauscht günstige gegen teure Entlade-Slots)
-  - Pass 4: Zielbasierte Rückwärts-Auffüllung (füllt Idle/Hold-Slots vor jedem Entlade-Block bis max_soc)
-  - Pass 5: Mini-Insel-Bereinigung (entfernt isolierte Lade-Blöcke < 4 Slots)
+- **6-Pass Smoothing Pipeline:**
+  - Pass 1: Enclave-Entfernung (einzelne Aktions-Slots ohne Nachbarn entfernen, Proximity-Check ±2 Slots)
+  - Pass 2: Alternations-Dämpfung (Lade↔Entlade-Paare unter Break-Even-Spread → idle)
+  - Pass 3: Entlade-Slot-Swap (günstigste Entlade-Slots mit teureren Idle-Slots tauschen)
+  - Pass 4: Lade-Block-Zusammenführung (Satelliten-Blöcke in Hauptblock mergen, Inseln entfernen)
+  - Pass 5: Spät-Verschiebung (Lade-Blöcke an späteste Position im gleichen Preisband)
+  - Pass 6: Zielbasierte Rückwärts-Auffüllung (Idle→Charge vor Entlade-Blöcken, nur wenn profitabel: Ladepreis ≤ Ø Entladepreis × Effizienz − Zykluskosten)
 - **Terminal-Value mit Unsicherheitsabschlag** – Basis-Wert aus Tibber-Median (70% Konfidenz), EPEX-Wert überschreibt wenn höher
 - **Temperaturbasierte Verbrauchsprognose** – Außentemperatur-Sensor korrigiert Verbrauch (±2%/°C außerhalb 15-25°C Komfortzone)
 - **Smartshunt-Integration** – Victron Smartshunt liefert V×A = echte Batterieleistung, Spannung und Strom als Attribute
@@ -254,7 +255,7 @@ title: Batteriespeicher
    - 3 Szenarien (erwartet/optimistisch/pessimistisch) mit asymmetrischem Vote
    - Zykluskosten (½ auf Laden, ½ auf Entladen) und Roundtrip-Effizienz
    - Terminal-Value am Planende (Basis + EPEX) mit Unsicherheitsabschlag
-   - 5-Pass Smoothing (Min-Run → Spread → Swap → Rückwärts-Auffüllung → Insel-Bereinigung)
+   - 6-Pass Smoothing (Enclave → Alternation → Swap → Merge → Late-Shift → Profitables Backward-Fill)
    - Optimaler SOC-Pfad mit maximalem Profit extrahiert
 8. **Aktion ausführen** – Ladegeräte/Wechselrichter entsprechend schalten
 

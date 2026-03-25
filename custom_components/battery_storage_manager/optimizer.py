@@ -241,14 +241,21 @@ def smooth_plan(
     smoothed = 0
 
     # Pass 1/6: Remove single-slot charge/discharge enclaves.
+    # Keep enclaves that have a same-action slot within 2 positions
+    # (these are part of a block with a 1-slot gap, not true noise).
     for i in range(1, n - 1):
         act = actions[i]
         if act in ("charge", "discharge"):
             prev_same = (actions[i - 1] == act)
             next_same = (actions[i + 1] == act)
             if not prev_same and not next_same:
-                actions[i] = "idle"
-                smoothed += 1
+                has_nearby = (
+                    (i >= 2 and actions[i - 2] == act)
+                    or (i + 2 < n and actions[i + 2] == act)
+                )
+                if not has_nearby:
+                    actions[i] = "idle"
+                    smoothed += 1
 
     # Pass 2/6: Remove rapid charge<->discharge alternation
     avg_plan_price = sum(h["price"] for h in hourly_data) / n if n else 0.25
@@ -418,33 +425,72 @@ def smooth_plan(
     smoothed += shifted
 
     # Pass 6/6 (LAST): Target-based backward charge fill.
+    # Only fill if charging is profitable: charge_price must be low enough
+    # that the subsequent discharge actually earns money after efficiency
+    # losses and cycle costs.
     filled = 0
+    half_cycle_eur = cycle_cost_eur / 2
     charge_pct_per_slot = charge_kwh_slot / cap * 100 if cap > 0 else 0
 
     if charge_kwh_slot > 0 and charge_pct_per_slot > 0:
         sim_soc = current_soc
-        discharge_block_starts: list[tuple[int, float]] = []
+        # Track discharge block starts and ends for search range limiting
+        discharge_block_info: list[tuple[int, int, float]] = []  # (start, end, soc_at_start)
+        current_block_start: int | None = None
         for i in range(n):
-            if actions[i] == "discharge" and (i == 0 or actions[i - 1] != "discharge"):
-                discharge_block_starts.append((i, sim_soc))
+            if actions[i] == "discharge":
+                if current_block_start is None:
+                    current_block_start = i
+                    discharge_block_info.append((i, i, sim_soc))
+            else:
+                if current_block_start is not None:
+                    # Update the end index of the last block
+                    discharge_block_info[-1] = (
+                        discharge_block_info[-1][0], i, discharge_block_info[-1][2]
+                    )
+                    current_block_start = None
             if actions[i] == "charge":
                 delta = min(charge_kwh_slot, (max_soc - sim_soc) / 100 * cap)
                 sim_soc = min(max_soc, sim_soc + delta / cap * 100)
             elif actions[i] == "discharge":
                 delta = min(discharge_kwh_slot, (sim_soc - min_soc) / 100 * cap)
                 sim_soc = max(min_soc, sim_soc - delta / cap * 100)
+        if current_block_start is not None:
+            discharge_block_info[-1] = (
+                discharge_block_info[-1][0], n, discharge_block_info[-1][2]
+            )
 
-        for block_start, soc_at_start in discharge_block_starts:
+        for blk_idx, (block_start, block_end_unused, soc_at_start) in enumerate(discharge_block_info):
             soc_gap = max_soc - soc_at_start
             if soc_gap <= 1.0:
                 continue
 
+            # Calculate average discharge price of this block
+            block_end = block_start
+            while block_end < n and actions[block_end] == "discharge":
+                block_end += 1
+            block_prices = [hourly_data[i]["price"] for i in range(block_start, block_end)]
+            avg_discharge_price = sum(block_prices) / len(block_prices) if block_prices else 0
+
+            # Max acceptable charge price: discharge must be profitable
+            max_charge_price = avg_discharge_price * efficiency - cycle_cost_eur
+
             slots_needed = int(soc_gap / charge_pct_per_slot) + 1
 
+            # Only search for fill slots AFTER the previous discharge block
+            # (filling before an earlier block is useless - that energy gets
+            # discharged there and never reaches this block)
+            if blk_idx > 0:
+                search_start = discharge_block_info[blk_idx - 1][1]
+            else:
+                search_start = 0
+
             candidates: list[tuple[float, int, int]] = []
-            for i in range(block_start):
+            for i in range(search_start, block_start):
                 if actions[i] in ("idle", "hold"):
-                    candidates.append((hourly_data[i]["price"], -i, i))
+                    price = hourly_data[i]["price"]
+                    if price <= max_charge_price:
+                        candidates.append((price, -i, i))
             candidates.sort()
 
             block_filled = 0
@@ -456,9 +502,21 @@ def smooth_plan(
             if block_filled:
                 _LOGGER.info(
                     "Pass 6 fill block@t=%d: SOC was %.1f%%, gap %.1f%% "
-                    "-> added %d charge slots (needed %d)",
+                    "-> added %d charge slots (needed %d, "
+                    "avg_discharge=%.1fct, max_charge=%.1fct)",
                     block_start, soc_at_start, soc_gap,
                     block_filled, slots_needed,
+                    avg_discharge_price * 100, max_charge_price * 100,
+                )
+            elif slots_needed > 0:
+                _LOGGER.info(
+                    "Pass 6 skip block@t=%d: no profitable charge slots "
+                    "(avg_discharge=%.1fct, max_charge=%.1fct, "
+                    "cheapest_idle=%.1fct)",
+                    block_start,
+                    avg_discharge_price * 100, max_charge_price * 100,
+                    min((hourly_data[i]["price"] for i in range(block_start)
+                         if actions[i] in ("idle", "hold")), default=0) * 100,
                 )
 
     smoothed += filled
