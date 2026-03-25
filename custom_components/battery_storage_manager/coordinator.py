@@ -1734,60 +1734,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
 
         smoothed += swapped
 
-        # Pass 4: Target-based backward charge fill for EACH discharge block.
-        # The DP may plan too few charge slots due to floating-point break-even.
-        # This pass simulates the full plan, finds each discharge block start,
-        # and backfills idle→charge if SOC < max_soc at that point.
-        filled = 0
-        charge_pct_per_slot = charge_kwh_slot / cap * 100 if cap > 0 else 0
-
-        if charge_kwh_slot > 0 and charge_pct_per_slot > 0:
-            # Simulate full plan to find SOC at each discharge block start
-            sim_soc = current_soc
-            discharge_block_starts = []
-            for i in range(n):
-                # Detect start of a discharge block (non-discharge → discharge)
-                if actions[i] == "discharge" and (i == 0 or actions[i - 1] != "discharge"):
-                    discharge_block_starts.append((i, sim_soc))
-
-                if actions[i] == "charge":
-                    delta = min(charge_kwh_slot, (self._max_soc - sim_soc) / 100 * cap)
-                    sim_soc = min(self._max_soc, sim_soc + delta / cap * 100)
-                elif actions[i] == "discharge":
-                    delta = min(discharge_kwh_slot, (sim_soc - self._min_soc) / 100 * cap)
-                    sim_soc = max(self._min_soc, sim_soc - delta / cap * 100)
-
-            # For each discharge block, check if SOC was below max_soc
-            for block_start, soc_at_start in discharge_block_starts:
-                soc_gap = self._max_soc - soc_at_start
-                if soc_gap <= 1.0:
-                    continue  # already near max_soc
-
-                slots_needed = int(soc_gap / charge_pct_per_slot) + 1
-
-                # Collect idle/hold slots BEFORE this discharge block
-                candidates = []
-                for i in range(block_start):
-                    if actions[i] in ("idle", "hold"):
-                        candidates.append((hourly_data[i]["price"], -i, i))
-                # Sort: cheapest price first, latest time first (for solar room)
-                candidates.sort()
-
-                block_filled = 0
-                for _, _, idx in candidates[:slots_needed]:
-                    actions[idx] = "charge"
-                    block_filled += 1
-                filled += block_filled
-
-                if block_filled:
-                    _LOGGER.info(
-                        "Pass 4 fill block@t=%d: SOC was %.1f%%, gap %.1f%% "
-                        "→ added %d charge slots (needed %d)",
-                        block_start, soc_at_start, soc_gap,
-                        block_filled, slots_needed,
-                    )
-
-        smoothed += filled
+        # Pass 4 (charge fill) moved to after Pass 6 — see below.
 
         # Pass 5: Merge separated charge blocks at same price.
         # If a non-main charge block has similar price to the main block
@@ -1934,6 +1881,54 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             )
 
         smoothed += shifted
+
+        # Pass 4 (LAST): Target-based backward charge fill.
+        # Runs AFTER merge (Pass 5) and shift (Pass 6) so that added
+        # slots are not removed by subsequent passes.
+        filled = 0
+        charge_pct_per_slot = charge_kwh_slot / cap * 100 if cap > 0 else 0
+
+        if charge_kwh_slot > 0 and charge_pct_per_slot > 0:
+            sim_soc = current_soc
+            discharge_block_starts = []
+            for i in range(n):
+                if actions[i] == "discharge" and (i == 0 or actions[i - 1] != "discharge"):
+                    discharge_block_starts.append((i, sim_soc))
+                if actions[i] == "charge":
+                    delta = min(charge_kwh_slot, (self._max_soc - sim_soc) / 100 * cap)
+                    sim_soc = min(self._max_soc, sim_soc + delta / cap * 100)
+                elif actions[i] == "discharge":
+                    delta = min(discharge_kwh_slot, (sim_soc - self._min_soc) / 100 * cap)
+                    sim_soc = max(self._min_soc, sim_soc - delta / cap * 100)
+
+            for block_start, soc_at_start in discharge_block_starts:
+                soc_gap = self._max_soc - soc_at_start
+                if soc_gap <= 1.0:
+                    continue
+
+                slots_needed = int(soc_gap / charge_pct_per_slot) + 1
+
+                candidates = []
+                for i in range(block_start):
+                    if actions[i] in ("idle", "hold"):
+                        candidates.append((hourly_data[i]["price"], -i, i))
+                candidates.sort()
+
+                block_filled = 0
+                for _, _, idx in candidates[:slots_needed]:
+                    actions[idx] = "charge"
+                    block_filled += 1
+                filled += block_filled
+
+                if block_filled:
+                    _LOGGER.info(
+                        "Pass 4 fill block@t=%d: SOC was %.1f%%, gap %.1f%% "
+                        "→ added %d charge slots (needed %d)",
+                        block_start, soc_at_start, soc_gap,
+                        block_filled, slots_needed,
+                    )
+
+        smoothed += filled
 
         if smoothed:
             _LOGGER.info(
