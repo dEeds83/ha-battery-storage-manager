@@ -1704,15 +1704,11 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                 else:
                     actions.append("idle")
             else:
-                # idle/hold: check if any scenario wants to charge here
-                # (pessimistic might want to charge where expected doesn't)
-                votes = [sa[t] for sa in scenario_actions]
-                if votes.count("charge") >= 2:
-                    actions.append("charge")
-                elif votes.count("discharge") >= 2:
-                    actions.append("discharge")
-                else:
-                    actions.append("idle")
+                # idle/hold: trust expected scenario (charge decisions
+                # are low-risk, and Pass 4-6 will adjust timing).
+                # Don't let majority vote inject isolated charge slots
+                # that the smoothing pipeline then can't clean up.
+                actions.append(exp_act if exp_act in ("idle", "hold") else "idle")
 
         # Use the pessimistic profit as the reported profit (conservative)
         actual_profit = scenario_profits[1]  # pessimistic scenario
