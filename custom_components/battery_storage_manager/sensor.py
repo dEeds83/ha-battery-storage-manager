@@ -114,6 +114,7 @@ class OperatingModeSensor(BatteryStorageBaseSensor):
             "allow_discharging": d.get("allow_discharging"),
             "use_solar_forecast": d.get("use_solar_forecast"),
             "version": d.get("version"),
+            "source_hash": d.get("source_hash"),
         }
 
 

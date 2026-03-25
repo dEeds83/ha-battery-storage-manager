@@ -60,8 +60,9 @@ def fetch_plan_from_ha():
     soc = mode_state["attributes"]["battery_soc"]
     action_counts = plan_state["attributes"].get("action_counts", {})
     ha_version = mode_state["attributes"].get("version")
+    ha_source_hash = mode_state["attributes"].get("source_hash")
 
-    return plan, soc, action_counts, ha_version
+    return plan, soc, action_counts, ha_version, ha_source_hash
 
 
 # ─── Smoothing Pipeline (mirrors coordinator.py) ────────────
@@ -291,22 +292,39 @@ def main():
     with open(manifest_path) as f:
         expected_version = json.load(f).get("version", "?")
 
+    # Calculate local source hash
+    import hashlib
+    component_dir = os.path.join(os.path.dirname(__file__),
+        "custom_components", "battery_storage_manager")
+    hasher = hashlib.md5()
+    for py_file in sorted(os.listdir(component_dir)):
+        if py_file.endswith(".py"):
+            with open(os.path.join(component_dir, py_file), "rb") as fh:
+                hasher.update(fh.read())
+    local_hash = hasher.hexdigest()[:12]
+
     print(f"\n  Expected version: {expected_version}")
+    print(f"  Local source hash: {local_hash}")
     print("\nFetching live data from Home Assistant...")
     try:
-        plan, soc, counts, ha_version = fetch_plan_from_ha()
+        plan, soc, counts, ha_version, ha_hash = fetch_plan_from_ha()
     except Exception as e:
         print(f"ERROR: Could not fetch data: {e}")
         print("Make sure HA is running and .mcp.json is configured.")
         sys.exit(1)
 
     print(f"  HA version: {ha_version or 'unknown'}")
+    print(f"  HA source hash: {ha_hash or 'unknown'}")
     if ha_version and ha_version != expected_version:
         print(f"  ⚠️  VERSION MISMATCH: HA has {ha_version}, "
               f"expected {expected_version}")
-        print(f"     Update HA and restart before validating!")
     elif ha_version:
         print(f"  ✅ Version match: {ha_version}")
+    if ha_hash and ha_hash != local_hash:
+        print(f"  ⚠️  SOURCE MISMATCH: HA={ha_hash}, local={local_hash}")
+        print(f"     The code running in HA differs from local files!")
+    elif ha_hash:
+        print(f"  ✅ Source hash match: {ha_hash}")
 
     print(f"  SOC: {soc:.1f}%")
     print(f"  Plan: {len(plan)} slots")
