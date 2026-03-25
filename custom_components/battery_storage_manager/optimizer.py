@@ -1,4 +1,16 @@
-"""DP optimizer and smoothing pipeline for Battery Storage Manager."""
+"""Dynamic-programming optimizer and post-processing smoothing pipeline.
+
+This module contains the core scheduling logic for the Battery Storage Manager
+integration.  It exposes two pure functions:
+
+* ``solve_dp`` -- builds a backward-induction DP table over discretised SOC
+  levels and extracts the profit-maximising charge/discharge/idle plan.
+* ``smooth_plan`` -- applies a six-pass heuristic pipeline that cleans up DP
+  artefacts (single-slot enclaves, rapid alternation, sub-optimal discharge
+  placement, fragmented charge blocks, and timing of charge slots).
+
+Both functions are side-effect-free and operate solely on the data passed in.
+"""
 
 from __future__ import annotations
 
@@ -23,10 +35,43 @@ def solve_dp(
     epex_terminal_value_per_kwh: float = 0.0,
     battery_efficiency: float = 0.9,
 ) -> tuple[list[str], float]:
-    """Run the core DP optimization. Returns (actions, profit).
+    """Run the core dynamic-programming optimisation for battery scheduling.
 
-    Uses _scn_grid_frac from hourly_data for the current scenario.
-    Pure function: no side effects, no self references.
+    The algorithm works in three phases:
+
+    1. **SOC discretisation** -- the continuous SOC range ``[min_soc, max_soc]``
+       is quantised into evenly-spaced levels whose step size is derived from the
+       per-slot charge/discharge energy.
+    2. **Backward pass** -- starting from terminal values (residual energy
+       valued at a blend of median-price and EPEX forward price), the DP table
+       ``dp[t][soc_idx]`` is filled from the last slot back to slot 0.  At each
+       ``(t, soc)`` the best action (charge, discharge, idle) is recorded.
+       Charging ties at break-even are broken in favour of charging (``>=``).
+    3. **Forward pass** -- the optimal action sequence is read out by walking
+       forward from the current SOC through the recorded actions.
+
+    Args:
+        hourly_data: Per-slot dicts with at least ``"price"`` (EUR/kWh),
+            ``"grid_fraction"`` and optionally ``"_scn_grid_frac"`` keys.
+        n: Number of time slots in the planning horizon.
+        current_soc: Current battery state-of-charge in percent.
+        charge_kwh_slot: Maximum energy charged per slot (kWh).
+        discharge_kwh_slot: Maximum energy discharged per slot (kWh).
+        cap: Usable battery capacity (kWh).
+        efficiency: Round-trip discharge efficiency (0-1).
+        cycle_cost_eur: Estimated degradation cost per full cycle (EUR).
+        slot_h: Duration of one slot in hours.
+        min_soc: Minimum allowed SOC in percent.
+        max_soc: Maximum allowed SOC in percent.
+        epex_terminal_value_per_kwh: EPEX-based terminal value (EUR/kWh) for
+            energy remaining in the battery at the end of the horizon.
+        battery_efficiency: One-way battery efficiency (default 0.9).
+
+    Returns:
+        A tuple ``(actions, profit)`` where *actions* is a list of ``n``
+        strings (each ``"charge"``, ``"discharge"``, or ``"idle"``) and
+        *profit* is the estimated EUR profit of the plan (excluding the
+        terminal value of the starting energy).
     """
     # SOC discretization
     charge_soc_pct = charge_kwh_slot / cap * 100 if cap > 0 else 5
@@ -43,6 +88,7 @@ def solve_dp(
     num_soc = len(soc_levels)
 
     def soc_to_idx(soc: float) -> int:
+        """Map a continuous SOC percentage to the nearest discretised index."""
         idx = round((soc - min_soc) / soc_step)
         return max(0, min(num_soc - 1, idx))
 
@@ -148,10 +194,57 @@ def smooth_plan(
     max_soc: float,
     slot_h: float,
 ) -> tuple[list[str], int]:
-    """Apply 6-pass smoothing pipeline to DP actions.
+    """Apply a six-pass heuristic smoothing pipeline to raw DP actions.
 
-    Returns (smoothed_actions, total_adjustments).
-    Pure function: no side effects.
+    The DP solution is mathematically optimal on its discretised grid but can
+    produce plans with artefacts that look erratic or waste switching cycles.
+    This function cleans them up in six sequential passes:
+
+    * **Pass 1 -- Enclave removal:** Single-slot charge or discharge actions
+      that are surrounded by different actions on both sides are replaced with
+      idle.  This eliminates isolated one-slot spikes.
+    * **Pass 2 -- Alternation dampening:** Back-to-back charge/discharge (or
+      discharge/charge) pairs whose price spread is below the break-even
+      threshold are collapsed by setting the second slot to idle.
+    * **Pass 3 -- Discharge slot swap:** Iteratively swaps the cheapest
+      discharge slot with a more expensive idle slot that occurs later,
+      moving discharge energy to higher-priced times.
+    * **Pass 5 -- Charge-block merging:** When multiple separated charge
+      blocks exist, small satellite blocks at the same price are merged into
+      the main (largest) block.  Blocks after the main block that are small
+      and far away are removed entirely.
+    * **Pass 6 -- Late-shift of charge blocks:** Within each contiguous
+      charge block, slots are shifted to the latest available idle/hold slots
+      at the same price, so charging happens as late as possible before
+      discharge (reducing self-discharge losses).
+    * **Pass 4 -- Target-based backward charge fill (run last):** For every
+      discharge block whose entry SOC is below ``max_soc``, the cheapest
+      idle slots *before* that block are converted to charge slots so the
+      battery is full when discharge begins.
+
+    Note:
+        The passes are numbered in the order they were historically added, not
+        the order they execute.  Execution order is 1-2-3-5-6-4.
+
+    Args:
+        actions: Mutable list of ``n`` action strings produced by ``solve_dp``.
+            Modified in place **and** returned.
+        hourly_data: Per-slot dicts with at least a ``"price"`` key (EUR/kWh).
+        n: Number of time slots.
+        efficiency: Round-trip discharge efficiency (0-1).
+        cycle_cost_eur: Estimated degradation cost per full cycle (EUR).
+        charge_kwh_slot: Maximum energy charged per slot (kWh).
+        discharge_kwh_slot: Maximum energy discharged per slot (kWh).
+        cap: Usable battery capacity (kWh).
+        current_soc: Current battery SOC in percent.
+        min_soc: Minimum allowed SOC in percent.
+        max_soc: Maximum allowed SOC in percent.
+        slot_h: Duration of one slot in hours.
+
+    Returns:
+        A tuple ``(actions, total_adjustments)`` where *actions* is the
+        (mutated) input list and *total_adjustments* is the number of slot
+        changes made across all passes.
     """
     smoothed = 0
 

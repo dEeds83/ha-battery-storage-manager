@@ -906,6 +906,7 @@ class BatteryStorageCoordinator(
         # Summary
         parts = []
         def _fmt_duration(slots: int) -> str:
+            """Format a slot count as a human-readable duration string."""
             total_min = round(slots * slot_h * 60)
             if total_min >= 60 and total_min % 60 == 0:
                 return f"{total_min // 60}h"
@@ -1361,83 +1362,103 @@ class BatteryStorageCoordinator(
     # Properties for entities
     @property
     def chargers(self) -> list[dict]:
+        """List of configured charger devices with their state."""
         return self._chargers
 
     @property
     def strategy(self) -> str:
+        """Current operating strategy (price_optimized, self_consumption, manual)."""
         return self._strategy
 
     @property
     def operating_mode(self) -> str:
+        """Current operating mode (idle, charging, discharging, solar_charging)."""
         return self._operating_mode
 
     @property
     def current_price(self) -> float | None:
+        """Current electricity price in EUR/kWh."""
         return self._current_price
 
     @property
     def battery_soc(self) -> float | None:
+        """Current battery state of charge in percent."""
         return self._battery_soc
 
     @property
     def grid_power(self) -> float | None:
+        """Net grid power in watts (positive=import, negative=export)."""
         return self._grid_power
 
     @property
     def min_soc(self) -> int:
+        """Minimum allowed battery SOC in percent."""
         return self._min_soc
 
     @min_soc.setter
     def min_soc(self, value: int) -> None:
+        """Set minimum SOC, clamped to 0-100."""
         self._min_soc = max(0, min(100, value))
 
     @property
     def max_soc(self) -> int:
+        """Maximum allowed battery SOC in percent."""
         return self._max_soc
 
     @max_soc.setter
     def max_soc(self, value: int) -> None:
+        """Set maximum SOC, clamped to 0-100."""
         self._max_soc = max(0, min(100, value))
 
     @property
     def price_low_threshold(self) -> float:
+        """Low price threshold for charging decisions in ct/kWh."""
         return self._price_low
 
     @price_low_threshold.setter
     def price_low_threshold(self, value: float) -> None:
+        """Set low price threshold."""
         self._price_low = value
 
     @property
     def price_high_threshold(self) -> float:
+        """High price threshold for discharging decisions in ct/kWh."""
         return self._price_high
 
     @price_high_threshold.setter
     def price_high_threshold(self, value: float) -> None:
+        """Set high price threshold."""
         self._price_high = value
 
     @property
     def allow_grid_charging(self) -> bool:
+        """Whether grid charging is allowed."""
         return self._allow_grid_charging
 
     @allow_grid_charging.setter
     def allow_grid_charging(self, value: bool) -> None:
+        """Enable or disable grid charging."""
         self._allow_grid_charging = value
         _LOGGER.info("Grid charging %s", "enabled" if value else "disabled")
 
     @property
     def allow_discharging(self) -> bool:
+        """Whether battery discharging is allowed."""
         return self._allow_discharging
 
     @allow_discharging.setter
     def allow_discharging(self, value: bool) -> None:
+        """Enable or disable battery discharging."""
         self._allow_discharging = value
         _LOGGER.info("Discharging %s", "enabled" if value else "disabled")
 
     @property
     def use_solar_forecast(self) -> bool:
+        """Whether solar forecast is used in optimization."""
         return self._use_solar_forecast
 
     @use_solar_forecast.setter
     def use_solar_forecast(self, value: bool) -> None:
+        """Enable or disable solar forecast usage."""
         self._use_solar_forecast = value
         _LOGGER.info("Solar forecast %s", "enabled" if value else "disabled")
