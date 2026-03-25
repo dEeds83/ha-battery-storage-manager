@@ -1869,6 +1869,72 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
                     removed_islands,
                 )
 
+        # Pass 6: Shift charge block to latest position within same price band.
+        # Even with a single charge block, it may sit in the middle of a
+        # long same-price period. Shift it to the latest position (closest
+        # to discharge) to leave early hours free for solar.
+        charge_blocks_final = []
+        block_s = None
+        for i in range(n):
+            if actions[i] == "charge":
+                if block_s is None:
+                    block_s = i
+            else:
+                if block_s is not None:
+                    charge_blocks_final.append((block_s, i - block_s))
+                    block_s = None
+        if block_s is not None:
+            charge_blocks_final.append((block_s, n - block_s))
+
+        shifted = 0
+        for cb_start, cb_len in charge_blocks_final:
+            cb_end = cb_start + cb_len
+            cb_price = hourly_data[cb_start]["price"] if cb_start < n else 0
+
+            # Find same-price hold/idle slots AFTER this charge block
+            # (before next discharge or price change > 0.3ct)
+            tail_slots = []
+            for j in range(cb_end, n):
+                if actions[j] == "discharge":
+                    break
+                if actions[j] in ("idle", "hold"):
+                    p = hourly_data[j]["price"]
+                    if abs(p - cb_price) < 0.003:  # within 0.3ct
+                        tail_slots.append(j)
+                    elif p > cb_price + 0.003:
+                        break  # price increased, stop
+
+            if not tail_slots:
+                continue
+
+            # Shift: move charge slots from the beginning of the block
+            # to the latest available tail positions
+            # Only shift as many as we have tail slots for
+            shift_count = min(len(tail_slots), cb_len)
+            if shift_count == 0:
+                continue
+
+            # Convert earliest charge slots to idle
+            slots_to_free = list(range(cb_start, cb_start + shift_count))
+            # Convert latest tail slots to charge
+            tail_slots.sort(reverse=True)
+            slots_to_fill = tail_slots[:shift_count]
+
+            for j in slots_to_free:
+                actions[j] = "idle"
+            for j in slots_to_fill:
+                actions[j] = "charge"
+            shifted += shift_count
+            _LOGGER.info(
+                "Pass 6: shifted %d charge slots later "
+                "(from t=%d to t=%d-%d, price %.1f ct)",
+                shift_count, cb_start,
+                min(slots_to_fill), max(slots_to_fill),
+                cb_price * 100,
+            )
+
+        smoothed += shifted
+
         if smoothed:
             _LOGGER.info(
                 "Plan smoothing: %d slots adjusted (%d swaps, %d filled)",
