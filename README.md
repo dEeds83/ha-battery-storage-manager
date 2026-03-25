@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.7.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -23,6 +23,8 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
   - Pass 4: Zielbasierte Rückwärts-Auffüllung (füllt Idle/Hold-Slots vor jedem Entlade-Block bis max_soc)
   - Pass 5: Mini-Insel-Bereinigung (entfernt isolierte Lade-Blöcke < 4 Slots)
 - **Terminal-Value mit Unsicherheitsabschlag** – Basis-Wert aus Tibber-Median (70% Konfidenz), EPEX-Wert überschreibt wenn höher
+- **Temperaturbasierte Verbrauchsprognose** – Außentemperatur-Sensor korrigiert Verbrauch (±2%/°C außerhalb 15-25°C Komfortzone)
+- **Smartshunt-Integration** – Victron Smartshunt liefert V×A = echte Batterieleistung, Spannung und Strom als Attribute
 - **Optimierungs-Log** – Alle Entscheidungen (Szenarien, Kalman, Swaps) als Sensor im UI einsehbar
 
 ### Steuerung
@@ -81,6 +83,7 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 | Weitere Solar-Sensoren | Mehrfachauswahl für zusätzliche Solaranlagen | Nein |
 | Solar-Leistung Sensor | Aktuelle PV-Produktion in Watt (für exakte Verbrauchsberechnung) | Nein |
 | Solar-Energie heute Sensor | Tägliche PV-Produktion in kWh (für Prognose-Kalibrierung) | Nein |
+| Außentemperatur-Sensor | Verbessert Verbrauchsprognose (Heizung/Kühlung) | Nein |
 | EPEX Predictor aktivieren | Erweitert Preisprognose über Tibber-Fenster hinaus mit EPEX-Spotmarkt-Vorhersagen | Nein |
 | EPEX Predictor Region | Gebotszone (DE, AT, BE, NL, SE1-4, DK1-2) | DE |
 
@@ -110,6 +113,8 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 | Hausverbrauch | Durchschnittlicher Verbrauch in Watt (Startwert, wird durch Lernfunktion ersetzt) | 500 W |
 | Zykluskosten | Degradationskosten pro Lade-/Entladezyklus in ct/kWh | 10 ct/kWh |
 | Roundtrip-Effizienz | Gesamteffizienz eines Lade-/Entladezyklus in Prozent | 90% |
+| Batterie-Spannungs-Sensor | Victron Smartshunt Spannung (optional) | – |
+| Batterie-Strom-Sensor | Victron Smartshunt Strom (optional) | – |
 
 ### Nachträgliche Anpassung
 
