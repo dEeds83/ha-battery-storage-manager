@@ -196,10 +196,18 @@ class BatteryStorageCoordinator(
         self._battery_voltage: float | None = None
         self._battery_current: float | None = None
         self._battery_real_power: float | None = None  # V x A
-        # Efficiency tracking: accumulated charge/discharge energy
-        self._efficiency_charge_kwh: float = 0.0
-        self._efficiency_discharge_kwh: float = 0.0
-        self._efficiency_last_reset: str | None = None  # date string
+
+        # Efficiency tracking from Smartshunt V×I vs charger/inverter power
+        # Accumulated energy (kWh) per direction, reset daily
+        self._eff_charge_grid_kwh: float = 0.0    # energy drawn from grid (chargers)
+        self._eff_charge_battery_kwh: float = 0.0  # energy into battery (Smartshunt)
+        self._eff_discharge_battery_kwh: float = 0.0  # energy from battery (Smartshunt)
+        self._eff_discharge_grid_kwh: float = 0.0  # energy delivered (inverter)
+        self._eff_last_update: datetime | None = None  # for time delta
+        self._eff_last_reset_date: str | None = None
+        self._measured_charge_efficiency: float | None = None
+        self._measured_discharge_efficiency: float | None = None
+        self._measured_roundtrip_efficiency: float | None = None
 
         # Action history: records what was ACTUALLY executed (not just planned)
         # Persistent, 10-min intervals, max 288 entries (48h)
@@ -526,8 +534,84 @@ class BatteryStorageCoordinator(
         else:
             self._battery_real_power = None
 
+        # Efficiency tracking: accumulate energy from Smartshunt vs charger/inverter
+        self._update_efficiency_tracking()
+
         # Sync charger active flags with actual switch states
         self._sync_device_states()
+
+    def _update_efficiency_tracking(self) -> None:
+        """Accumulate charge/discharge energy for efficiency measurement.
+
+        Compares Smartshunt V×I (actual battery power) with charger/inverter
+        power to derive charge and discharge efficiency.  Resets daily.
+        """
+        now = dt_util.utcnow()
+        today_str = now.strftime("%Y-%m-%d")
+
+        # Daily reset
+        if self._eff_last_reset_date != today_str:
+            if self._eff_last_reset_date is not None:
+                _LOGGER.info(
+                    "Efficiency daily reset (was: charge=%.1f%%, discharge=%.1f%%, "
+                    "roundtrip=%.1f%%)",
+                    (self._measured_charge_efficiency or 0) * 100,
+                    (self._measured_discharge_efficiency or 0) * 100,
+                    (self._measured_roundtrip_efficiency or 0) * 100,
+                )
+            self._eff_charge_grid_kwh = 0.0
+            self._eff_charge_battery_kwh = 0.0
+            self._eff_discharge_battery_kwh = 0.0
+            self._eff_discharge_grid_kwh = 0.0
+            self._eff_last_reset_date = today_str
+
+        # Need Smartshunt data and a previous timestamp for time delta
+        if self._battery_voltage is None or self._battery_current is None:
+            self._eff_last_update = now
+            return
+
+        if self._eff_last_update is None:
+            self._eff_last_update = now
+            return
+
+        dt_hours = (now - self._eff_last_update).total_seconds() / 3600
+        self._eff_last_update = now
+
+        # Skip unreasonable time deltas (> 5 min means we missed cycles)
+        if dt_hours <= 0 or dt_hours > 5 / 60:
+            return
+
+        battery_power_w = self._battery_voltage * self._battery_current
+        # Positive current = charging, negative = discharging
+
+        if self._operating_mode in (MODE_CHARGING, MODE_SOLAR_CHARGING) and battery_power_w > 10:
+            # Charging: grid→chargers→battery
+            grid_power_w = sum(c["power"] for c in self._chargers if c["active"])
+            if grid_power_w > 0:
+                self._eff_charge_grid_kwh += grid_power_w * dt_hours / 1000
+                self._eff_charge_battery_kwh += battery_power_w * dt_hours / 1000
+
+        elif self._operating_mode == MODE_DISCHARGING and battery_power_w < -10:
+            # Discharging: battery→inverter→grid
+            battery_out_w = abs(battery_power_w)
+            inverter_w = self._inverter_actual_power or 0
+            if inverter_w > 0:
+                self._eff_discharge_battery_kwh += battery_out_w * dt_hours / 1000
+                self._eff_discharge_grid_kwh += inverter_w * dt_hours / 1000
+
+        # Calculate efficiencies (require minimum 0.1 kWh data)
+        if self._eff_charge_grid_kwh > 0.1:
+            self._measured_charge_efficiency = min(1.0,
+                self._eff_charge_battery_kwh / self._eff_charge_grid_kwh)
+
+        if self._eff_discharge_battery_kwh > 0.1:
+            self._measured_discharge_efficiency = min(1.0,
+                self._eff_discharge_grid_kwh / self._eff_discharge_battery_kwh)
+
+        if self._measured_charge_efficiency and self._measured_discharge_efficiency:
+            self._measured_roundtrip_efficiency = (
+                self._measured_charge_efficiency * self._measured_discharge_efficiency
+            )
 
     def _validate_operating_mode(self) -> None:
         """Ensure operating mode matches actual device states.
@@ -704,7 +788,11 @@ class BatteryStorageCoordinator(
         discharge_power_w = self._inverter_power or 800
         discharge_kwh_slot = discharge_power_w / 1000 * slot_h
         cap = self._battery_capacity
-        efficiency = self._battery_efficiency  # round-trip, e.g. 0.90
+        # Use measured roundtrip efficiency if available, fallback to configured
+        if self._measured_roundtrip_efficiency is not None:
+            efficiency = self._measured_roundtrip_efficiency
+        else:
+            efficiency = self._battery_efficiency  # configured value, e.g. 0.90
         cycle_cost_eur = self._cycle_cost / 100  # convert ct to EUR
 
         # Per-day consumption forecast (weekday/weekend aware)
@@ -1358,6 +1446,11 @@ class BatteryStorageCoordinator(
             "intraday_solar_factor": self._intraday_solar_factor,
             "kalman_gain": round(getattr(self, "_kalman_p", 0.1) / (getattr(self, "_kalman_p", 0.1) + 0.05), 3),
             "battery_efficiency": round(self._battery_efficiency * 100),
+            "measured_roundtrip_efficiency": round(self._measured_roundtrip_efficiency * 100, 1) if self._measured_roundtrip_efficiency else None,
+            "measured_charge_efficiency": round(self._measured_charge_efficiency * 100, 1) if self._measured_charge_efficiency else None,
+            "measured_discharge_efficiency": round(self._measured_discharge_efficiency * 100, 1) if self._measured_discharge_efficiency else None,
+            "efficiency_charge_kwh": round(self._eff_charge_grid_kwh, 3),
+            "efficiency_discharge_kwh": round(self._eff_discharge_battery_kwh, 3),
             "cycle_cost_ct": self._cycle_cost,
             "consumption_forecast": self.get_hourly_consumption_forecast(),
             "optimization_log": list(self._optimization_log),

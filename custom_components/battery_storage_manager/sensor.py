@@ -44,6 +44,7 @@ async def async_setup_entry(
         SolarCalibrationFactorSensor(coordinator, entry),
         OptimizationLogSensor(coordinator, entry),
         ActionHistorySensor(coordinator, entry),
+        MeasuredEfficiencySensor(coordinator, entry),
     ]
 
     # Dynamic charger status sensors
@@ -711,3 +712,44 @@ class ActionHistorySensor(BatteryStorageBaseSensor):
             "count": len(history),
             "hours_covered": round(len(history) / 60, 1),
         }
+
+
+class MeasuredEfficiencySensor(BatteryStorageBaseSensor):
+    """Sensor showing measured battery roundtrip efficiency from Smartshunt data."""
+
+    _attr_icon = "mdi:gauge"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "measured_efficiency", "Gemessene Effizienz"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if not self.coordinator.data:
+            return None
+        val = self.coordinator.data.get("measured_roundtrip_efficiency")
+        return val if val is not None else None
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        d = self.coordinator.data
+        attrs = {
+            "charge_efficiency": d.get("measured_charge_efficiency"),
+            "discharge_efficiency": d.get("measured_discharge_efficiency"),
+            "roundtrip_efficiency": d.get("measured_roundtrip_efficiency"),
+            "configured_efficiency": d.get("battery_efficiency"),
+            "charge_energy_kwh": d.get("efficiency_charge_kwh"),
+            "discharge_energy_kwh": d.get("efficiency_discharge_kwh"),
+        }
+        # Show which value the optimizer currently uses
+        measured = d.get("measured_roundtrip_efficiency")
+        configured = d.get("battery_efficiency")
+        attrs["optimizer_uses"] = (
+            f"gemessen ({measured}%)" if measured else f"konfiguriert ({configured}%)"
+        )
+        return attrs

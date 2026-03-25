@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.9.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.10.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -13,7 +13,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Exponentielle Verbrauchsprognose** – Gewichteter Durchschnitt (α=0,85) bevorzugt aktuelle Tage, erkennt Trends
 - **EPEX Predictor Terminal-Value** – Bestimmt ob Akku am Tibber-Ende voll oder leer sein soll (keine falschen Aktionen)
 - **Batterie-Zykluskosten** – Konfigurierbarer Degradationskostenparameter (ct/kWh) verhindert unprofitable Mini-Arbitrage
-- **Roundtrip-Effizienz** – Konfigurierbarer Effizienzfaktor (Standard 90%) in der Entlade-Bewertung
+- **Roundtrip-Effizienz** – Konfigurierbar (Standard 90%), wird automatisch aus Smartshunt V×I-Messdaten kalibriert wenn verfügbar
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
 - **Solarbasierte Ladepriorisierung** – DP bevorzugt automatisch Solar-Stunden (niedrige `grid_fraction`) über Nacht-Laden (voller Netzpreis), kein künstlicher Tie-Breaker nötig
 - **6-Pass Smoothing Pipeline:**
@@ -25,7 +25,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
   - Pass 6: Zielbasierte Rückwärts-Auffüllung (Idle→Charge vor Entlade-Blöcken, nur wenn profitabel: Ladepreis ≤ Ø Entladepreis × Effizienz − Zykluskosten)
 - **Terminal-Value mit Unsicherheitsabschlag** – Basis-Wert aus Tibber-Median (70% Konfidenz), EPEX-Wert überschreibt wenn höher
 - **Temperaturbasierte Verbrauchsprognose** – Außentemperatur-Sensor korrigiert Verbrauch (±2%/°C außerhalb 15-25°C Komfortzone)
-- **Smartshunt-Integration** – Victron Smartshunt liefert V×A = echte Batterieleistung, Spannung und Strom als Attribute
+- **Smartshunt-Integration** – Victron Smartshunt liefert V×A = echte Batterieleistung, automatische Effizienz-Kalibrierung (Lade-/Entlade-/Roundtrip-Effizienz als Sensor)
 - **Optimierungs-Log** – Alle Entscheidungen (Szenarien, Kalman, Swaps) als Sensor im UI einsehbar
 
 ### Steuerung
@@ -164,6 +164,8 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Preisprognose | Nächste 12h Strompreise als CSV + Attribute (min/max/avg, slot_minutes) |
 | Solar Korrekturfaktor | Kalibrierungsfaktor für Solarprognosen (1.0 = exakt, <1 = Forecast überschätzt, >1 = unterschätzt) mit Intraday-Faktor als Attribut |
 | Optimierungs-Log | Letzte Optimierungsentscheidung als State, vollständiges Log (max 50 Einträge) als Attribut |
+| Aktionshistorie | Tatsächlich ausgeführte Aktionen (48h, 10-Min-Intervalle, persistent) |
+| Gemessene Effizienz | Roundtrip-Effizienz aus Smartshunt V×I vs. Charger/Inverter-Leistung (Lade-/Entlade-/Roundtrip als Attribute) |
 
 ### Schalter
 
