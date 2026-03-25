@@ -176,9 +176,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._efficiency_last_reset: str | None = None  # date string
 
         # Action history: records what was ACTUALLY executed (not just planned)
-        # Max 48h of entries at 1 per minute = ~2880 entries
+        # Persistent, 10-min intervals, max 288 entries (48h)
         self._action_history: list[dict] = []
         self._action_history_last_key: str | None = None
+        self._action_history_store = Store(
+            hass, 1, f"{DOMAIN}.{entry.entry_id}.action_history"
+        )
+        self._action_history_loaded = False
 
         # EPEX Predictor for long-term price forecast
         self._epex_enabled = bool(self._config.get(CONF_EPEX_PREDICTOR_ENABLED, False))
@@ -301,8 +305,15 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             self._consumption_stats = {}
         self._consumption_loaded = True
 
-    def _record_action_history(self) -> None:
-        """Record current state to action history (1 per 10 min, 48h)."""
+    async def _record_action_history(self) -> None:
+        """Record current state to action history (1 per 10 min, 48h, persistent)."""
+        # Lazy-load from disk on first call
+        if not self._action_history_loaded:
+            stored = await self._action_history_store.async_load()
+            if stored and isinstance(stored, list):
+                self._action_history = stored
+            self._action_history_loaded = True
+
         now = dt_util.now()
         # Round to 10-minute intervals: 00, 10, 20, 30, 40, 50
         rounded_min = (now.minute // 10) * 10
@@ -322,6 +333,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "price": round(self._current_price * 100, 1) if self._current_price else None,
             "grid_w": round(self._grid_power) if self._grid_power is not None else None,
             "solar_w": round(self._solar_power) if self._solar_power is not None else None,
+            "version": self._version,
         }
         self._action_history.append(entry)
 
@@ -329,6 +341,9 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         max_entries = 288
         if len(self._action_history) > max_entries:
             self._action_history = self._action_history[-max_entries:]
+
+        # Persist to disk
+        await self._action_history_store.async_save(self._action_history)
 
     async def _record_consumption(self) -> None:
         """Record current grid consumption for the current hour.
@@ -773,8 +788,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         if self._operating_mode == MODE_IDLE:
             await self._try_solar_opportunistic()
 
-        # Record action history (max 1 entry per minute, 48h retention)
-        self._record_action_history()
+        # Record action history (every 10 min, 48h retention, persistent)
+        await self._record_action_history()
 
         return self._build_data()
 
