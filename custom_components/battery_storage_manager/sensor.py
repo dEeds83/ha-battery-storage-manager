@@ -43,6 +43,7 @@ async def async_setup_entry(
         PriceForecastSensor(coordinator, entry),
         SolarCalibrationFactorSensor(coordinator, entry),
         OptimizationLogSensor(coordinator, entry),
+        ActionHistorySensor(coordinator, entry),
     ]
 
     # Dynamic charger status sensors
@@ -677,4 +678,34 @@ class OptimizationLogSensor(BatteryStorageBaseSensor):
             "count": len(log),
             "efficiency_percent": self.coordinator.data.get("battery_efficiency"),
             "cycle_cost_ct": self.coordinator.data.get("cycle_cost_ct"),
+        }
+
+
+class ActionHistorySensor(BatteryStorageBaseSensor):
+    """Sensor recording what was actually executed (48h rolling history)."""
+
+    _attr_icon = "mdi:history"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "action_history", "Aktionshistorie"
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        history = self.coordinator._action_history
+        if not history:
+            return "Keine Einträge"
+        last = history[-1]
+        return f"{last['time'][11:16]} {last['mode']} SOC {last.get('soc', '?')}%"
+
+    @property
+    def extra_state_attributes(self):
+        history = self.coordinator._action_history
+        # Summarize: count actions in last hour
+        now_entries = history[-4:] if history else []  # last ~4 min
+        return {
+            "history": history,
+            "count": len(history),
+            "hours_covered": round(len(history) / 60, 1),
         }
