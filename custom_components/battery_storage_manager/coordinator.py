@@ -178,7 +178,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         # Action history: records what was ACTUALLY executed (not just planned)
         # Max 48h of entries at 1 per minute = ~2880 entries
         self._action_history: list[dict] = []
-        self._action_history_last_minute: str | None = None
+        self._action_history_last_key: str | None = None
 
         # EPEX Predictor for long-term price forecast
         self._epex_enabled = bool(self._config.get(CONF_EPEX_PREDICTOR_ENABLED, False))
@@ -302,18 +302,20 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         self._consumption_loaded = True
 
     def _record_action_history(self) -> None:
-        """Record current state to action history (max 1 per minute, 48h)."""
+        """Record current state to action history (1 per 10 min, 48h)."""
         now = dt_util.now()
-        minute_key = now.strftime("%Y-%m-%dT%H:%M")
+        # Round to 10-minute intervals: 00, 10, 20, 30, 40, 50
+        rounded_min = (now.minute // 10) * 10
+        interval_key = now.strftime(f"%Y-%m-%dT%H:{rounded_min:02d}")
 
-        if minute_key == self._action_history_last_minute:
-            return  # already recorded this minute
+        if interval_key == self._action_history_last_key:
+            return  # already recorded this interval
 
-        self._action_history_last_minute = minute_key
+        self._action_history_last_key = interval_key
 
         planned = self._get_current_plan_action() or "none"
         entry = {
-            "time": minute_key,
+            "time": interval_key,
             "mode": self._operating_mode,
             "planned": planned,
             "soc": round(self._battery_soc, 1) if self._battery_soc else None,
@@ -323,8 +325,8 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         }
         self._action_history.append(entry)
 
-        # Truncate to 48h (48 * 60 = 2880 entries at 1/min)
-        max_entries = 2880
+        # Truncate to 48h (48h × 6 per hour = 288 entries)
+        max_entries = 288
         if len(self._action_history) > max_entries:
             self._action_history = self._action_history[-max_entries:]
 
