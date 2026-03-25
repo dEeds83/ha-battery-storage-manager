@@ -11,6 +11,7 @@ This script should be run BEFORE every release to catch pipeline bugs.
 """
 
 import json
+import os
 import subprocess
 import sys
 
@@ -58,8 +59,9 @@ def fetch_plan_from_ha():
     plan = plan_state["attributes"]["plan"]
     soc = mode_state["attributes"]["battery_soc"]
     action_counts = plan_state["attributes"].get("action_counts", {})
+    ha_version = mode_state["attributes"].get("version")
 
-    return plan, soc, action_counts
+    return plan, soc, action_counts, ha_version
 
 
 # ─── Smoothing Pipeline (mirrors coordinator.py) ────────────
@@ -283,13 +285,28 @@ def main():
     print("  Battery Storage Manager – Live Pipeline Simulation")
     print("=" * 60)
 
+    # Load expected version from manifest.json
+    manifest_path = os.path.join(os.path.dirname(__file__),
+        "custom_components", "battery_storage_manager", "manifest.json")
+    with open(manifest_path) as f:
+        expected_version = json.load(f).get("version", "?")
+
+    print(f"\n  Expected version: {expected_version}")
     print("\nFetching live data from Home Assistant...")
     try:
-        plan, soc, counts = fetch_plan_from_ha()
+        plan, soc, counts, ha_version = fetch_plan_from_ha()
     except Exception as e:
         print(f"ERROR: Could not fetch data: {e}")
         print("Make sure HA is running and .mcp.json is configured.")
         sys.exit(1)
+
+    print(f"  HA version: {ha_version or 'unknown'}")
+    if ha_version and ha_version != expected_version:
+        print(f"  ⚠️  VERSION MISMATCH: HA has {ha_version}, "
+              f"expected {expected_version}")
+        print(f"     Update HA and restart before validating!")
+    elif ha_version:
+        print(f"  ✅ Version match: {ha_version}")
 
     print(f"  SOC: {soc:.1f}%")
     print(f"  Plan: {len(plan)} slots")

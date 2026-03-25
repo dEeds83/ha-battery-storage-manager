@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -96,6 +98,13 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
         )
         self.entry = entry
         self._config = {**entry.data, **entry.options}
+
+        # Version from manifest.json
+        try:
+            manifest_path = Path(__file__).parent / "manifest.json"
+            self._version = json.loads(manifest_path.read_text()).get("version", "?")
+        except Exception:
+            self._version = "?"
 
         # Entity IDs from config
         self._tibber_price_entity = self._config.get(CONF_TIBBER_PRICE_ENTITY, "")
@@ -3110,6 +3119,7 @@ class BatteryStorageCoordinator(DataUpdateCoordinator):
             "battery_real_power_w": round(self._battery_real_power, 1) if self._battery_real_power else None,
             "battery_voltage": round(self._battery_voltage, 2) if self._battery_voltage else None,
             "battery_current": round(self._battery_current, 2) if self._battery_current else None,
+            "version": self._version,
         }
 
     # Properties for entities
