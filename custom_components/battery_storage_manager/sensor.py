@@ -743,10 +743,11 @@ class MeasuredEfficiencySensor(BatteryStorageBaseSensor):
             "discharge_efficiency": d.get("measured_discharge_efficiency"),
             "roundtrip_efficiency": d.get("measured_roundtrip_efficiency"),
             "configured_efficiency": d.get("battery_efficiency"),
-            "charge_energy_kwh": d.get("efficiency_charge_kwh"),
-            "discharge_energy_kwh": d.get("efficiency_discharge_kwh"),
+            "charge_energy_today_kwh": d.get("efficiency_charge_kwh"),
+            "discharge_energy_today_kwh": d.get("efficiency_discharge_kwh"),
+            "rolling_days": d.get("efficiency_rolling_days"),
+            "history": d.get("efficiency_history", []),
         }
-        # Show which value the optimizer currently uses
         measured = d.get("measured_roundtrip_efficiency")
         configured = d.get("battery_efficiency")
         attrs["optimizer_uses"] = (
