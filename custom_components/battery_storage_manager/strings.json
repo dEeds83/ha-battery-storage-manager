@@ -22,9 +22,9 @@
         "title": "Device Configuration",
         "description": "Configure the chargers and the controllable inverter. Select all charger switches and set the default power per charger.",
         "data": {
-          "charger_entities": "Charger switches",
+          "charger_entities": "Charger switches (order matters, see below)",
           "charger_power_default": "Default charger power (W)",
-          "charger_power_entities": "Charger power sensors (optional, measured W per charger)",
+          "charger_power_entities": "Charger power sensors (optional, same order as switches above: 1st sensor → 1st charger, 2nd → 2nd, etc.)",
           "inverter_feed_switch": "Feed inverter switch (optional, on/off only)",
           "inverter_feed_power_entity": "Feed inverter power entity (optional, for zero-feed control)",
           "inverter_feed_power": "Feed inverter max power (W)",
@@ -73,9 +73,9 @@
         "title": "Device Configuration",
         "description": "Adjust chargers and inverter settings. The power value applies to newly added chargers; existing chargers keep their power.",
         "data": {
-          "charger_entities": "Charger switches",
+          "charger_entities": "Charger switches (order matters, see below)",
           "charger_power_default": "Default charger power (W)",
-          "charger_power_entities": "Charger power sensors (optional, measured W per charger)",
+          "charger_power_entities": "Charger power sensors (optional, same order as switches above: 1st sensor → 1st charger, 2nd → 2nd, etc.)",
           "inverter_feed_switch": "Feed inverter switch (optional)",
           "inverter_feed_power_entity": "Feed inverter power entity (optional)",
           "inverter_feed_power": "Feed inverter max power (W)",
