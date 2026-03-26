@@ -888,9 +888,13 @@ class BatteryStorageCoordinator(
 
         # Battery parameters scaled to slot duration
         current_soc = self._battery_soc if self._battery_soc is not None else 50.0
-        charge_power_w = sum(c["power"] for c in self._chargers)
+        # Prefer measured charger power over configured for planning accuracy
+        charge_power_w = sum(
+            c.get("measured_power") or c["power"] for c in self._chargers
+        )
         charge_kwh_slot = charge_power_w / 1000 * slot_h
-        discharge_power_w = self._inverter_power or 800
+        # Prefer actual inverter power over configured
+        discharge_power_w = self._inverter_actual_power or self._inverter_power or 800
         discharge_kwh_slot = discharge_power_w / 1000 * slot_h
         cap = self._battery_capacity
         # Use measured roundtrip efficiency if available, fallback to configured
@@ -1335,51 +1339,89 @@ class BatteryStorageCoordinator(
         future_prices.sort(key=lambda x: x.get("total", 0), reverse=True)
         return future_prices[:count]
 
+    def _volatility_adjusted_quantile(self, prices: list[float], target_q: float) -> float:
+        """Calculate a volatility-adjusted price quantile.
+
+        On volatile days (large spread), use wider quantile bands to capture
+        the full price range.  On calm days (tight spread), compress the bands
+        so that even small differences trigger charge/discharge.
+
+        The adjustment scales the quantile towards the edges when volatility
+        is high (coefficient of variation > 15%) and towards the median when
+        low (< 10%).
+        """
+        if not prices:
+            return 0.0
+        sorted_p = sorted(prices)
+        mean = sum(sorted_p) / len(sorted_p)
+        if mean <= 0:
+            idx = int(target_q * (len(sorted_p) - 1))
+            return sorted_p[idx]
+
+        variance = sum((p - mean) ** 2 for p in sorted_p) / len(sorted_p)
+        std_dev = variance ** 0.5
+        cv = std_dev / mean  # coefficient of variation
+
+        # Adjust quantile: low volatility → more aggressive (push towards edges)
+        # high volatility → standard quantile
+        if cv < 0.10:
+            # Calm day: widen the band (charge more aggressively, discharge earlier)
+            if target_q < 0.5:
+                adjusted_q = target_q * 1.3  # e.g., 0.33 → 0.43
+            else:
+                adjusted_q = 1.0 - (1.0 - target_q) * 1.3  # e.g., 0.67 → 0.57
+        elif cv > 0.20:
+            # Volatile day: tighten the band (be more selective)
+            if target_q < 0.5:
+                adjusted_q = target_q * 0.7  # e.g., 0.33 → 0.23
+            else:
+                adjusted_q = 1.0 - (1.0 - target_q) * 0.7  # e.g., 0.67 → 0.77
+        else:
+            adjusted_q = target_q
+
+        adjusted_q = max(0.0, min(1.0, adjusted_q))
+        idx = int(adjusted_q * (len(sorted_p) - 1))
+        return sorted_p[idx]
+
     def _is_in_cheap_window(self) -> bool:
         """Check if current time falls within a cheap price window."""
         if self._current_price is None:
             return False
 
-        # Dynamic threshold: use the lower third of available prices
+        # Dynamic threshold with volatility adjustment
         if self._price_forecast:
             prices = [p.get("total", 0) for p in self._price_forecast]
             if prices:
-                sorted_prices = sorted(prices)
-                threshold_idx = len(sorted_prices) // 3
-                dynamic_threshold = sorted_prices[threshold_idx]
-                return self._current_price <= dynamic_threshold
+                threshold = self._volatility_adjusted_quantile(prices, 1 / 3)
+                return self._current_price <= threshold
 
         # Fallback: use summary price range from entity attributes
         if self._fallback_price_range:
             price_range = self._fallback_price_range
-            # "Cheap" = in the lower third of today's price range
             low_third = price_range["min"] + (price_range["max"] - price_range["min"]) / 3
             return self._current_price <= low_third
 
-        return self._current_price <= self._price_low / 100  # convert ct to EUR
+        return self._current_price <= self._price_low / 100
 
     def _is_in_expensive_window(self) -> bool:
         """Check if current time falls within an expensive price window."""
         if self._current_price is None:
             return False
 
-        # Dynamic threshold: use the upper third of available prices
+        # Dynamic threshold with volatility adjustment
         if self._price_forecast:
             prices = [p.get("total", 0) for p in self._price_forecast]
             if prices:
-                sorted_prices = sorted(prices)
-                threshold_idx = (len(sorted_prices) * 2) // 3
-                dynamic_threshold = sorted_prices[threshold_idx]
-                return self._current_price >= dynamic_threshold
+                threshold = self._volatility_adjusted_quantile(prices, 2 / 3)
+                return self._current_price >= threshold
 
         # Fallback: use summary price range from entity attributes
         if self._fallback_price_range:
             price_range = self._fallback_price_range
-            # "Expensive" = in the upper third of today's price range
             high_third = price_range["min"] + (price_range["max"] - price_range["min"]) * 2 / 3
             return self._current_price >= high_third
 
-        return self._current_price >= self._price_high / 100  # convert ct to EUR
+        return self._current_price >= self._price_high / 100
 
     async def force_charge(self) -> None:
         """Force battery into charging mode."""

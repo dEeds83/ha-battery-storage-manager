@@ -203,7 +203,7 @@ class DevicesMixin:
             )
             self._pid_integral = 0.0
             self._pid_last_error = None
-        elif self._grid_power <= 50:
+        elif self._grid_power <= 10:
             return
         else:
             setpoint = 25
@@ -380,15 +380,24 @@ class DevicesMixin:
         return True
 
     def _calculate_true_solar_surplus(self) -> float | None:
-        """Calculate the true solar surplus, compensating for active charger draw."""
+        """Calculate the true solar surplus, compensating for active charger draw.
+
+        Uses measured charger power and actual inverter power when available,
+        falling back to configured/target values.
+        """
         if self._grid_power is None:
             return None
 
-        active_draw = sum(c["power"] for c in self._chargers if c["active"])
+        # Prefer measured charger power over configured
+        active_draw = sum(
+            c.get("measured_power") or c["power"]
+            for c in self._chargers if c["active"]
+        )
 
+        # Prefer actual inverter power over target
         inverter_feed = 0
-        if self._inverter_active and self._inverter_target_power > 0:
-            inverter_feed = self._inverter_target_power
+        if self._inverter_active:
+            inverter_feed = self._inverter_actual_power or self._inverter_target_power or 0
 
         return active_draw + inverter_feed - self._grid_power
 
