@@ -201,6 +201,19 @@ class TestSmoothPlan:
         assert result[1] == "discharge", "Discharge near neighbor should be preserved"
         assert result[3] == "discharge", "Discharge near neighbor should be preserved"
 
+    def test_local_discharge_swap(self):
+        """Pass 3b: discharge followed by more expensive idle should swap."""
+        # Multiple discharges so Pass 1 doesn't remove them as enclaves.
+        # The last discharge (0.30) is followed by an expensive idle (0.38).
+        actions = ["discharge", "discharge", "discharge", "idle", "idle"]
+        prices = [0.32, 0.33, 0.30, 0.38, 0.25]
+        result, _ = self._run_smooth(actions, prices)
+        # Pass 3b: slot 2 (discharge 0.30) → slot 3 (idle 0.38) should swap
+        assert result[3] == "discharge", "More expensive idle after discharge should become discharge"
+        assert result[2] != "discharge" or result[4] != "idle", (
+            "At least one swap should have occurred"
+        )
+
     def test_charge_gap_fill(self):
         """Post-pass: idle gap between charges should be filled."""
         actions = ["charge", "idle", "charge", "idle", "idle"]

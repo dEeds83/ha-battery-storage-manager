@@ -127,12 +127,16 @@ def solve_dp(
                 best_act = "idle"
 
             # Charge: use >= so that break-even ties prefer charging.
+            # Cost uses FULL grid price — solar is a sunk benefit that
+            # occurs regardless of charging, so it must not reduce the
+            # DP's perceived charge cost.  The grid_fraction is only used
+            # for the plan display (effective stored-energy cost).
             if soc < max_soc and charge_kwh_slot > 0:
                 delta = min(charge_kwh_slot, (max_soc - soc) / 100 * cap)
                 new_soc = soc + delta / cap * 100
                 new_si = soc_to_idx(new_soc)
                 if new_si > si:
-                    cost = delta * grid_frac * price + delta * half_cycle_eur
+                    cost = delta * price + delta * half_cycle_eur
                     val = -cost + dp[t + 1][new_si]
                     if val >= best_val:
                         best_val = val
@@ -297,6 +301,20 @@ def smooth_plan(
             swapped += 1
         else:
             break
+
+    # Pass 3b: Local adjacent discharge swap.
+    # If a discharge is immediately followed by a more expensive idle/hold,
+    # swap them: the battery should save its last energy for the higher price.
+    local_swaps = 0
+    for i in range(n - 1):
+        if actions[i] == "discharge" and actions[i + 1] in ("idle", "hold"):
+            if hourly_data[i + 1]["price"] > hourly_data[i]["price"] + 0.005:
+                actions[i] = "idle"
+                actions[i + 1] = "discharge"
+                local_swaps += 1
+    if local_swaps:
+        swapped += local_swaps
+        _LOGGER.info("Pass 3b: %d local adjacent discharge swaps", local_swaps)
 
     smoothed += swapped
 

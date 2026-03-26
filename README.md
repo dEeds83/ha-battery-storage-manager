@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.14.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.15.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -15,7 +15,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Batterie-Zykluskosten** – Konfigurierbarer Degradationskostenparameter (ct/kWh) verhindert unprofitable Mini-Arbitrage
 - **Roundtrip-Effizienz** – Konfigurierbar (Standard 90%), wird automatisch aus Smartshunt V×I-Messdaten kalibriert wenn verfügbar
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
-- **Solarbasierte Ladepriorisierung** – DP bevorzugt automatisch Solar-Stunden (niedrige `grid_fraction`) über Netz-Laden (voller Netzpreis), kein künstlicher Tie-Breaker nötig
+- **Preisbasierte Ladeoptimierung** – DP bewertet Laden zum vollen Netzpreis (Solar ist Sunk Benefit), dadurch wird immer im günstigsten Zeitfenster geladen — unabhängig von der Solarprognose
 - **Solar-Headroom** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit genug Platz für erwarteten Solarüberschuss bleibt. Headroom wird nur bis zum nächsten Sonnenuntergang berechnet, damit morgige Prognosen günstiges Netz-Laden heute nicht blockieren
 - **6-Pass Smoothing Pipeline:**
   - Pass 1: Enclave-Entfernung (einzelne Aktions-Slots ohne Nachbarn entfernen, Proximity-Check ±2 Slots)
@@ -253,7 +253,7 @@ title: Batteriespeicher
 5. **Solarprognose lesen** – Alle konfigurierten Solar-Sensoren aufsummieren
 6. **Intraday Solar-Korrektur** – Restprognose anhand bisheriger Ist/Forecast-Ratio anpassen (Kalman-Filter)
 7. **Batterieplan erstellen (DP):**
-   - Effektive Ladekosten pro Slot (Netzpreis × Grid-Anteil, Solar reduziert Kosten)
+   - Ladekosten pro Slot (voller Netzpreis — Solar ist Sunk Benefit und beeinflusst die Lade-Entscheidung nicht)
    - Dynamic Programming über alle Tibber-Slots: SOC diskretisiert in 1%-Stufen
    - 3 Szenarien (erwartet/optimistisch/pessimistisch) mit asymmetrischem Vote
    - Zykluskosten (½ auf Laden, ½ auf Entladen) und Roundtrip-Effizienz
@@ -272,7 +272,7 @@ dp[t][soc] = maximaler Profit erreichbar ab Zeitpunkt t mit Ladezustand soc
 
 Für jeden Slot werden drei Optionen bewertet:
 - **Idle**: Nichts tun (kein Gewinn/Verlust)
-- **Laden** (≥ bei Gleichstand): Strom kaufen (Kosten = effektiver Preis × Grid-Anteil × kWh + ½ Zykluskosten). Solar reduziert den Grid-Anteil automatisch → günstigere effektive Kosten bei Sonnenstunden
+- **Laden** (≥ bei Gleichstand): Strom kaufen (Kosten = voller Netzpreis × kWh + ½ Zykluskosten). Solar ist ein Sunk Benefit — die Sonne scheint unabhängig von der Lade-Entscheidung, daher wird der volle Netzpreis als Entscheidungsgrundlage verwendet
 - **Entladen** (> strikt): Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − ½ Zykluskosten)
 
 **Szenario-DP:** Das DP wird 3× ausgeführt (Solar ×0.6/×1.0/×1.2, Verbrauch ×1.2/×1.0/×0.8). Asymmetrischer Vote: Expected-Szenario bestimmt **Laden**, Mehrheit bestimmt **Entladen** (konservativ).
