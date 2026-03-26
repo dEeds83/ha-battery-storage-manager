@@ -395,8 +395,12 @@ class BatteryStorageCoordinator(
             await self._run_self_consumption()
         # STRATEGY_MANUAL: no automatic charge/discharge actions
 
-        # Always capture free solar surplus, regardless of strategy/mode
-        if self._operating_mode in (MODE_IDLE, MODE_DISCHARGING):
+        # Capture free solar surplus in idle mode.
+        # NOT in discharge mode — the discharge action handler checks for
+        # genuine solar surplus using _solar_power sensor directly.
+        # _try_solar_opportunistic() uses grid+inverter inference which
+        # misinterprets inverter overshoot as solar surplus.
+        if self._operating_mode == MODE_IDLE:
             await self._try_solar_opportunistic()
 
         # Persist efficiency data periodically (piggyback on action history ~10 min)
