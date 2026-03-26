@@ -432,25 +432,26 @@ class DevicesMixin:
                 _LOGGER.debug("Plan action: DISCHARGE skipped (discharging disabled)")
                 await self._set_mode_idle()
                 return
-            # If there's genuine solar surplus (grid export WITHOUT inverter
-            # contribution), capture it instead of discharging.  We must
-            # exclude inverter feed from the surplus calculation here to
+            # If there's genuine solar surplus, capture it instead of
+            # discharging.  Use measured solar power (not grid_power) to
             # avoid mistaking inverter overshoot for solar surplus.
             if (
-                self._grid_power is not None
-                and self._grid_power < -50
-                and not self._inverter_active
+                self._solar_power is not None
+                and self._solar_power > 50
                 and self._battery_soc < 100
             ):
-                # Grid export without inverter → genuine solar surplus
-                true_surplus = abs(self._grid_power)
-                _LOGGER.debug(
-                    "Plan action: DISCHARGE -> SOLAR_CHARGE "
-                    "(genuine surplus %.0fW, grid=%.0fW, SOC=%.1f%%)",
-                    true_surplus, self._grid_power, self._battery_soc,
-                )
-                await self._start_solar_charging(true_surplus)
-                return
+                # Estimate house consumption from grid + solar - inverter
+                inverter_w = (self._inverter_actual_power or 0) if self._inverter_active else 0
+                house_w = max(0, (self._grid_power or 0) + self._solar_power + inverter_w)
+                solar_surplus = self._solar_power - house_w
+                if solar_surplus > 50:
+                    _LOGGER.debug(
+                        "Plan action: DISCHARGE -> SOLAR_CHARGE "
+                        "(solar=%.0fW, house=%.0fW, surplus=%.0fW)",
+                        self._solar_power, house_w, solar_surplus,
+                    )
+                    await self._start_solar_charging(solar_surplus)
+                    return
             _LOGGER.debug("Plan action: DISCHARGE")
             await self._start_discharging()
         elif action == "solar_charge":
