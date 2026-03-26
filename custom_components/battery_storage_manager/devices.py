@@ -432,13 +432,22 @@ class DevicesMixin:
                 _LOGGER.debug("Plan action: DISCHARGE skipped (discharging disabled)")
                 await self._set_mode_idle()
                 return
-            # If there's solar surplus (grid export), capture it instead of discharging
-            true_surplus = self._calculate_true_solar_surplus()
-            if true_surplus is not None and true_surplus > 50 and self._battery_soc < 100:
+            # If there's genuine solar surplus (grid export WITHOUT inverter
+            # contribution), capture it instead of discharging.  We must
+            # exclude inverter feed from the surplus calculation here to
+            # avoid mistaking inverter overshoot for solar surplus.
+            if (
+                self._grid_power is not None
+                and self._grid_power < -50
+                and not self._inverter_active
+                and self._battery_soc < 100
+            ):
+                # Grid export without inverter → genuine solar surplus
+                true_surplus = abs(self._grid_power)
                 _LOGGER.debug(
                     "Plan action: DISCHARGE -> SOLAR_CHARGE "
-                    "(surplus %.0fW, grid=%.0fW, SOC=%.1f%%)",
-                    true_surplus, self._grid_power or 0, self._battery_soc,
+                    "(genuine surplus %.0fW, grid=%.0fW, SOC=%.1f%%)",
+                    true_surplus, self._grid_power, self._battery_soc,
                 )
                 await self._start_solar_charging(true_surplus)
                 return
