@@ -936,7 +936,18 @@ class BatteryStorageCoordinator(
         # Sum expected solar surplus (free energy) and reduce grid max_soc
         # so the battery has room to absorb it.  Solar charging itself
         # (opportunistic) can still go up to the real max_soc.
-        expected_surplus_kwh = sum(h["solar_surplus_kwh"] for h in slot_data)
+        # Only count surplus until next sunset (first gap where solar == 0
+        # after at least one slot with solar > 0), so tomorrow's forecast
+        # doesn't block cheap grid charging today.
+        expected_surplus_kwh = 0.0
+        seen_solar = False
+        for h in slot_data:
+            if h["solar_wh_hour"] > 0:
+                seen_solar = True
+                expected_surplus_kwh += h["solar_surplus_kwh"]
+            elif seen_solar:
+                # Sun has set — stop counting
+                break
         if cap > 0 and expected_surplus_kwh > 0:
             headroom_pct = min(
                 expected_surplus_kwh / cap * 100,

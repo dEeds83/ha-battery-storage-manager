@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.13.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.14.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -16,7 +16,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Roundtrip-Effizienz** – Konfigurierbar (Standard 90%), wird automatisch aus Smartshunt V×I-Messdaten kalibriert wenn verfügbar
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
 - **Solarbasierte Ladepriorisierung** – DP bevorzugt automatisch Solar-Stunden (niedrige `grid_fraction`) über Netz-Laden (voller Netzpreis), kein künstlicher Tie-Breaker nötig
-- **Solar-Headroom** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit genug Platz für erwarteten Solarüberschuss bleibt (besonders im Sommer relevant)
+- **Solar-Headroom** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit genug Platz für erwarteten Solarüberschuss bleibt. Headroom wird nur bis zum nächsten Sonnenuntergang berechnet, damit morgige Prognosen günstiges Netz-Laden heute nicht blockieren
 - **6-Pass Smoothing Pipeline:**
   - Pass 1: Enclave-Entfernung (einzelne Aktions-Slots ohne Nachbarn entfernen, Proximity-Check ±2 Slots)
   - Pass 2: Alternations-Dämpfung (Lade↔Entlade-Paare unter Break-Even-Spread → idle)
