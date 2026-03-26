@@ -573,10 +573,64 @@ def smooth_plan(
         smoothed += gap_filled
         _LOGGER.info("Post-pass gap fill: %d idle gaps inside charge blocks filled", gap_filled)
 
+    # SOC-aware discharge reorder: simulate SOC forward, then for each
+    # discharge slot followed by a more expensive idle/hold, swap them
+    # only if the SOC at the idle slot is still above min_soc.
+    # This fixes DP quantization issues where the last discharge slot
+    # drains the battery just before a more expensive slot.
+    soc_sim = current_soc
+    soc_track: list[float] = []
+    for i in range(n):
+        soc_track.append(soc_sim)
+        if actions[i] == "charge":
+            delta = min(charge_kwh_slot, (max_soc - soc_sim) / 100 * cap)
+            soc_sim = min(max_soc, soc_sim + delta / cap * 100)
+        elif actions[i] == "discharge":
+            delta = min(discharge_kwh_slot, (soc_sim - min_soc) / 100 * cap)
+            soc_sim = max(min_soc, soc_sim - delta / cap * 100)
+
+    soc_swaps = 0
+    changed = True
+    while changed:
+        changed = False
+        for i in range(n - 1):
+            if actions[i] != "discharge" or actions[i + 1] not in ("idle", "hold"):
+                continue
+            if hourly_data[i + 1]["price"] <= hourly_data[i]["price"] + 0.002:
+                continue
+            # Would the battery have energy at slot i+1 if we idled at i?
+            # Re-simulate SOC from the start up to i
+            soc_at_i = soc_track[i]
+            if soc_at_i <= min_soc + 0.5:
+                # Near min_soc: swapping means we idle at i (keep energy)
+                # and discharge at i+1 (use it at higher price).
+                # This is feasible if soc_at_i > min_soc.
+                if soc_at_i > min_soc:
+                    actions[i] = "idle"
+                    actions[i + 1] = "discharge"
+                    soc_swaps += 1
+                    changed = True
+                    # Re-simulate SOC
+                    soc_sim = current_soc
+                    soc_track.clear()
+                    for j in range(n):
+                        soc_track.append(soc_sim)
+                        if actions[j] == "charge":
+                            delta = min(charge_kwh_slot, (max_soc - soc_sim) / 100 * cap)
+                            soc_sim = min(max_soc, soc_sim + delta / cap * 100)
+                        elif actions[j] == "discharge":
+                            delta = min(discharge_kwh_slot, (soc_sim - min_soc) / 100 * cap)
+                            soc_sim = max(min_soc, soc_sim - delta / cap * 100)
+                    break  # restart scan with updated SOC
+
+    if soc_swaps:
+        smoothed += soc_swaps
+        _LOGGER.info("SOC-aware reorder: %d discharge slots shifted to higher-priced neighbours", soc_swaps)
+
     if smoothed:
         _LOGGER.info(
-            "Plan smoothing: %d slots adjusted (%d swaps, %d filled, %d gaps)",
-            smoothed, swapped, filled, gap_filled,
+            "Plan smoothing: %d slots adjusted (%d swaps, %d filled, %d gaps, %d soc-reorder)",
+            smoothed, swapped, filled, gap_filled, soc_swaps,
         )
 
     return actions, smoothed
