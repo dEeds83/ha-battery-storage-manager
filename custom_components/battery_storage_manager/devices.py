@@ -195,18 +195,20 @@ class DevicesMixin:
         max_power = self._inverter_power or 800
 
         if self._grid_power < -10:
-            # Exporting to grid — reduce inverter gradually, not all at once.
-            # Subtracting the full export in one step can slam target to 0
-            # when the inverter overshoots briefly.
+            # Exporting to grid — reduce inverter proportionally.
+            # Use the PID setpoint approach instead of subtracting raw
+            # export, to avoid oscillation and slamming target to 0.
             export_w = abs(self._grid_power)
-            reduction = min(export_w, max(50, export_w * 0.5))
-            new_target = self._inverter_target_power - reduction
+            # Target should be: current_target minus overshoot, but keep
+            # at least 50W so the inverter doesn't shut down completely.
+            new_target = self._inverter_target_power - export_w * 0.5
+            new_target = max(50, new_target)
             _LOGGER.info(
-                "Zero-feed: EXPORT %.0fW -> reducing inverter %.0f -> %.0fW (step %.0f)",
-                export_w, self._inverter_target_power, new_target, reduction,
+                "Zero-feed: EXPORT %.0fW -> reducing inverter %.0f -> %.0fW",
+                export_w, self._inverter_target_power, new_target,
             )
-            self._pid_integral = 0.0
-            self._pid_last_error = None
+            # Don't reset PID integral — we need the accumulated history
+            # to ramp back up quickly when house consumption increases.
         elif self._grid_power <= 10:
             return
         else:
@@ -240,7 +242,11 @@ class DevicesMixin:
                     self._grid_power, p_term, i_term, d_term, new_target,
                 )
 
-        new_target = max(0, min(max_power, new_target))
+        # During discharge, keep at least 50W to prevent the inverter from
+        # effectively shutting down.  The PID will ramp back up on the next
+        # cycle when house consumption pulls from the grid again.
+        min_target = 50 if self._operating_mode == MODE_DISCHARGING else 0
+        new_target = max(min_target, min(max_power, new_target))
 
         if abs(new_target - self._inverter_target_power) < 10:
             return
