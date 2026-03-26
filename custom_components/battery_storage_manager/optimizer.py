@@ -476,11 +476,26 @@ def smooth_plan(
 
             # Only search for fill slots AFTER the previous discharge block
             # (filling before an earlier block is useless - that energy gets
-            # discharged there and never reaches this block)
+            # discharged there and never reaches this block).
+            # Exception: look past tiny blocks (1-2 slots) since their
+            # discharge barely affects SOC and the search shouldn't be
+            # blocked by them.
+            search_start = 0
             if blk_idx > 0:
-                search_start = discharge_block_info[blk_idx - 1][1]
-            else:
-                search_start = 0
+                # Walk back past tiny preceding discharge blocks
+                prev_idx = blk_idx - 1
+                while prev_idx >= 0:
+                    prev_start, prev_end, _ = discharge_block_info[prev_idx]
+                    prev_len = prev_end - prev_start
+                    if prev_len <= 2:
+                        # Tiny block: look past it
+                        prev_idx -= 1
+                    else:
+                        # Substantial block: stop here
+                        search_start = prev_end
+                        break
+                else:
+                    search_start = 0
 
             candidates: list[tuple[float, int, int]] = []
             for i in range(search_start, block_start):
