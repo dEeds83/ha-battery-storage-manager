@@ -533,10 +533,43 @@ def smooth_plan(
 
     smoothed += filled
 
+    # Post-pass: fill idle/hold gaps inside charge blocks.
+    # If an idle slot sits between two charge slots (within 2 positions),
+    # and its effective_charge_cost is <= the costliest neighbour charge slot,
+    # convert it to charge.  Fixes DP quantization holes like
+    # charge→idle→charge where the idle slot is actually cheaper.
+    gap_filled = 0
+    for i in range(1, n - 1):
+        if actions[i] not in ("idle", "hold"):
+            continue
+        # Check for charge neighbours within 2 slots
+        has_prev = any(actions[max(0, i - k)] == "charge" for k in (1, 2))
+        has_next = any(actions[min(n - 1, i + k)] == "charge" for k in (1, 2))
+        if not (has_prev and has_next):
+            continue
+        # Find the effective cost of this slot and the costliest neighbour
+        slot_cost = hourly_data[i].get("effective_charge_cost",
+                                        hourly_data[i]["price"])
+        neighbour_costs = []
+        for k in (1, 2):
+            for j in (i - k, i + k):
+                if 0 <= j < n and actions[j] == "charge":
+                    neighbour_costs.append(
+                        hourly_data[j].get("effective_charge_cost",
+                                           hourly_data[j]["price"])
+                    )
+        if neighbour_costs and slot_cost <= max(neighbour_costs) + 0.005:
+            actions[i] = "charge"
+            gap_filled += 1
+
+    if gap_filled:
+        smoothed += gap_filled
+        _LOGGER.info("Post-pass gap fill: %d idle gaps inside charge blocks filled", gap_filled)
+
     if smoothed:
         _LOGGER.info(
-            "Plan smoothing: %d slots adjusted (%d swaps, %d filled)",
-            smoothed, swapped, filled,
+            "Plan smoothing: %d slots adjusted (%d swaps, %d filled, %d gaps)",
+            smoothed, swapped, filled, gap_filled,
         )
 
     return actions, smoothed
