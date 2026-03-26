@@ -114,6 +114,8 @@ class OperatingModeSensor(BatteryStorageBaseSensor):
             "allow_grid_charging": d.get("allow_grid_charging"),
             "allow_discharging": d.get("allow_discharging"),
             "use_solar_forecast": d.get("use_solar_forecast"),
+            "grid_max_soc": d.get("grid_max_soc"),
+            "solar_headroom_pct": d.get("solar_headroom_pct"),
             "version": d.get("version"),
             "source_hash": d.get("source_hash"),
         }
@@ -373,6 +375,11 @@ class BatteryPlanSensor(BatteryStorageBaseSensor):
             action = entry.get("action", "unknown")
             action_counts[action] = action_counts.get(action, 0) + 1
         attrs["action_counts"] = action_counts
+        d = self.coordinator.data
+        headroom = d.get("solar_headroom_pct", 0)
+        if headroom > 0:
+            attrs["solar_headroom_pct"] = headroom
+            attrs["grid_max_soc"] = d.get("grid_max_soc")
         return attrs
 
 

@@ -244,6 +244,8 @@ class BatteryStorageCoordinator(
         ) / 100.0  # convert percent to factor
 
         # Optimization log (recent decisions for UI)
+        self._solar_headroom_pct: float = 0.0
+        self._dp_max_soc: float = self._max_soc
         self._optimization_log: list[str] = []
         self._max_log_entries = 50
         self._last_dp_signature: str = ""  # to avoid re-logging identical plans
@@ -930,6 +932,34 @@ class BatteryStorageCoordinator(
             h["effective_charge_cost"] = grid_fraction * h["price"]
             h["grid_fraction"] = grid_fraction
 
+        # ── Solar headroom: reserve SOC capacity for expected surplus ──
+        # Sum expected solar surplus (free energy) and reduce grid max_soc
+        # so the battery has room to absorb it.  Solar charging itself
+        # (opportunistic) can still go up to the real max_soc.
+        expected_surplus_kwh = sum(h["solar_surplus_kwh"] for h in slot_data)
+        if cap > 0 and expected_surplus_kwh > 0:
+            headroom_pct = min(
+                expected_surplus_kwh / cap * 100,
+                self._max_soc - self._min_soc - 10,  # keep at least 10% charge range
+            )
+            # Only apply headroom if significant (> 5% SOC worth of solar)
+            if headroom_pct > 5:
+                dp_max_soc = round(self._max_soc - headroom_pct, 1)
+                _LOGGER.info(
+                    "Solar headroom: %.1f kWh surplus expected -> "
+                    "grid max_soc %.1f%% (real max_soc %.1f%%, headroom %.1f%%)",
+                    expected_surplus_kwh, dp_max_soc,
+                    self._max_soc, headroom_pct,
+                )
+            else:
+                dp_max_soc = self._max_soc
+                headroom_pct = 0.0
+        else:
+            dp_max_soc = self._max_soc
+            headroom_pct = 0.0
+        self._solar_headroom_pct = round(headroom_pct, 1)
+        self._dp_max_soc = dp_max_soc
+
         n = len(slot_data)
         hourly_data = slot_data
 
@@ -961,7 +991,7 @@ class BatteryStorageCoordinator(
                 hourly_data, n, current_soc, charge_kwh_slot, discharge_kwh_slot,
                 cap, efficiency, cycle_cost_eur, slot_h,
                 min_soc=self._min_soc,
-                max_soc=self._max_soc,
+                max_soc=dp_max_soc,
                 epex_terminal_value_per_kwh=self._epex_terminal_value_per_kwh,
                 battery_efficiency=self._battery_efficiency,
             )
@@ -1002,7 +1032,7 @@ class BatteryStorageCoordinator(
             actions, hourly_data, n, efficiency, cycle_cost_eur,
             charge_kwh_slot, discharge_kwh_slot, cap, current_soc,
             min_soc=self._min_soc,
-            max_soc=self._max_soc,
+            max_soc=dp_max_soc,
             slot_h=slot_h,
         )
 
@@ -1588,6 +1618,8 @@ class BatteryStorageCoordinator(
             "expensive_hours": expensive_hours,
             "min_soc": self._min_soc,
             "max_soc": self._max_soc,
+            "grid_max_soc": self._dp_max_soc,
+            "solar_headroom_pct": self._solar_headroom_pct,
             "battery_capacity_kwh": self._battery_capacity,
             "allow_grid_charging": self._allow_grid_charging,
             "allow_discharging": self._allow_discharging,
