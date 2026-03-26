@@ -76,10 +76,10 @@ class ConsumptionMixin:
         house_w = self._grid_power - charger_draw + solar_w + inverter_feed
         house_w = max(0, house_w)
 
-        self._consumption_hourly_samples.append(house_w)
-
         day_type = "wd" if now.weekday() < 5 else "we"
 
+        # Check hour change BEFORE appending new sample to avoid counting
+        # the first sample of the new hour in the old hour's average.
         if self._consumption_last_hour is not None and current_hour != self._consumption_last_hour:
             if self._consumption_hourly_samples:
                 avg_w = sum(self._consumption_hourly_samples) / len(self._consumption_hourly_samples)
@@ -108,6 +108,7 @@ class ConsumptionMixin:
 
             self._consumption_hourly_samples = []
 
+        self._consumption_hourly_samples.append(house_w)
         self._consumption_last_hour = current_hour
         self._consumption_last_daytype = day_type
 

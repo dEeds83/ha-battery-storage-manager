@@ -216,7 +216,7 @@ class DevicesMixin:
                     self._grid_power, new_target,
                 )
                 self._pid_integral = 0.0
-                self._pid_last_error = error
+                self._pid_last_error = None  # reset D-term to avoid spike
             else:
                 p_term = self._pid_kp * error
 
@@ -384,6 +384,10 @@ class DevicesMixin:
 
         Uses measured charger power and actual inverter power when available,
         falling back to configured/target values.
+
+        The inverter feed is only counted when discharging to the house (not
+        when covering a charger deficit in solar-charging mode, which would
+        create a circular feedback loop).
         """
         if self._grid_power is None:
             return None
@@ -394,9 +398,9 @@ class DevicesMixin:
             for c in self._chargers if c["active"]
         )
 
-        # Prefer actual inverter power over target
+        # Only count inverter feed if in discharge mode (not solar deficit mode)
         inverter_feed = 0
-        if self._inverter_active:
+        if self._inverter_active and self._operating_mode == MODE_DISCHARGING:
             inverter_feed = self._inverter_actual_power or self._inverter_target_power or 0
 
         return active_draw + inverter_feed - self._grid_power

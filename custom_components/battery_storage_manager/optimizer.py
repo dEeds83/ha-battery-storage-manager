@@ -460,15 +460,12 @@ def smooth_plan(
                 discharge_block_info[-1][0], n, discharge_block_info[-1][2]
             )
 
-        for blk_idx, (block_start, block_end_unused, soc_at_start) in enumerate(discharge_block_info):
+        for blk_idx, (block_start, block_end, soc_at_start) in enumerate(discharge_block_info):
             soc_gap = max_soc - soc_at_start
             if soc_gap <= 1.0:
                 continue
 
-            # Calculate average discharge price of this block
-            block_end = block_start
-            while block_end < n and actions[block_end] == "discharge":
-                block_end += 1
+            # Use tracked block_end (first non-discharge slot after block)
             block_prices = [hourly_data[i]["price"] for i in range(block_start, block_end)]
             avg_discharge_price = sum(block_prices) / len(block_prices) if block_prices else 0
 
