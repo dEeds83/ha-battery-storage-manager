@@ -15,7 +15,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Batterie-Zykluskosten** – Konfigurierbarer Degradationskostenparameter (ct/kWh) verhindert unprofitable Mini-Arbitrage
 - **Roundtrip-Effizienz** – Konfigurierbar (Standard 90%), wird automatisch aus Smartshunt V×I-Messdaten kalibriert wenn verfügbar
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
-- **Preisbasierte Ladeoptimierung** – DP bewertet Laden zum vollen Netzpreis (Solar ist Sunk Benefit), dadurch wird immer im günstigsten Zeitfenster geladen — unabhängig von der Solarprognose
+- **Effektive Ladekosten** – DP bewertet Laden zum effektiven Netzpreis (Netzpreis × Grid-Anteil), Solar reduziert den Grid-Anteil und damit die echten Kosten. Entladung wird in die teuersten Stunden gelegt
 - **Solar-Headroom** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit genug Platz für erwarteten Solarüberschuss bleibt. Headroom wird nur bis zum nächsten Sonnenuntergang berechnet, damit morgige Prognosen günstiges Netz-Laden heute nicht blockieren
 - **6-Pass Smoothing Pipeline:**
   - Pass 1: Enclave-Entfernung (einzelne Aktions-Slots ohne Nachbarn entfernen, Proximity-Check ±2 Slots)
@@ -253,7 +253,7 @@ title: Batteriespeicher
 5. **Solarprognose lesen** – Alle konfigurierten Solar-Sensoren aufsummieren
 6. **Intraday Solar-Korrektur** – Restprognose anhand bisheriger Ist/Forecast-Ratio anpassen (Kalman-Filter)
 7. **Batterieplan erstellen (DP):**
-   - Ladekosten pro Slot (voller Netzpreis — Solar ist Sunk Benefit und beeinflusst die Lade-Entscheidung nicht)
+   - Effektive Ladekosten pro Slot (Netzpreis × Grid-Anteil, Solar reduziert die echten Kosten)
    - Dynamic Programming über alle Tibber-Slots: SOC diskretisiert in 1%-Stufen
    - 3 Szenarien (erwartet/optimistisch/pessimistisch) mit asymmetrischem Vote
    - Zykluskosten (½ auf Laden, ½ auf Entladen) und Roundtrip-Effizienz
@@ -272,7 +272,7 @@ dp[t][soc] = maximaler Profit erreichbar ab Zeitpunkt t mit Ladezustand soc
 
 Für jeden Slot werden drei Optionen bewertet:
 - **Idle**: Nichts tun (kein Gewinn/Verlust)
-- **Laden** (≥ bei Gleichstand): Strom kaufen (Kosten = voller Netzpreis × kWh + ½ Zykluskosten). Solar ist ein Sunk Benefit — die Sonne scheint unabhängig von der Lade-Entscheidung, daher wird der volle Netzpreis als Entscheidungsgrundlage verwendet
+- **Laden** (≥ bei Gleichstand): Strom kaufen (Kosten = effektiver Preis × Grid-Anteil × kWh + ½ Zykluskosten). Solar reduziert den Grid-Anteil und damit die effektiven Ladekosten — bei Sonnenstunden ist Laden günstiger
 - **Entladen** (> strikt): Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − ½ Zykluskosten)
 
 **Szenario-DP:** Das DP wird 3× ausgeführt (Solar ×0.6/×1.0/×1.2, Verbrauch ×1.2/×1.0/×0.8). Asymmetrischer Vote: Expected-Szenario bestimmt **Laden**, Mehrheit bestimmt **Entladen** (konservativ).

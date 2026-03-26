@@ -127,16 +127,15 @@ def solve_dp(
                 best_act = "idle"
 
             # Charge: use >= so that break-even ties prefer charging.
-            # Cost uses FULL grid price — solar is a sunk benefit that
-            # occurs regardless of charging, so it must not reduce the
-            # DP's perceived charge cost.  The grid_fraction is only used
-            # for the plan display (effective stored-energy cost).
+            # Cost uses effective price (grid_fraction × price) because solar
+            # genuinely reduces grid draw during charging — only the grid
+            # portion is an actual cost to the user.
             if soc < max_soc and charge_kwh_slot > 0:
                 delta = min(charge_kwh_slot, (max_soc - soc) / 100 * cap)
                 new_soc = soc + delta / cap * 100
                 new_si = soc_to_idx(new_soc)
                 if new_si > si:
-                    cost = delta * price + delta * half_cycle_eur
+                    cost = delta * grid_frac * price + delta * half_cycle_eur
                     val = -cost + dp[t + 1][new_si]
                     if val >= best_val:
                         best_val = val
