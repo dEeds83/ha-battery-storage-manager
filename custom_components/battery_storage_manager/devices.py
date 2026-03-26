@@ -390,30 +390,41 @@ class DevicesMixin:
         return True
 
     def _calculate_true_solar_surplus(self) -> float | None:
-        """Calculate the true solar surplus, compensating for active charger draw.
+        """Calculate the true solar surplus available for charging.
 
-        Uses measured charger power and actual inverter power when available,
-        falling back to configured/target values.
-
-        The inverter feed is only counted when discharging to the house (not
-        when covering a charger deficit in solar-charging mode, which would
-        create a circular feedback loop).
+        Uses the measured solar power sensor as the primary source.
+        Falls back to grid-based inference only when no solar sensor
+        is configured and the inverter is NOT active (to avoid
+        mistaking inverter overshoot for solar surplus).
         """
         if self._grid_power is None:
             return None
 
-        # Prefer measured charger power over configured
+        # Primary: use measured solar power sensor
+        if self._solar_power is not None:
+            if self._solar_power < 50:
+                return 0.0  # No meaningful solar production
+            # Estimate house consumption: grid + solar + inverter - chargers
+            active_draw = sum(
+                c.get("measured_power") or c["power"]
+                for c in self._chargers if c["active"]
+            )
+            inverter_w = 0
+            if self._inverter_active:
+                inverter_w = self._inverter_actual_power or self._inverter_target_power or 0
+            house_w = max(0, self._grid_power - active_draw + self._solar_power + inverter_w)
+            return max(0, self._solar_power - house_w)
+
+        # Fallback: grid-based inference (only without inverter to avoid
+        # mistaking inverter feed for solar surplus)
+        if self._inverter_active:
+            return 0.0
+
         active_draw = sum(
             c.get("measured_power") or c["power"]
             for c in self._chargers if c["active"]
         )
-
-        # Only count inverter feed if in discharge mode (not solar deficit mode)
-        inverter_feed = 0
-        if self._inverter_active and self._operating_mode == MODE_DISCHARGING:
-            inverter_feed = self._inverter_actual_power or self._inverter_target_power or 0
-
-        return active_draw + inverter_feed - self._grid_power
+        return active_draw - self._grid_power
 
     async def _run_self_consumption(self) -> None:
         """Self-consumption optimization."""
@@ -442,26 +453,9 @@ class DevicesMixin:
                 _LOGGER.debug("Plan action: DISCHARGE skipped (discharging disabled)")
                 await self._set_mode_idle()
                 return
-            # If there's genuine solar surplus, capture it instead of
-            # discharging.  Use measured solar power (not grid_power) to
-            # avoid mistaking inverter overshoot for solar surplus.
-            if (
-                self._solar_power is not None
-                and self._solar_power > 50
-                and self._battery_soc < 100
-            ):
-                # Estimate house consumption from grid + solar - inverter
-                inverter_w = (self._inverter_actual_power or 0) if self._inverter_active else 0
-                house_w = max(0, (self._grid_power or 0) + self._solar_power + inverter_w)
-                solar_surplus = self._solar_power - house_w
-                if solar_surplus > 50:
-                    _LOGGER.debug(
-                        "Plan action: DISCHARGE -> SOLAR_CHARGE "
-                        "(solar=%.0fW, house=%.0fW, surplus=%.0fW)",
-                        self._solar_power, house_w, solar_surplus,
-                    )
-                    await self._start_solar_charging(solar_surplus)
-                    return
+            # Solar surplus check is handled globally by the coordinator
+            # calling _try_solar_opportunistic() after each action, using
+            # the solar power sensor for accurate surplus detection.
             _LOGGER.debug("Plan action: DISCHARGE")
             await self._start_discharging()
         elif action == "solar_charge":
