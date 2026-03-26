@@ -888,13 +888,12 @@ class BatteryStorageCoordinator(
 
         # Battery parameters scaled to slot duration
         current_soc = self._battery_soc if self._battery_soc is not None else 50.0
-        # Prefer measured charger power over configured for planning accuracy
-        charge_power_w = sum(
-            c.get("measured_power") or c["power"] for c in self._chargers
-        )
+        # Use configured (nominal) power for DP planning — measured power
+        # varies with SOC/voltage and would make the plan too pessimistic
+        # at high SOC or too optimistic at low SOC.
+        charge_power_w = sum(c["power"] for c in self._chargers)
         charge_kwh_slot = charge_power_w / 1000 * slot_h
-        # Prefer actual inverter power over configured
-        discharge_power_w = self._inverter_actual_power or self._inverter_power or 800
+        discharge_power_w = self._inverter_power or 800
         discharge_kwh_slot = discharge_power_w / 1000 * slot_h
         cap = self._battery_capacity
         # Use measured roundtrip efficiency if available, fallback to configured
