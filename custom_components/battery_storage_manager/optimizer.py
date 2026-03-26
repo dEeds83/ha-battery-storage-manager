@@ -276,45 +276,35 @@ def smooth_plan(
                 smoothed += 1
 
     # Pass 3/6: Swap cheap discharge slots with more expensive idle slots.
+    # For each discharge, find the best idle AFTER it and swap if profitable.
+    # Sort candidates by spread (highest first) so the best swaps happen first.
     swapped = 0
-    while True:
-        cheapest_d_idx = None
-        cheapest_d_price = float("inf")
-        for i in range(n):
-            if actions[i] == "discharge" and hourly_data[i]["price"] < cheapest_d_price:
-                cheapest_d_price = hourly_data[i]["price"]
-                cheapest_d_idx = i
+    max_rounds = 50
+    for _ in range(max_rounds):
+        candidates: list[tuple[float, int, int]] = []  # (spread, d_idx, idle_idx)
+        for d_idx in range(n):
+            if actions[d_idx] != "discharge":
+                continue
+            d_price = hourly_data[d_idx]["price"]
+            # Find best idle/hold after this discharge
+            best_idle = None
+            best_idle_p = 0.0
+            for j in range(d_idx + 1, n):
+                if actions[j] in ("idle", "hold") and hourly_data[j]["price"] > best_idle_p:
+                    best_idle_p = hourly_data[j]["price"]
+                    best_idle = j
+            if best_idle is not None and best_idle_p > d_price + 0.01:
+                candidates.append((best_idle_p - d_price, d_idx, best_idle))
 
-        best_idle_idx = None
-        best_idle_price = 0.0
-        for i in range(n):
-            if actions[i] == "idle" and hourly_data[i]["price"] > best_idle_price:
-                best_idle_price = hourly_data[i]["price"]
-                best_idle_idx = i
-
-        if (cheapest_d_idx is not None
-                and best_idle_idx is not None
-                and best_idle_price > cheapest_d_price + 0.01
-                and best_idle_idx > cheapest_d_idx):
-            actions[cheapest_d_idx] = "idle"
-            actions[best_idle_idx] = "discharge"
-            swapped += 1
-        else:
+        if not candidates:
             break
 
-    # Pass 3b: Local adjacent discharge swap.
-    # If a discharge is immediately followed by a more expensive idle/hold,
-    # swap them: the battery should save its last energy for the higher price.
-    local_swaps = 0
-    for i in range(n - 1):
-        if actions[i] == "discharge" and actions[i + 1] in ("idle", "hold"):
-            if hourly_data[i + 1]["price"] > hourly_data[i]["price"] + 0.005:
-                actions[i] = "idle"
-                actions[i + 1] = "discharge"
-                local_swaps += 1
-    if local_swaps:
-        swapped += local_swaps
-        _LOGGER.info("Pass 3b: %d local adjacent discharge swaps", local_swaps)
+        # Execute best swap (highest spread)
+        candidates.sort(reverse=True)
+        spread, d_idx, idle_idx = candidates[0]
+        actions[d_idx] = "idle"
+        actions[idle_idx] = "discharge"
+        swapped += 1
 
     smoothed += swapped
 
