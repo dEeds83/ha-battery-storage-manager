@@ -942,9 +942,9 @@ class BatteryStorageCoordinator(
         expected_surplus_kwh = 0.0
         seen_solar = False
         for h in slot_data:
-            if h["solar_wh_hour"] > 0:
+            if h.get("solar_wh_hour", 0) > 0:
                 seen_solar = True
-                expected_surplus_kwh += h["solar_surplus_kwh"]
+                expected_surplus_kwh += h.get("solar_surplus_kwh", 0)
             elif seen_solar:
                 # Sun has set — stop counting
                 break
