@@ -77,8 +77,8 @@ def solve_dp(
     charge_soc_pct = charge_kwh_slot / cap * 100 if cap > 0 else 5
     discharge_soc_pct = discharge_kwh_slot / cap * 100 if cap > 0 else 5
     min_delta_pct = min(charge_soc_pct, discharge_soc_pct) if charge_soc_pct > 0 else discharge_soc_pct
-    soc_step = max(0.5, min(3.0, min_delta_pct * 0.45))
-    soc_step = round(soc_step, 1) or 0.5
+    soc_step = max(0.3, min(1.0, min_delta_pct * 0.2))
+    soc_step = round(soc_step, 2) or 0.5
 
     soc_levels: list[float] = []
     s = float(min_soc)
