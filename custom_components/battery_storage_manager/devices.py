@@ -194,12 +194,16 @@ class DevicesMixin:
 
         max_power = self._inverter_power or 800
 
-        if self._grid_power < 0:
+        if self._grid_power < -10:
+            # Exporting to grid — reduce inverter gradually, not all at once.
+            # Subtracting the full export in one step can slam target to 0
+            # when the inverter overshoots briefly.
             export_w = abs(self._grid_power)
-            new_target = self._inverter_target_power - export_w
+            reduction = min(export_w, max(50, export_w * 0.5))
+            new_target = self._inverter_target_power - reduction
             _LOGGER.info(
-                "Zero-feed: EXPORT %.0fW -> reducing inverter %.0f -> %.0fW",
-                export_w, self._inverter_target_power, new_target,
+                "Zero-feed: EXPORT %.0fW -> reducing inverter %.0f -> %.0fW (step %.0f)",
+                export_w, self._inverter_target_power, new_target, reduction,
             )
             self._pid_integral = 0.0
             self._pid_last_error = None
