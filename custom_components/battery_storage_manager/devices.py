@@ -420,6 +420,16 @@ class DevicesMixin:
                 _LOGGER.debug("Plan action: DISCHARGE skipped (discharging disabled)")
                 await self._set_mode_idle()
                 return
+            # If there's solar surplus (grid export), capture it instead of discharging
+            true_surplus = self._calculate_true_solar_surplus()
+            if true_surplus is not None and true_surplus > 50 and self._battery_soc < 100:
+                _LOGGER.debug(
+                    "Plan action: DISCHARGE -> SOLAR_CHARGE "
+                    "(surplus %.0fW, grid=%.0fW, SOC=%.1f%%)",
+                    true_surplus, self._grid_power or 0, self._battery_soc,
+                )
+                await self._start_solar_charging(true_surplus)
+                return
             _LOGGER.debug("Plan action: DISCHARGE")
             await self._start_discharging()
         elif action == "solar_charge":
