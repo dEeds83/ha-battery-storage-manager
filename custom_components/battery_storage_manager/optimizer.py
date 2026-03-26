@@ -627,10 +627,76 @@ def smooth_plan(
         smoothed += soc_swaps
         _LOGGER.info("SOC-aware reorder: %d discharge slots shifted to higher-priced neighbours", soc_swaps)
 
+    # SOC-constrained cleanup: convert discharge slots where SOC <= min_soc
+    # to idle (battery empty, can't actually discharge), then re-run Pass 3
+    # to move cheap evening discharges into the now-freed morning slots.
+    def _sim_soc(acts: list[str]) -> list[float]:
+        """Simulate SOC forward and return track."""
+        s = current_soc
+        track = []
+        for i in range(n):
+            track.append(s)
+            if acts[i] == "charge":
+                d = min(charge_kwh_slot, (max_soc - s) / 100 * cap)
+                s = min(max_soc, s + d / cap * 100)
+            elif acts[i] == "discharge":
+                d = min(discharge_kwh_slot, (s - min_soc) / 100 * cap)
+                s = max(min_soc, s - d / cap * 100)
+        return track
+
+    soc_track = _sim_soc(actions)
+    infeasible = 0
+    for i in range(n):
+        if actions[i] == "discharge" and soc_track[i] <= min_soc + 0.01:
+            actions[i] = "idle"
+            infeasible += 1
+    if infeasible:
+        smoothed += infeasible
+        _LOGGER.info("SOC cleanup: %d infeasible discharge slots -> idle", infeasible)
+
+    # Final Pass 3 re-run: now that infeasible discharges are idle,
+    # swap remaining cheap discharges with the newly available expensive idles.
+    final_swaps = 0
+    for _ in range(50):
+        candidates = []
+        for d_idx in range(n):
+            if actions[d_idx] != "discharge":
+                continue
+            d_price = hourly_data[d_idx]["price"]
+            best_j = None
+            best_p = 0.0
+            for j in range(d_idx + 1, n):
+                if actions[j] in ("idle", "hold") and hourly_data[j]["price"] > best_p:
+                    best_p = hourly_data[j]["price"]
+                    best_j = j
+            if best_j is not None and best_p > d_price + 0.01:
+                candidates.append((best_p - d_price, d_idx, best_j))
+        if not candidates:
+            break
+        candidates.sort(reverse=True)
+        _, d_idx, idle_idx = candidates[0]
+        actions[d_idx] = "idle"
+        actions[idle_idx] = "discharge"
+        final_swaps += 1
+
+    # Verify SOC feasibility of final swaps
+    if final_swaps:
+        soc_track = _sim_soc(actions)
+        reverted = 0
+        for i in range(n):
+            if actions[i] == "discharge" and soc_track[i] <= min_soc + 0.01:
+                actions[i] = "idle"
+                reverted += 1
+        smoothed += final_swaps - reverted
+        _LOGGER.info(
+            "Final Pass 3: %d swaps (%d reverted for SOC feasibility)",
+            final_swaps, reverted,
+        )
+
     if smoothed:
         _LOGGER.info(
-            "Plan smoothing: %d slots adjusted (%d swaps, %d filled, %d gaps, %d soc-reorder)",
-            smoothed, swapped, filled, gap_filled, soc_swaps,
+            "Plan smoothing: %d total adjustments",
+            smoothed,
         )
 
     return actions, smoothed
