@@ -404,7 +404,18 @@ class DevicesMixin:
         if self._solar_power is not None:
             if self._solar_power < 50:
                 return 0.0  # No meaningful solar production
-            # Estimate house consumption: grid + solar + inverter - chargers
+            # House consumption = grid import + solar - charger draw
+            # The inverter is NOT part of house consumption — it feeds
+            # FROM the battery, not from the house.
+            # grid_power = house - solar - inverter + chargers
+            # → house = grid_power + solar + inverter - chargers
+            # → surplus = solar - house = solar - grid - inverter + chargers
+            # But simpler: surplus is what's left after the house is fed.
+            # If grid < 0 (export), surplus = |grid| + charger_draw
+            # If grid > 0 (import), surplus = charger_draw - grid (if > 0)
+            # But with inverter active, grid reflects house - solar - inverter.
+            # So: house = grid + solar + inverter - chargers
+            #     surplus = solar - house = -grid - inverter + chargers
             active_draw = sum(
                 c.get("measured_power") or c["power"]
                 for c in self._chargers if c["active"]
@@ -412,8 +423,13 @@ class DevicesMixin:
             inverter_w = 0
             if self._inverter_active:
                 inverter_w = self._inverter_actual_power or self._inverter_target_power or 0
-            house_w = max(0, self._grid_power - active_draw + self._solar_power + inverter_w)
-            return max(0, self._solar_power - house_w)
+            # Solar surplus = solar production that exceeds house consumption.
+            # house_consumption = grid_import + solar + inverter - charger_draw
+            # solar_surplus = solar - house_consumption
+            #               = solar - (grid + solar + inverter - chargers)
+            #               = -grid - inverter + chargers
+            surplus = -self._grid_power - inverter_w + active_draw
+            return max(0, surplus)
 
         # Fallback: grid-based inference when no solar sensor configured.
         # When inverter is active, we CANNOT reliably distinguish solar

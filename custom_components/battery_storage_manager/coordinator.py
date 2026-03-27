@@ -1633,6 +1633,8 @@ class BatteryStorageCoordinator(
             "max_soc": self._max_soc,
             "grid_max_soc": self._dp_max_soc,
             "solar_headroom_pct": self._solar_headroom_pct,
+            "solar_power_w": self._solar_power,
+            "solar_surplus_w": self._calculate_true_solar_surplus(),
             "battery_capacity_kwh": self._battery_capacity,
             "allow_grid_charging": self._allow_grid_charging,
             "allow_discharging": self._allow_discharging,
