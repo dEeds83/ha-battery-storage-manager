@@ -344,12 +344,17 @@ class DevicesMixin:
 
         await self._apply_charger_states(selected)
 
-        # Don't turn off the inverter switch during solar charging —
-        # just set power to 0.  This avoids constant on/off cycling
-        # when clouds cause rapid surplus fluctuations.
-        if self._inverter_active:
-            await self._set_inverter_power(0)
-            self._inverter_target_power = 0
+        # Use PID zero-feed regulation to compensate grid import.
+        # The chargers may draw more than solar surplus (house consumption
+        # adds to the load). The PID sees grid_power > 0 and ramps up
+        # the inverter to cover the difference — same as discharge mode.
+        if self._inverter_power_entity:
+            if not self._inverter_active and self._inverter_switch:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": self._inverter_switch}
+                )
+                self._inverter_active = True
+            await self._regulate_zero_feed()
 
         self._operating_mode = MODE_SOLAR_CHARGING
         active_str = ", ".join(
