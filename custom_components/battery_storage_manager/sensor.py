@@ -116,6 +116,8 @@ class OperatingModeSensor(BatteryStorageBaseSensor):
             "use_solar_forecast": d.get("use_solar_forecast"),
             "grid_max_soc": d.get("grid_max_soc"),
             "solar_headroom_pct": d.get("solar_headroom_pct"),
+            "solar_power_w": d.get("solar_power_w"),
+            "solar_surplus_w": d.get("solar_surplus_w"),
             "version": d.get("version"),
             "source_hash": d.get("source_hash"),
         }
