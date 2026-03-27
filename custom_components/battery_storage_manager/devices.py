@@ -320,34 +320,47 @@ class DevicesMixin:
             above_max = self._battery_soc is not None and self._battery_soc >= self._max_soc
             smallest = min(indexed, key=lambda x: x[1]["power"])
             smallest_idx, smallest_charger = smallest
-            deficit_w = smallest_charger["power"] - surplus_w
             if surplus_w >= 100 and self._inverter_power_entity and not above_max:
+                # Surplus covers part of smallest charger, inverter (PID)
+                # will compensate the rest via zero-feed regulation.
+                selected = {smallest_idx}
                 _LOGGER.debug(
                     "Solar surplus %.0fW < smallest charger (%dW) - "
-                    "using inverter to cover deficit %.0fW",
-                    surplus_w, smallest_charger["power"], deficit_w,
+                    "PID will compensate deficit",
+                    surplus_w, smallest_charger["power"],
                 )
-                await self._apply_charger_states({smallest_idx})
-                await self._start_inverter_deficit(deficit_w)
-                self._operating_mode = MODE_SOLAR_CHARGING
+            else:
+                powers_str = ", ".join(
+                    f"C{i+1}={c['power']}W" for i, c in indexed
+                )
+                _LOGGER.debug(
+                    "Solar surplus %.0fW too low for any charger (%s)",
+                    surplus_w, powers_str,
+                )
+                await self._set_mode_idle()
                 return
 
-            powers_str = ", ".join(
-                f"C{i+1}={c['power']}W" for i, c in indexed
-            )
-            _LOGGER.debug(
-                "Solar surplus %.0fW too low for any charger (%s)",
-                surplus_w, powers_str,
-            )
-            await self._set_mode_idle()
-            return
+        # Check: if inverter compensation would exceed smallest active
+        # charger, remove it (pointless cycling through battery).
+        # Inverter compensation ≈ total_charger_draw - surplus
+        while len(selected) > 1:
+            total_draw = sum(self._chargers[i]["power"] for i in selected)
+            inverter_needed = total_draw - surplus_w
+            smallest_active = min(selected, key=lambda i: self._chargers[i]["power"])
+            if inverter_needed >= self._chargers[smallest_active]["power"]:
+                selected.discard(smallest_active)
+                _LOGGER.info(
+                    "Solar charge: removing C%d (%dW) — inverter compensation "
+                    "%.0fW >= charger power (pointless cycling)",
+                    smallest_active + 1, self._chargers[smallest_active]["power"],
+                    inverter_needed,
+                )
+            else:
+                break
 
         await self._apply_charger_states(selected)
 
-        # Use PID zero-feed regulation to compensate grid import.
-        # The chargers may draw more than solar surplus (house consumption
-        # adds to the load). The PID sees grid_power > 0 and ramps up
-        # the inverter to cover the difference — same as discharge mode.
+        # PID zero-feed regulation compensates grid import.
         if self._inverter_power_entity:
             if not self._inverter_active and self._inverter_switch:
                 await self.hass.services.async_call(
