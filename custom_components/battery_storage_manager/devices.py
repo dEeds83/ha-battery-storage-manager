@@ -328,21 +328,24 @@ class DevicesMixin:
                 selected.add(idx)
                 remaining -= power
             elif has_inverter and remaining >= 100:
-                # Surplus + inverter: deficit must be < charger power
-                # to avoid pointless cycling, and within inverter capacity.
+                # Surplus + inverter: deficit must be < 50% of charger power.
+                # Higher deficit means most energy cycles through the battery
+                # with efficiency losses (e.g., 423W deficit at 85% eff = 63W loss).
                 total_draw = sum(self._chargers[i]["power"] for i in selected) + power
                 deficit = total_draw - surplus_w
-                if deficit < power and deficit <= max_inverter:
+                if deficit < power * 0.5 and deficit <= max_inverter:
                     selected.add(idx)
                     remaining -= power
 
         if not selected:
             if surplus_w >= 100 and has_inverter:
-                # Even the smallest charger needs inverter help
+                # Even the smallest charger needs inverter help.
+                # Only if deficit < 50% of charger (otherwise efficiency
+                # losses outweigh the small net solar gain).
                 smallest = min(indexed, key=lambda x: x[1]["power"])
                 smallest_idx, smallest_charger = smallest
                 deficit = smallest_charger["power"] - surplus_w
-                if deficit < smallest_charger["power"] and deficit <= max_inverter:
+                if deficit < smallest_charger["power"] * 0.5 and deficit <= max_inverter:
                     selected = {smallest_idx}
                     _LOGGER.debug(
                         "Solar surplus %.0fW < smallest charger (%dW) - "
