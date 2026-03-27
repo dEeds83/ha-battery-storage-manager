@@ -327,25 +327,28 @@ class DevicesMixin:
                 # Surplus covers most of this charger
                 selected.add(idx)
                 remaining -= power
-            elif has_inverter and remaining >= 100:
-                # Surplus + inverter: deficit must be < 50% of charger power.
-                # Higher deficit means most energy cycles through the battery
-                # with efficiency losses (e.g., 423W deficit at 85% eff = 63W loss).
+            elif has_inverter and remaining >= 50:
+                # Add charger if the net energy gain (after inverter round-trip
+                # losses) is positive:  remaining > deficit × (1 - efficiency).
+                # This simplifies to: remaining > power × (1-eff) / (2-eff).
+                eff = getattr(self, "_battery_efficiency", 0.85) or 0.85
+                min_remaining = power * (1 - eff) / (2 - eff)
                 total_draw = sum(self._chargers[i]["power"] for i in selected) + power
                 deficit = total_draw - surplus_w
-                if deficit < power * 0.5 and deficit <= max_inverter:
+                if remaining >= min_remaining and deficit <= max_inverter:
                     selected.add(idx)
                     remaining -= power
 
         if not selected:
-            if surplus_w >= 100 and has_inverter:
+            if surplus_w >= 50 and has_inverter:
                 # Even the smallest charger needs inverter help.
-                # Only if deficit < 50% of charger (otherwise efficiency
-                # losses outweigh the small net solar gain).
+                # Only if net gain is positive after round-trip losses.
                 smallest = min(indexed, key=lambda x: x[1]["power"])
                 smallest_idx, smallest_charger = smallest
+                eff = getattr(self, "_battery_efficiency", 0.85) or 0.85
+                min_surplus = smallest_charger["power"] * (1 - eff) / (2 - eff)
                 deficit = smallest_charger["power"] - surplus_w
-                if deficit < smallest_charger["power"] * 0.5 and deficit <= max_inverter:
+                if surplus_w >= min_surplus and deficit <= max_inverter:
                     selected = {smallest_idx}
                     _LOGGER.debug(
                         "Solar surplus %.0fW < smallest charger (%dW) - "
