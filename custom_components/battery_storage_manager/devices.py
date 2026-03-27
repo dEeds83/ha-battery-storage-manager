@@ -415,16 +415,27 @@ class DevicesMixin:
             house_w = max(0, self._grid_power - active_draw + self._solar_power + inverter_w)
             return max(0, self._solar_power - house_w)
 
-        # Fallback: grid-based inference (only without inverter to avoid
-        # mistaking inverter feed for solar surplus)
+        # Fallback: grid-based inference when no solar sensor configured.
+        # When inverter is active, we CANNOT reliably distinguish solar
+        # from inverter feed. Log a warning so the user knows to configure
+        # the solar power sensor.
         if self._inverter_active:
+            if self._grid_power < -100:
+                # Significant export while inverter active — likely solar
+                # but we can't be sure without the sensor.
+                _LOGGER.warning(
+                    "Grid export %.0fW during discharge but no solar power "
+                    "sensor configured — cannot detect solar surplus reliably. "
+                    "Please configure the solar power sensor.",
+                    abs(self._grid_power),
+                )
             return 0.0
 
         active_draw = sum(
             c.get("measured_power") or c["power"]
             for c in self._chargers if c["active"]
         )
-        return active_draw - self._grid_power
+        return max(0, active_draw - self._grid_power)
 
     async def _run_self_consumption(self) -> None:
         """Self-consumption optimization."""
