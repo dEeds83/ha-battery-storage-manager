@@ -202,7 +202,10 @@ class DevicesMixin:
             # Target should be: current_target minus overshoot, but keep
             # at least 50W so the inverter doesn't shut down completely.
             new_target = self._inverter_target_power - export_w * 0.5
-            new_target = max(50, new_target)
+            # In discharge mode keep min 50W to prevent shutdown.
+            # In solar_charging mode allow 0W (solar covers everything).
+            export_min = 50 if self._operating_mode == MODE_DISCHARGING else 0
+            new_target = max(export_min, new_target)
             _LOGGER.info(
                 "Zero-feed: EXPORT %.0fW -> reducing inverter %.0f -> %.0fW",
                 export_w, self._inverter_target_power, new_target,
@@ -309,54 +312,50 @@ class DevicesMixin:
         indexed = [(i, c) for i, c in enumerate(self._chargers) if c["power"] > 0]
         indexed.sort(key=lambda x: x[1]["power"], reverse=True)
 
+        above_max = self._battery_soc is not None and self._battery_soc >= self._max_soc
+        has_inverter = bool(self._inverter_power_entity) and not above_max
+        max_inverter = self._inverter_power or 800
+
+        # Select chargers: add if surplus covers >= 80% of charger power,
+        # OR if inverter can cover the deficit without exceeding charger power
+        # (otherwise we'd be pointlessly cycling energy through the battery).
         selected: set[int] = set()
         remaining = surplus_w
         for idx, charger in indexed:
-            if remaining >= charger["power"] * 0.8:
+            power = charger["power"]
+            if remaining >= power * 0.8:
+                # Surplus covers most of this charger
                 selected.add(idx)
-                remaining -= charger["power"]
+                remaining -= power
+            elif has_inverter and remaining >= 100:
+                # Surplus + inverter: deficit must be < charger power
+                # to avoid pointless cycling, and within inverter capacity.
+                total_draw = sum(self._chargers[i]["power"] for i in selected) + power
+                deficit = total_draw - surplus_w
+                if deficit < power and deficit <= max_inverter:
+                    selected.add(idx)
+                    remaining -= power
 
         if not selected:
-            above_max = self._battery_soc is not None and self._battery_soc >= self._max_soc
-            smallest = min(indexed, key=lambda x: x[1]["power"])
-            smallest_idx, smallest_charger = smallest
-            if surplus_w >= 100 and self._inverter_power_entity and not above_max:
-                # Surplus covers part of smallest charger, inverter (PID)
-                # will compensate the rest via zero-feed regulation.
-                selected = {smallest_idx}
+            if surplus_w >= 100 and has_inverter:
+                # Even the smallest charger needs inverter help
+                smallest = min(indexed, key=lambda x: x[1]["power"])
+                smallest_idx, smallest_charger = smallest
+                deficit = smallest_charger["power"] - surplus_w
+                if deficit < smallest_charger["power"] and deficit <= max_inverter:
+                    selected = {smallest_idx}
+                    _LOGGER.debug(
+                        "Solar surplus %.0fW < smallest charger (%dW) - "
+                        "PID will compensate deficit %.0fW",
+                        surplus_w, smallest_charger["power"], deficit,
+                    )
+            if not selected:
                 _LOGGER.debug(
-                    "Solar surplus %.0fW < smallest charger (%dW) - "
-                    "PID will compensate deficit",
-                    surplus_w, smallest_charger["power"],
-                )
-            else:
-                powers_str = ", ".join(
-                    f"C{i+1}={c['power']}W" for i, c in indexed
-                )
-                _LOGGER.debug(
-                    "Solar surplus %.0fW too low for any charger (%s)",
-                    surplus_w, powers_str,
+                    "Solar surplus %.0fW too low for any charger",
+                    surplus_w,
                 )
                 await self._set_mode_idle()
                 return
-
-        # Check: if inverter compensation would exceed smallest active
-        # charger, remove it (pointless cycling through battery).
-        # Inverter compensation ≈ total_charger_draw - surplus
-        while len(selected) > 1:
-            total_draw = sum(self._chargers[i]["power"] for i in selected)
-            inverter_needed = total_draw - surplus_w
-            smallest_active = min(selected, key=lambda i: self._chargers[i]["power"])
-            if inverter_needed >= self._chargers[smallest_active]["power"]:
-                selected.discard(smallest_active)
-                _LOGGER.info(
-                    "Solar charge: removing C%d (%dW) — inverter compensation "
-                    "%.0fW >= charger power (pointless cycling)",
-                    smallest_active + 1, self._chargers[smallest_active]["power"],
-                    inverter_needed,
-                )
-            else:
-                break
 
         await self._apply_charger_states(selected)
 
