@@ -619,7 +619,7 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
         # Build actions_csv: dominant action per hour for ePaper display
         # D=discharge, C=charge, H=hold, I=idle, S=solar_charge
         actions_csv = ""
-        plan = self.coordinator.data.get("plan", [])
+        plan = self.coordinator.data.get("battery_plan", [])
         if plan:
             cur_hour = now.hour
             for i in range(12):
