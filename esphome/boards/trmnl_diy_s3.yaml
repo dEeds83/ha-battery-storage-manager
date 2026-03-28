@@ -1,0 +1,59 @@
+# Pin mapping for TRMNL 7.5" (OG) DIY Kit (ESP32-S3)
+esp32:
+  board: seeed_xiao_esp32s3
+  variant: esp32s3
+  framework:
+    type: arduino
+
+spi:
+  clk_pin: GPIO7
+  mosi_pin: GPIO9
+
+display:
+  - platform: waveshare_epaper
+    id: eink
+    cs_pin: GPIO44
+    dc_pin: GPIO10
+    reset_pin: GPIO38
+    busy_pin:
+      number: GPIO4
+      inverted: true
+    model: 7.50inV2
+    auto_clear_enabled: false
+
+# TRMNL DIY Kit: GPIO6 enables battery voltage reading, GPIO1 is ADC
+switch:
+  - platform: gpio
+    pin: GPIO6
+    id: vbat_switch
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+sensor:
+  - platform: adc
+    pin: GPIO1
+    id: device_battery_voltage
+    name: "${friendly_name} Batterie Spannung"
+    attenuation: 12db
+    update_interval: never  # manually triggered
+    filters:
+      - multiply: 2.0  # 1:1 voltage divider on board
+    unit_of_measurement: "V"
+    internal: true
+  - platform: template
+    id: device_battery_pct
+    name: "${friendly_name} Batterie"
+    unit_of_measurement: "%"
+    device_class: battery
+    update_interval: 60s
+    lambda: |-
+      // Enable load switch, wait, read ADC, disable
+      id(vbat_switch).turn_on();
+      delay(20);
+      id(device_battery_voltage).update();
+      id(vbat_switch).turn_off();
+      float v = id(device_battery_voltage).state;
+      if (isnan(v) || v < 1.0) return NAN;
+      if (v >= 4.2) return 100.0f;
+      if (v <= 3.3) return 0.0f;
+      return (v - 3.3f) / (4.2f - 3.3f) * 100.0f;

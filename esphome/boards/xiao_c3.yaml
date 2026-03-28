@@ -1,0 +1,29 @@
+# Pin mapping for Seeed XIAO ESP32-C3
+esp32:
+  board: seeed_xiao_esp32c3
+  variant: esp32c3
+  framework:
+    type: arduino
+
+spi:
+  clk_pin: GPIO8
+  mosi_pin: GPIO10
+
+display:
+  - platform: waveshare_epaper
+    id: eink
+    cs_pin: GPIO3
+    dc_pin: GPIO5
+    reset_pin: GPIO2
+    busy_pin:
+      number: GPIO4
+      inverted: true
+    model: 7.50inV2
+    auto_clear_enabled: false
+
+# No battery ADC on C3 — provide dummy so display code compiles
+sensor:
+  - platform: template
+    id: device_battery_pct
+    name: "${friendly_name} Batterie"
+    update_interval: never

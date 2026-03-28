@@ -616,6 +616,35 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
         epex_markup = self.coordinator.data.get("epex_markup")
         epex_tv = self.coordinator.data.get("epex_terminal_value_ct")
 
+        # Build actions_csv: dominant action per hour for ePaper display
+        # D=discharge, C=charge, H=hold, I=idle, S=solar_charge
+        actions_csv = ""
+        plan = self.coordinator.data.get("plan", [])
+        if plan:
+            cur_hour = now.hour
+            for i in range(12):
+                h = (cur_hour + i) % 24
+                # Find all plan entries for this hour
+                hour_actions = []
+                for entry in plan:
+                    try:
+                        eh = int(entry["hour"][11:13])
+                        if eh == h:
+                            hour_actions.append(entry.get("action", "idle"))
+                    except (ValueError, KeyError, TypeError):
+                        continue
+                if hour_actions:
+                    # Dominant action (most frequent)
+                    from collections import Counter
+                    dominant = Counter(hour_actions).most_common(1)[0][0]
+                    code = {"discharge": "D", "charge": "C", "hold": "H",
+                            "idle": "I", "solar_charge": "S"}.get(dominant, "I")
+                    actions_csv += code
+                else:
+                    actions_csv += "I"
+                if i < 11:
+                    actions_csv += ","
+
         return {
             "prices": prices_list,
             "count": len(prices_list),
@@ -623,6 +652,7 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
             "min_price": round(min(all_prices), 4) if all_prices else None,
             "max_price": round(max(all_prices), 4) if all_prices else None,
             "avg_price": round(sum(all_prices) / len(all_prices), 4) if all_prices else None,
+            "actions_csv": actions_csv or None,
             "extended_forecast": extended,
             "extended_count": len(extended),
             "epex_regression": epex_markup,

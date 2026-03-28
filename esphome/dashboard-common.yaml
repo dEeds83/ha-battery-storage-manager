@@ -1,0 +1,628 @@
+# Battery Storage Manager – ePaper Dashboard (Common)
+# Shared configuration for all ePaper display devices.
+# Device-specific settings (name, board, secrets) are in the device YAML.
+
+globals:
+  - id: night_mode
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+esphome:
+  name: ${device_name}
+  friendly_name: "${friendly_name}"
+  on_boot:
+    priority: -100
+    then:
+      # Small delay to let ESPHome mark boot as successful (prevents OTA rollback)
+      - delay: 1s
+      - wait_until:
+          condition:
+            api.connected:
+          timeout: 30s
+      # Wait for time sync from HA
+      - wait_until:
+          condition:
+            time.has_time:
+          timeout: 10s
+      # Check if we're in night mode (01:00 - 06:00 local time)
+      - lambda: |-
+          auto now = id(ha_time).now();
+          if (now.is_valid() && now.hour >= 1 && now.hour < 6) {
+            id(night_mode) = true;
+          } else {
+            id(night_mode) = false;
+          }
+      - if:
+          condition:
+            lambda: "return id(night_mode);"
+          then:
+            # Night mode: show sleep screen, then sleep until 06:01
+            - component.update: eink
+            - delay: 10s
+            - lambda: |-
+                auto now = id(ha_time).now();
+                // Minutes until 06:01
+                int target = 6 * 60 + 1;
+                int current = now.hour * 60 + now.minute;
+                int mins_left = target - current;
+                if (mins_left <= 0) mins_left = 1;
+                id(deep_sleep_ctrl).set_sleep_duration(mins_left * 60 * 1000);
+            - deep_sleep.enter: deep_sleep_ctrl
+          else:
+            # Day mode: fetch data, render, sleep until next :01/:16/:31/:46
+            - delay: 5s
+            - component.update: eink
+            - delay: 10s
+            - lambda: |-
+                auto now = id(ha_time).now();
+                int minute = now.minute;
+                // Next target: :01, :16, :31, :46
+                int targets[] = {1, 16, 31, 46};
+                int sleep_min = 15; // fallback
+                for (int i = 0; i < 4; i++) {
+                  if (targets[i] > minute) {
+                    sleep_min = targets[i] - minute;
+                    break;
+                  }
+                }
+                // If past :46, next is :01 of next hour
+                if (minute >= 46) {
+                  sleep_min = 61 - minute;
+                }
+                // Minimum 1 minute sleep
+                if (sleep_min < 1) sleep_min = 1;
+                id(deep_sleep_ctrl).set_sleep_duration(sleep_min * 60 * 1000);
+            - deep_sleep.enter: deep_sleep_ctrl
+
+# Board, API, OTA, WiFi are defined in the device YAML.
+
+# ── Deep Sleep ─────────────────────────────────────────────
+deep_sleep:
+  id: deep_sleep_ctrl
+  run_duration: 60s       # Max awake time (safety fallback)
+  sleep_duration: 30min   # Sleep between updates
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# ── Fonts ──────────────────────────────────────────────────
+font:
+  - file: "gfonts://Inter@700"
+    id: font_title
+    size: 32
+
+  - file: "gfonts://Inter@700"
+    id: font_big
+    size: 48
+
+  - file: "gfonts://Inter@500"
+    id: font_medium
+    size: 22
+
+  - file: "gfonts://Inter@400"
+    id: font_small
+    size: 16
+
+  - file: "gfonts://Inter@400"
+    id: font_tiny
+    size: 12
+
+# ── Home Assistant Sensors ─────────────────────────────────
+# Adjust entity_id values to match your installation.
+# No on_value triggers needed – we fetch once per wake cycle.
+
+sensor:
+  - platform: homeassistant
+    id: battery_soc
+    entity_id: sensor.battery_storage_manager_speicher_ladestand
+
+  - platform: homeassistant
+    id: current_price
+    entity_id: sensor.battery_storage_manager_aktueller_strompreis
+
+  - platform: homeassistant
+    id: grid_power
+    entity_id: sensor.battery_storage_manager_netzleistung
+
+  - platform: homeassistant
+    id: expected_solar
+    entity_id: sensor.battery_storage_manager_erwartete_solarproduktion
+
+  - platform: homeassistant
+    id: solar_forecast_today_1
+    entity_id: sensor.energy_production_today
+
+  - platform: homeassistant
+    id: solar_forecast_today_2
+    entity_id: sensor.energy_production_today_2
+
+  - platform: homeassistant
+    id: daily_consumption
+    entity_id: sensor.accumulated_consumption_walchenseestrasse_8
+
+  - platform: homeassistant
+    id: daily_cost
+    entity_id: sensor.accumulated_cost_walchenseestrasse_8
+
+  - platform: homeassistant
+    id: inverter_power
+    entity_id: sensor.battery_storage_manager_wechselrichter_leistung
+
+  - platform: homeassistant
+    id: consumption_forecast
+    entity_id: sensor.battery_storage_manager_verbrauchsprognose
+
+  - platform: homeassistant
+    id: solar_power
+    entity_id: sensor.solar_gesamt_leistung
+
+  - platform: homeassistant
+    id: outside_temp
+    entity_id: sensor.aussenmeter_31_temperatur
+
+  - platform: homeassistant
+    id: solar_energy_today
+    entity_id: sensor.solar_gesamt_heute
+
+  # Price forecast from Battery Storage Manager (no template sensor needed)
+  - platform: homeassistant
+    id: avg_price
+    entity_id: sensor.battery_storage_manager_preisprognose
+    attribute: avg_price
+
+  - platform: homeassistant
+    id: price_min_today
+    entity_id: sensor.battery_storage_manager_preisprognose
+    attribute: min_price
+
+  - platform: homeassistant
+    id: price_max_today
+    entity_id: sensor.battery_storage_manager_preisprognose
+    attribute: max_price
+
+text_sensor:
+  - platform: homeassistant
+    id: operating_mode
+    entity_id: sensor.battery_storage_manager_betriebsmodus
+
+  - platform: homeassistant
+    id: strategy
+    entity_id: sensor.battery_storage_manager_strategie
+
+  - platform: homeassistant
+    id: plan_summary
+    entity_id: sensor.battery_storage_manager_speicherplan
+
+  - platform: homeassistant
+    id: planned_action
+    entity_id: sensor.battery_storage_manager_geplante_aktion
+
+  - platform: homeassistant
+    id: next_cheap
+    entity_id: sensor.battery_storage_manager_nachstes_gunstiges_fenster
+
+  - platform: homeassistant
+    id: next_expensive
+    entity_id: sensor.battery_storage_manager_nachstes_teures_fenster
+
+  # 16h price CSV directly from Battery Storage Manager
+  - platform: homeassistant
+    id: prices_csv
+    entity_id: sensor.battery_storage_manager_preisprognose
+
+  # Plan actions per hour (D=discharge, C=charge, H=hold, I=idle)
+  - platform: homeassistant
+    id: actions_csv
+    entity_id: sensor.battery_storage_manager_preisprognose
+    attribute: actions_csv
+
+# ── Display rendering ─────────────────────────────────────
+# SPI + Display hardware config comes from boards package.
+# The display lambda extends it here.
+display:
+  - id: !extend eink
+    update_interval: never   # Only update via on_boot sequence
+    lambda: |-
+      const int W = 800;
+      const int H = 480;
+      const int P = 14;
+
+      // Helper: replace '.' with ',' for German number format
+      auto de = [](char *s) { for (char *p = s; *p; p++) if (*p == '.') *p = ','; return s; };
+
+      // ── Helper: parse HH:MM from ISO timestamp ──
+      auto parse_time = [&](const std::string &ts, std::string &time_out, std::string &day_out) {
+        time_out = "--:--";
+        day_out = "";
+        if (ts.length() >= 16) {
+          time_out = ts.substr(11, 5);
+          if (id(ha_time).now().is_valid()) {
+            int ts_day = atoi(ts.substr(8, 2).c_str());
+            day_out = (ts_day != id(ha_time).now().day_of_month) ? "morgen" : "heute";
+          }
+        }
+      };
+
+      // ── Helper: parse CSV string into float array ──
+      auto parse_prices = [](const std::string &csv, float *out, int max_count) -> int {
+        int count = 0;
+        size_t pos = 0;
+        std::string s = csv;
+        while (pos < s.length() && count < max_count) {
+          size_t comma = s.find(',', pos);
+          if (comma == std::string::npos) comma = s.length();
+          std::string token = s.substr(pos, comma - pos);
+          if (!token.empty()) {
+            out[count++] = atof(token.c_str());
+          }
+          pos = comma + 1;
+        }
+        return count;
+      };
+
+      // ── Night Mode ──
+      if (id(night_mode)) {
+        it.print(W / 2, H / 2 - 80, id(font_medium), TextAlign::CENTER, "Home Dashboard @Familie Dietz");
+        it.print(W / 2, H / 2 - 40, id(font_title), TextAlign::CENTER, "Schlafmodus");
+        it.print(W / 2, H / 2, id(font_small), TextAlign::CENTER, "Naechste Aktualisierung um 06:00");
+        if (!isnan(id(battery_soc).state)) {
+          char buf[16];
+          snprintf(buf, sizeof(buf), "Batterie: %.0f%%", id(battery_soc).state);
+          it.print(W / 2, H / 2 + 40, id(font_medium), TextAlign::CENTER, buf);
+        }
+        return;
+      }
+
+      // ══════════════════════════════════════════════════════════
+      // ── HEADER BAR: Title + SOC + Metrics (one line) ──
+      // ══════════════════════════════════════════════════════════
+
+      // Title (32px font = ~32px tall)
+      it.print(P, 6, id(font_title), "Home Dashboard");
+
+      // Device battery icon + Time + Date (right, vertically centered with title)
+      int rx = W - P;
+
+      if (id(ha_time).now().is_valid()) {
+        auto now = id(ha_time).now();
+        char tbuf[16];
+        snprintf(tbuf, sizeof(tbuf), "%02d:%02d  %02d.%02d.",
+                 now.hour, now.minute, now.day_of_month, now.month);
+        it.print(rx, 14, id(font_small), TextAlign::TOP_RIGHT, tbuf);
+      }
+
+      // Device battery (only on boards with battery ADC, e.g., TRMNL S3)
+      if (id(device_battery_pct).has_state() && !isnan(id(device_battery_pct).state)) {
+        float bpct = id(device_battery_pct).state;
+        int bx = rx - 160;  // left of time string
+        // font_small is 16px, center battery icon (12px) vertically with text
+        int text_y = 14;  // same as time text
+        int bw = 24, bh = 12;
+        int by = text_y + (16 - bh) / 2 + 2;  // center 12px icon in 16px text, nudge down 2px
+        // Battery outline
+        it.rectangle(bx, by, bw, bh);
+        it.filled_rectangle(bx + bw, by + 3, 3, 6);  // terminal nub
+        // Fill proportional to charge
+        int fill = (int)(bpct / 100.0 * (bw - 4));
+        if (fill > 0) it.filled_rectangle(bx + 2, by + 2, fill, bh - 4);
+        // Percentage text (baseline-aligned with icon)
+        char bbuf[8];
+        snprintf(bbuf, sizeof(bbuf), "%d%%", (int)bpct);
+        it.print(bx - 4, text_y, id(font_small), TextAlign::TOP_RIGHT, bbuf);
+      }
+
+      // Header line below title (32px font at Y=6 ends at ~Y=38, line at 42)
+      it.line(P, 42, W - P, 42);
+
+      // ── Row 1: SOC + 5 compact metrics ──
+      int r1y = 42;
+      int r1h = 48;
+
+      // SOC (compact, left)
+      float soc = isnan(id(battery_soc).state) ? 0 : id(battery_soc).state;
+      char soc_buf[16];
+
+      // Mode text
+      std::string mode = "";
+      if (id(operating_mode).has_state()) {
+        std::string m = id(operating_mode).state;
+        if (m == "idle") mode = "Idle";
+        else if (m == "charging") mode = "Netz";
+        else if (m == "solar_charging") mode = "Solar";
+        else if (m == "discharging") mode = "Entl.";
+      }
+      snprintf(soc_buf, sizeof(soc_buf), "%.0f%% %s", soc, mode.c_str());
+
+      // SOC bar (horizontal, compact)
+      int soc_bar_x = P;
+      int soc_bar_w = 130;
+      it.print(soc_bar_x, r1y + 2, id(font_tiny), "Akku");
+      it.print(soc_bar_x, r1y + 16, id(font_medium), soc_buf);
+      // Mini progress bar
+      it.rectangle(soc_bar_x, r1y + 40, soc_bar_w, 6);
+      it.filled_rectangle(soc_bar_x + 1, r1y + 41, (int)(soc / 100.0 * (soc_bar_w - 2)), 4);
+
+      it.line(soc_bar_x + soc_bar_w + 6, r1y, soc_bar_x + soc_bar_w + 6, r1y + r1h);
+
+      // Metrics area
+      int mx = soc_bar_x + soc_bar_w + 14;
+      int mw = (W - mx - P) / 4;
+
+      // Strompreis
+      it.print(mx, r1y + 2, id(font_tiny), "Preis");
+      if (!isnan(id(current_price).state)) {
+        char buf[20];
+        if (!isnan(id(avg_price).state)) {
+          snprintf(buf, sizeof(buf), "%.1f (~%.0f) ct",
+                   id(current_price).state * 100, id(avg_price).state * 100); de(buf);
+        } else {
+          snprintf(buf, sizeof(buf), "%.1f ct", id(current_price).state * 100); de(buf);
+        }
+        it.print(mx, r1y + 16, id(font_medium), buf);
+      }
+      it.line(mx + mw, r1y, mx + mw, r1y + r1h);
+
+      // Netz
+      it.print(mx + mw + 6, r1y + 2, id(font_tiny), "Netz");
+      if (!isnan(id(grid_power).state)) {
+        char buf[14];
+        float gp = id(grid_power).state;
+        snprintf(buf, sizeof(buf), "%s%.0f W", gp >= 0 ? "+" : "", gp);
+        it.print(mx + mw + 6, r1y + 16, id(font_medium), buf);
+      }
+      it.line(mx + mw * 2, r1y, mx + mw * 2, r1y + r1h);
+
+      // Verbrauch
+      it.print(mx + mw * 2 + 6, r1y + 2, id(font_tiny), "Erwarteter Verbrauch");
+      if (!isnan(id(consumption_forecast).state)) {
+        char buf[10];
+        snprintf(buf, sizeof(buf), "%.0f W", id(consumption_forecast).state);
+        it.print(mx + mw * 2 + 6, r1y + 16, id(font_medium), buf);
+      }
+      it.line(mx + mw * 3, r1y, mx + mw * 3, r1y + r1h);
+
+      // Aktion
+      it.print(mx + mw * 3 + 6, r1y + 2, id(font_tiny), "Aktion");
+      if (id(planned_action).has_state()) {
+        it.print(mx + mw * 3 + 6, r1y + 16, id(font_medium),
+                 id(planned_action).state.c_str());
+      }
+
+      it.line(P, r1y + r1h, W - P, r1y + r1h);
+
+      // ── Row 2: Plan summary (full width, compact) ──
+      int r2y = r1y + r1h + 2;
+      it.print(P + 4, r2y + 2, id(font_tiny), "Plan:");
+      if (id(plan_summary).has_state()) {
+        it.print(P + 40, r2y + 2, id(font_tiny), id(plan_summary).state.c_str());
+      }
+
+      it.line(P, r2y + 16, W - P, r2y + 16);
+
+      // ── Row 3: Solar + Temperature metrics ──
+      int r3y = r2y + 18;
+      int r3h = 42;
+      int r3w = (W - 2 * P) / 6;
+
+      // Solar Leistung
+      it.print(P, r3y + 2, id(font_tiny), "Solar");
+      if (!isnan(id(solar_power).state)) {
+        char buf[14];
+        snprintf(buf, sizeof(buf), "%.0f W", id(solar_power).state);
+        it.print(P, r3y + 14, id(font_medium), buf);
+      }
+      it.line(P + r3w, r3y, P + r3w, r3y + r3h);
+
+      // Außentemperatur
+      it.print(P + r3w + 6, r3y + 2, id(font_tiny), "Temperatur");
+      if (!isnan(id(outside_temp).state)) {
+        char buf[10];
+        snprintf(buf, sizeof(buf), "%.1f C", id(outside_temp).state); de(buf);
+        it.print(P + r3w + 6, r3y + 14, id(font_medium), buf);
+      }
+      it.line(P + r3w * 2, r3y, P + r3w * 2, r3y + r3h);
+
+      // Solar Prognose (Tageswert, Summe beider Anlagen)
+      it.print(P + r3w * 2 + 6, r3y + 2, id(font_tiny), "Solar Prog.");
+      {
+        float fc1 = isnan(id(solar_forecast_today_1).state) ? 0 : id(solar_forecast_today_1).state;
+        float fc2 = isnan(id(solar_forecast_today_2).state) ? 0 : id(solar_forecast_today_2).state;
+        float fc_total = fc1 + fc2;
+        if (fc_total > 0) {
+          char buf[14];
+          snprintf(buf, sizeof(buf), "%.1f kWh", fc_total); de(buf);
+          it.print(P + r3w * 2 + 6, r3y + 14, id(font_medium), buf);
+        }
+      }
+      it.line(P + r3w * 3, r3y, P + r3w * 3, r3y + r3h);
+
+      // Solar heute (bisherig)
+      it.print(P + r3w * 3 + 6, r3y + 2, id(font_tiny), "Solar heute");
+      if (!isnan(id(solar_energy_today).state)) {
+        char buf[14];
+        snprintf(buf, sizeof(buf), "%.1f kWh", id(solar_energy_today).state); de(buf);
+        it.print(P + r3w * 3 + 6, r3y + 14, id(font_medium), buf);
+      }
+      it.line(P + r3w * 4, r3y, P + r3w * 4, r3y + r3h);
+
+      // Netzbezug heute
+      it.print(P + r3w * 4 + 6, r3y + 2, id(font_tiny), "Netzbezug");
+      if (!isnan(id(daily_consumption).state)) {
+        char buf[14];
+        snprintf(buf, sizeof(buf), "%.1f kWh", id(daily_consumption).state); de(buf);
+        it.print(P + r3w * 4 + 6, r3y + 14, id(font_medium), buf);
+      }
+      it.line(P + r3w * 5, r3y, P + r3w * 5, r3y + r3h);
+
+      // Tageskosten Strom
+      it.print(P + r3w * 5 + 6, r3y + 2, id(font_tiny), "Kosten");
+      if (!isnan(id(daily_cost).state)) {
+        char buf[14];
+        snprintf(buf, sizeof(buf), "%.2f EUR", id(daily_cost).state); de(buf);
+        it.print(P + r3w * 5 + 6, r3y + 14, id(font_medium), buf);
+      }
+
+      it.line(P, r3y + r3h, W - P, r3y + r3h);
+
+      // ══════════════════════════════════════════════════════════
+      // ── FULL WIDTH 12h PRICE CHART ──
+      // ══════════════════════════════════════════════════════════
+      int chart_top = r3y + r3h + 6;
+      int chart_left = P + 38;
+      int chart_right = W - P - 4;
+      int chart_w = chart_right - chart_left;
+      int chart_bottom = H - 20;
+      int chart_h = chart_bottom - chart_top;
+
+      it.print(P, chart_top - 4, id(font_small), "Preisverlauf 12h");
+
+      // Parse prices (12 hourly averages from the sensor CSV)
+      float prices[12];
+      int price_count = 0;
+      if (id(prices_csv).has_state() && id(prices_csv).state.length() > 3) {
+        price_count = parse_prices(id(prices_csv).state, prices, 12);
+      }
+
+      if (price_count >= 2) {
+        // Find min/max and their indices
+        float p_min = prices[0], p_max = prices[0];
+        int min_idx = 0, max_idx = 0;
+        for (int i = 1; i < price_count; i++) {
+          if (prices[i] < p_min) { p_min = prices[i]; min_idx = i; }
+          if (prices[i] > p_max) { p_max = prices[i]; max_idx = i; }
+        }
+        // Padding
+        float p_pad = (p_max - p_min) * 0.08;
+        if (p_pad < 0.005) p_pad = 0.01;
+        float scale_min = p_min - p_pad;
+        float scale_max = p_max + p_pad;
+        float p_range = scale_max - scale_min;
+
+        int cur_hour = id(ha_time).now().is_valid() ? id(ha_time).now().hour : 0;
+
+        // Chart title with min/max info (hourly averages)
+        char info[60];
+        snprintf(info, sizeof(info), "Min: %.1f ct (%02d Uhr)   Max: %.1f ct (%02d Uhr)",
+                 p_min * 100, (cur_hour + min_idx) % 24,
+                 p_max * 100, (cur_hour + max_idx) % 24); de(info);
+        it.print(W - P, chart_top - 4, id(font_tiny), TextAlign::TOP_RIGHT, info);
+        chart_top += 14;
+        chart_h -= 14;
+
+        // Axes
+        it.line(chart_left, chart_top, chart_left, chart_bottom);
+        it.line(chart_left, chart_bottom, chart_right, chart_bottom);
+
+        // Y-axis labels (top, mid, bottom)
+        char yl[8];
+        snprintf(yl, sizeof(yl), "%.0f ct", scale_max * 100);
+        it.print(chart_left - 4, chart_top - 2, id(font_tiny), TextAlign::TOP_RIGHT, yl);
+        snprintf(yl, sizeof(yl), "%.0f ct", scale_min * 100);
+        it.print(chart_left - 4, chart_bottom - 10, id(font_tiny), TextAlign::TOP_RIGHT, yl);
+        float mid_price = (scale_max + scale_min) / 2;
+        snprintf(yl, sizeof(yl), "%.0f", mid_price * 100);
+        it.print(chart_left - 4, chart_top + chart_h / 2 - 5, id(font_tiny), TextAlign::TOP_RIGHT, yl);
+        // Dotted mid line
+        for (int dx = chart_left + 2; dx < chart_right; dx += 6) {
+          it.draw_pixel_at(dx, chart_top + chart_h / 2);
+        }
+
+        // Parse actions and draw hatched background for discharge periods
+        char actions[12] = {};
+        int action_count = 0;
+        if (id(actions_csv).has_state() && id(actions_csv).state.length() >= 3) {
+          std::string a = id(actions_csv).state;
+          for (size_t pos = 0; pos < a.length() && action_count < 12; pos++) {
+            if (a[pos] != ',') {
+              actions[action_count++] = a[pos];
+            }
+          }
+        }
+        // Draw hatched columns for discharge (D) and filled for charge (C)
+        for (int i = 0; i < action_count && i < price_count; i++) {
+          float x1 = chart_left + (float)i / (price_count - 1) * chart_w - chart_w / (price_count - 1) / 2;
+          float x2 = chart_left + (float)i / (price_count - 1) * chart_w + chart_w / (price_count - 1) / 2;
+          if (i == 0) x1 = chart_left;
+          if (i == price_count - 1) x2 = chart_right;
+          int ix1 = (int)x1, ix2 = (int)x2;
+          if (actions[i] == 'D') {
+            // Diagonal hatching for discharge
+            for (int dy = chart_top; dy < chart_bottom; dy += 6) {
+              for (int dx = ix1; dx < ix2; dx += 6) {
+                it.draw_pixel_at(dx, dy);
+              }
+            }
+          } else if (actions[i] == 'C') {
+            // Horizontal lines for charge
+            for (int dy = chart_bottom - 4; dy > chart_bottom - 12; dy -= 3) {
+              it.line(ix1, dy, ix2, dy);
+            }
+          }
+        }
+
+        // X-axis labels (every 2 hours, data is hourly)
+        for (int i = 0; i < price_count; i += 2) {
+          float xf = chart_left + (float)i / (price_count - 1) * chart_w;
+          char xl[4];
+          snprintf(xl, sizeof(xl), "%02d", (cur_hour + i) % 24);
+          it.print((int)xf, chart_bottom + 2, id(font_tiny), TextAlign::TOP_CENTER, xl);
+          it.line((int)xf, chart_bottom, (int)xf, chart_bottom + 3);
+        }
+
+        // Draw line (thick)
+        for (int i = 0; i < price_count - 1; i++) {
+          float x1 = chart_left + (float)i / (price_count - 1) * chart_w;
+          float x2 = chart_left + (float)(i + 1) / (price_count - 1) * chart_w;
+          float y1 = chart_bottom - ((prices[i] - scale_min) / p_range) * chart_h;
+          float y2 = chart_bottom - ((prices[i + 1] - scale_min) / p_range) * chart_h;
+          it.line((int)x1, (int)y1, (int)x2, (int)y2);
+          it.line((int)x1, (int)y1 - 1, (int)x2, (int)y2 - 1);
+        }
+
+        // Dots
+        for (int i = 0; i < price_count; i++) {
+          float xf = chart_left + (float)i / (price_count - 1) * chart_w;
+          float yf = chart_bottom - ((prices[i] - scale_min) / p_range) * chart_h;
+          it.filled_circle((int)xf, (int)yf, 2);
+        }
+
+        // Highlight min point (open circle)
+        {
+          float xf = chart_left + (float)min_idx / (price_count - 1) * chart_w;
+          float yf = chart_bottom - ((prices[min_idx] - scale_min) / p_range) * chart_h;
+          it.circle((int)xf, (int)yf, 6);
+          it.circle((int)xf, (int)yf, 7);
+        }
+
+        // Highlight max point (filled circle)
+        {
+          float xf = chart_left + (float)max_idx / (price_count - 1) * chart_w;
+          float yf = chart_bottom - ((prices[max_idx] - scale_min) / p_range) * chart_h;
+          it.filled_circle((int)xf, (int)yf, 6);
+        }
+
+        // Current price label (first point)
+        {
+          float yf = chart_bottom - ((prices[0] - scale_min) / p_range) * chart_h;
+          it.filled_circle(chart_left, (int)yf, 4);
+          char cp[10];
+          snprintf(cp, sizeof(cp), "%.1f", prices[0] * 100); de(cp);
+          it.print(chart_left + 8, (int)yf - 8, id(font_tiny), cp);
+        }
+
+      } else {
+        it.print(W / 2, chart_top + 40, id(font_small), TextAlign::CENTER, "Keine Preisdaten");
+      }
+
+      // ── Footer ──
+      int foot_y = H - 14;
+      if (id(strategy).has_state()) {
+        std::string s = id(strategy).state;
+        if (s == "price_optimized") s = "Preisoptimiert";
+        else if (s == "self_consumption") s = "Eigenverbrauch";
+        else if (s == "manual") s = "Manuell";
+        it.print(P, foot_y, id(font_tiny), s.c_str());
+      }
+      it.print(W - P, foot_y, id(font_tiny), TextAlign::TOP_RIGHT, "Alle 30 min");
