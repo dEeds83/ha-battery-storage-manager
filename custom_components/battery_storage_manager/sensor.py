@@ -618,24 +618,27 @@ class PriceForecastSensor(BatteryStorageBaseSensor):
 
         # Build actions_csv: dominant action per hour for ePaper display
         # D=discharge, C=charge, H=hold, I=idle, S=solar_charge
+        # Only consider plan entries within the next 12 hours to avoid
+        # mixing same-hour entries from different days.
         actions_csv = ""
         plan = self.coordinator.data.get("battery_plan", [])
         if plan:
-            cur_hour = now.hour
+            from collections import Counter
+            hour_start = now.replace(minute=0, second=0, microsecond=0)
             for i in range(12):
-                h = (cur_hour + i) % 24
-                # Find all plan entries for this hour
+                target_start = hour_start + timedelta(hours=i)
+                target_end = target_start + timedelta(hours=1)
                 hour_actions = []
                 for entry in plan:
                     try:
-                        eh = int(entry["hour"][11:13])
-                        if eh == h:
+                        ts = datetime.fromisoformat(entry["hour"])
+                        if ts.tzinfo is None and now.tzinfo is not None:
+                            ts = ts.replace(tzinfo=now.tzinfo)
+                        if target_start <= ts < target_end:
                             hour_actions.append(entry.get("action", "idle"))
                     except (ValueError, KeyError, TypeError):
                         continue
                 if hour_actions:
-                    # Dominant action (most frequent)
-                    from collections import Counter
                     dominant = Counter(hour_actions).most_common(1)[0][0]
                     code = {"discharge": "D", "charge": "C", "hold": "H",
                             "idle": "I", "solar_charge": "S"}.get(dominant, "I")
