@@ -68,11 +68,21 @@ class SolarMixin:
         if actual_kwh < 0.1:
             return
 
+        # Use RAW forecast (before calibration) by dividing out the
+        # current calibration factor.  Otherwise we get a circular
+        # comparison: calibrated forecast ≈ actual → factor stays ~1.
         today_prefix = now.strftime("%Y-%m-%dT")
-        forecast_kwh = sum(
+        calibrated_kwh = sum(
             v / 1000 for k, v in self._solar_forecast.items()
             if k.startswith(today_prefix)
         )
+        # Undo calibration + intraday correction to get raw forecast
+        raw_factor = self._solar_calibration_factor or 1.0
+        intraday = self._intraday_solar_factor if hasattr(self, "_intraday_solar_factor") else 1.0
+        if intraday is None or intraday <= 0:
+            intraday = 1.0
+        combined = raw_factor * intraday
+        forecast_kwh = calibrated_kwh / combined if combined > 0.1 else calibrated_kwh
 
         if forecast_kwh < 0.1:
             return
