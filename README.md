@@ -13,7 +13,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Exponentielle Verbrauchsprognose** – Gewichteter Durchschnitt (α=0,85) bevorzugt aktuelle Tage, erkennt Trends
 - **EPEX Predictor Terminal-Value** – Bestimmt ob Akku am Tibber-Ende voll oder leer sein soll (keine falschen Aktionen)
 - **Batterie-Zykluskosten** – Konfigurierbarer Degradationskostenparameter (ct/kWh) verhindert unprofitable Mini-Arbitrage
-- **Roundtrip-Effizienz** – Konfigurierbar (Standard 90%), wird automatisch aus Smartshunt V×I-Messdaten kalibriert wenn verfügbar
+- **Roundtrip-Effizienz** – Konfigurierbar (Standard 85%), wird automatisch aus Smartshunt V×I-Messdaten kalibriert wenn verfügbar
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
 - **Voller Netzpreis für Lade-Entscheidung** – DP bewertet Laden zum vollen Netzpreis, nicht zum effektiven Preis. Solar-Überschuss wird in hold/idle automatisch opportunistisch geladen — kostenlos und ohne Netz-Risiko. So werden nur wirklich günstige Slots für Netz-Laden verwendet
 - **Solar-Headroom** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit genug Platz für erwarteten Solarüberschuss bleibt. Headroom wird nur bis zum nächsten Sonnenuntergang berechnet, damit morgige Prognosen günstiges Netz-Laden heute nicht blockieren
@@ -31,7 +31,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 
 ### Steuerung
 - **Dynamische Ladegeräte-Anzahl** – Beliebig viele Ladegeräte mit individueller Leistung konfigurierbar
-- **Intelligentes Solar-Laden** – Ladegeräte werden proportional zum Solarüberschuss zugeschaltet (AC-gekoppelt)
+- **Intelligentes Solar-Laden** – Grid-Export wird automatisch erkannt und durch Zuschalten von Ladegeräten absorbiert (AC-gekoppelt)
 - **PID-geregelte Nulleinspeisung** – Wechselrichter-Leistung wird sanft und schwingungsfrei geregelt (P/I/D)
 - **Hysterese-Schaltung** – Mindest-Ein-/Ausschaltzeiten verhindern Ladegeräte-Flackern (120s/60s)
 - **Geräte-Synchronisierung** – Interner Status wird bei jedem Zyklus mit echten Switch-Zuständen abgeglichen
@@ -162,7 +162,7 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Geplante Aktion | Aktuelle Aktion dieses Zeitslots (Laden/Entladen/Solar/Halten/Inaktiv) |
 | Erwartete Solarproduktion | Verbleibende erwartete Solarproduktion heute in kWh |
 | Verbrauchsprognose | Vorhergesagter Hausverbrauch der aktuellen Stunde (W), 24h-Forecast als Attribut |
-| Preisprognose | Nächste 12h Strompreise als CSV + Attribute (min/max/avg, slot_minutes) |
+| Preisprognose | Nächste 12h Strompreise als CSV + Attribute (min/max/avg, slot_minutes, actions_csv mit D/C/H/I pro Stunde) |
 | Solar Korrekturfaktor | Kalibrierungsfaktor für Solarprognosen (1.0 = exakt, <1 = Forecast überschätzt, >1 = unterschätzt) mit Intraday-Faktor als Attribut |
 | Optimierungs-Log | Letzte Optimierungsentscheidung als State, vollständiges Log (max 50 Einträge) als Attribut |
 | Aktionshistorie | Tatsächlich ausgeführte Aktionen (48h, 10-Min-Intervalle, persistent) |
@@ -254,7 +254,7 @@ title: Batteriespeicher
 6. **Intraday Solar-Korrektur** – Restprognose anhand bisheriger Ist/Forecast-Ratio anpassen (Kalman-Filter)
 7. **Batterieplan erstellen (DP):**
    - Ladekosten pro Slot (voller Netzpreis — Solar-Surplus wird opportunistisch in hold/idle geladen)
-   - Dynamic Programming über alle Tibber-Slots: SOC diskretisiert in 1%-Stufen
+   - Dynamic Programming über alle Tibber-Slots: SOC diskretisiert in 0,5%-Stufen (~150 Levels)
    - 3 Szenarien (erwartet/optimistisch/pessimistisch) mit asymmetrischem Vote
    - Zykluskosten (½ auf Laden, ½ auf Entladen) und Roundtrip-Effizienz
    - Terminal-Value am Planende (Basis + EPEX) mit Unsicherheitsabschlag
@@ -264,7 +264,7 @@ title: Batteriespeicher
 
 ### Dynamic Programming Optimierung
 
-Statt einfachem greedy Pairing nutzt der Algorithmus **Dynamic Programming** (Bellman-Rückwärtsinduktion) über diskretisierte SOC-Stufen (1%-Schritte):
+Statt einfachem greedy Pairing nutzt der Algorithmus **Dynamic Programming** (Bellman-Rückwärtsinduktion) über diskretisierte SOC-Stufen (0,5%-Schritte):
 
 ```
 dp[t][soc] = maximaler Profit erreichbar ab Zeitpunkt t mit Ladezustand soc
@@ -284,11 +284,13 @@ EPEX-TV  = Median(EPEX-Prognose) × Effizienz × 0.7 − ½ Zykluskosten
 TV = max(Basis, EPEX)  →  DP bevorzugt hohen End-SOC wenn morgen teuer
 ```
 
-**Pass 4 (Rückwärts-Auffüllung):** Nach dem DP simuliert Pass 4 den SOC-Verlauf. Wenn ein Entlade-Block unter max_soc startet, werden Idle/Hold-Slots davor zu Charge konvertiert (günstigste zuerst, späteste bei gleichem Preis → Platz für Solar morgens).
+**Post-Smoothing Passes:**
+- **SOC-Cleanup:** Infeasible Discharge-Slots (SOC ≤ min_soc) werden zu idle konvertiert
+- **Final Pass 3:** Re-run nach SOC-Cleanup, verschiebt günstige Entladungen in teure freigewordene Slots
+- **SOC-aware Reorder:** Benachbarte Discharge→Idle-Paare werden getauscht wenn der Idle-Slot teurer ist und SOC > min_soc
+- **Charge Gap Fill:** Idle-Lücken innerhalb von Lade-Blöcken werden geschlossen wenn Preis ≤ Nachbar-Preis
 
-**Pass 5 (Insel-Bereinigung):** Isolierte Mini-Lade-Blöcke (< 4 Slots, > 2 Slot Gap zum Hauptblock) werden entfernt – DP-Artefakte aus dem Break-Even-Bereich.
-
-Zusätzlich wird bei idle/hold zur Laufzeit **opportunistisches Solar-Laden** aktiviert wenn freier Überschuss vorhanden ist.
+Zusätzlich wird bei idle/hold zur Laufzeit **Grid-Export automatisch durch Charger-Zuschalten absorbiert**.
 
 **Vorteile gegenüber greedy:**
 - Findet das **globale Optimum** über alle Zeitslots
@@ -296,7 +298,7 @@ Zusätzlich wird bei idle/hold zur Laufzeit **opportunistisches Solar-Laden** ak
 - Integriert **Effizienz und Zykluskosten** direkt in die Bewertung
 - Optimiert automatisch über **48h+** wenn morgen-Preise verfügbar sind
 - EPEX Terminal-Value erweitert den Horizont ohne falsche Aktionen zu erzeugen
-- Bei 96 Slots (24h × 15min) × 79 SOC-Stufen × 3 Szenarien ≈ 23.000 Zustände (< 5ms Rechenzeit)
+- Bei 96 Slots (24h × 15min) × 150 SOC-Stufen × 3 Szenarien ≈ ~45.000 Zustände (< 15ms Rechenzeit)
 
 ### EPEX Predictor (optional)
 
@@ -317,14 +319,13 @@ Wenn aktiviert, beeinflusst die EPEX-Prognose die Planung über einen **Terminal
 
 Das System ist auf AC-gekoppelte Speicher ausgelegt: Solarüberschuss fließt durchs Hausnetz und braucht die Ladegeräte, um in die Batterie zu kommen.
 
-| Solarüberschuss | Aktion |
+| Grid-Export | Aktion |
 |---|---|
-| ≥ 80% aller Ladegeräte | Alle Ladegeräte an |
-| ≥ 80% eines Ladegeräts | Größtes passendes an |
-| ≥ 100W (< 80% Ladegerät) | Kleinstes Ladegerät + Wechselrichter deckt Defizit |
-| < 100W | Idle (zu wenig Überschuss) |
+| < -100W (Export) | Nächsten Charger einschalten |
+| -100W bis +200W | PID-Inverter regelt Feinabstimmung |
+| > +200W (Import) | Letzten Charger ausschalten |
 
-Der **wahre Solarüberschuss** wird bei jedem Zyklus berechnet: gemessener Export + Leistung aktiver Ladegeräte + Wechselrichter-Einspeisung. So wird Oszillation verhindert.
+Kein Strom wird ins Netz verschenkt: Bei Grid-Export wird automatisch der nächste verfügbare Charger eingeschaltet. Bei zu viel Grid-Import wird der letzte Charger wieder abgeschaltet. Der PID-Inverter regelt die Nulleinspeisung dazwischen.
 
 **Opportunistisches Solar-Laden:** Auch bei Plan-Aktionen "Halten" und "Idle" wird Solarüberschuss automatisch mitgenommen. Kostenlose Solarenergie wird nie verschenkt – der Plan kontrolliert nur Netz-Laden und Entlade-Zeitpunkte.
 
@@ -366,6 +367,7 @@ Wenn der "Solar-Energie heute" Sensor konfiguriert ist, lernt die Integration au
 **Tägliche Kalibrierung (um 20:00):**
 - Vergleich Ist-Produktion vs. Forecast → Ratio (z.B. 8kWh / 10kWh = 0.8)
 - 14-Tage rollender Durchschnitt der Ratios = Korrekturfaktor
+- Vergleich erfolgt mit dem **Roh-Forecast** (Kalibrierungs- und Intraday-Faktor werden herausgerechnet um Zirkelschlüsse zu vermeiden)
 - Bereich: 0.3–3.0, persistent gespeichert
 
 **Intraday-Korrektur (ab 08:00, laufend):**
@@ -394,15 +396,24 @@ Beispiel: Forecast sagt 10 kWh, um 12:00 erst 2 kWh statt 4 kWh → Restprognose
 
 ## ePaper Dashboard (optional)
 
-Im Ordner `esphome/` liegt eine fertige ESPHome-Konfiguration für das **Seeed Studio XIAO 7.5" ePaper Panel** (800×480). Das Display zeigt:
+Im Ordner `esphome/` liegt eine fertige ESPHome-Konfiguration für ePaper-Displays. Unterstützte Boards:
 
-- SOC mit Betriebsmodus, Strompreis, Netzleistung, Verbrauch, aktuelle Aktion
-- Günstigstes und teuerstes Zeitfenster
-- 12h Preiskurve mit Min/Max-Markierungen
+| Board | Datei |
+|---|---|
+| Seeed XIAO ESP32-C3 | `boards/xiao_c3.yaml` |
+| TRMNL 7.5" OG DIY Kit (ESP32-S3) | `boards/trmnl_diy_s3.yaml` (inkl. Batterie-Anzeige) |
+
+Gemeinsames Dashboard-Layout in `dashboard-common.yaml`:
+- **Header:** Titel, Uhrzeit, Datum, Geräte-Akku (S3)
+- **Row 1:** SOC + Modus, Strompreis, Netzleistung, Verbrauchsprognose, Aktion
+- **Row 2:** Planzusammenfassung
+- **Row 3:** Solar-Leistung, Außentemperatur, Solar-Prognose, Solar heute, Netzbezug, Tageskosten
+- **Chart:** 12h Preisverlauf mit Entlade-Schraffur (Punktmuster) und Lade-Markierung (horizontale Linien)
 - Deep-Sleep alle 15 Minuten (Wake um :01, :16, :31, :46)
-- Nachtmodus 01:00-06:00 (ein langer Schlaf bis 06:01)
+- Nachtmodus 01:00-06:00
+- Deutsches Zahlenformat (Komma statt Punkt)
 
-Details: [esphome/README.md](esphome/README.md)
+Neues Display einrichten: `battery-epaper.yaml` kopieren, `device_name` + `board: !include` anpassen, Secrets ergänzen.
 
 ## Lizenz
 
