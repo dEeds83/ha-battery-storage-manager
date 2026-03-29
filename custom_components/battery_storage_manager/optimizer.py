@@ -485,8 +485,17 @@ def smooth_plan(
             block_prices = [hourly_data[i]["price"] for i in range(block_start, block_end)]
             avg_discharge_price = sum(block_prices) / len(block_prices) if block_prices else 0
 
-            # Max acceptable charge price: discharge must be profitable
-            max_charge_price = avg_discharge_price * efficiency - cycle_cost_eur
+            # Max acceptable charge price: the lesser of:
+            # 1. Profitability threshold (discharge must cover charge + costs)
+            # 2. Most expensive existing DP charge slot (don't add slots the
+            #    DP deliberately skipped as too expensive)
+            profit_threshold = avg_discharge_price * efficiency - cycle_cost_eur
+            existing_charge_prices = [
+                hourly_data[i]["price"] for i in range(n)
+                if actions[i] == "charge"
+            ]
+            dp_max_price = max(existing_charge_prices) if existing_charge_prices else profit_threshold
+            max_charge_price = min(profit_threshold, dp_max_price + 0.002)
 
             slots_needed = int(soc_gap / charge_pct_per_slot) + 1
 
