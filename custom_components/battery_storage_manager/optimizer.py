@@ -702,6 +702,58 @@ def smooth_plan(
             final_swaps, reverted,
         )
 
+    # Final Pass 5: re-run charge slot optimization after Pass 6 added
+    # new charge slots that may be more expensive than available later slots.
+    charge_blocks_final2: list[tuple[int, int]] = []
+    block_s = None
+    for i in range(n):
+        if actions[i] == "charge":
+            if block_s is None:
+                block_s = i
+        else:
+            if block_s is not None:
+                charge_blocks_final2.append((block_s, i - block_s))
+                block_s = None
+    if block_s is not None:
+        charge_blocks_final2.append((block_s, n - block_s))
+
+    final_shifted = 0
+    for cb_start, cb_len in charge_blocks_final2:
+        cb_end = cb_start + cb_len
+        available: list[tuple[float, int]] = []
+        for j in range(cb_end, n):
+            if actions[j] == "discharge":
+                break
+            if actions[j] in ("idle", "hold"):
+                available.append((hourly_data[j]["price"], j))
+        if not available:
+            continue
+
+        charge_slots = [
+            (hourly_data[i]["price"], i)
+            for i in range(cb_start, cb_end)
+            if actions[i] == "charge"
+        ]
+        charge_slots.sort(reverse=True)
+        available.sort()
+
+        avail_idx = 0
+        for c_price, c_idx in charge_slots:
+            if avail_idx >= len(available):
+                break
+            a_price, a_idx = available[avail_idx]
+            if a_price < c_price - 0.002:
+                actions[c_idx] = "idle"
+                actions[a_idx] = "charge"
+                final_shifted += 1
+                avail_idx += 1
+            else:
+                break
+
+    if final_shifted:
+        smoothed += final_shifted
+        _LOGGER.info("Final Pass 5: %d charge slots shifted to cheaper later slots", final_shifted)
+
     if smoothed:
         _LOGGER.info(
             "Plan smoothing: %d total adjustments",
