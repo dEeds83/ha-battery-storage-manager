@@ -391,45 +391,52 @@ def smooth_plan(
     if block_s is not None:
         charge_blocks_final.append((block_s, n - block_s))
 
+    # Pass 5: For each charge slot, check if a cheaper idle/hold slot
+    # exists AFTER the charge block (before next discharge). If so, swap
+    # them — charge later at a lower price, leave room for solar earlier.
     shifted = 0
     for cb_start, cb_len in charge_blocks_final:
         cb_end = cb_start + cb_len
-        cb_price = hourly_data[cb_start]["price"] if cb_start < n else 0
 
-        tail_slots: list[int] = []
+        # Collect available idle/hold slots after this charge block
+        # (up to next discharge block)
+        available: list[tuple[float, int]] = []  # (price, index)
         for j in range(cb_end, n):
             if actions[j] == "discharge":
                 break
             if actions[j] in ("idle", "hold"):
-                p = hourly_data[j]["price"]
-                if abs(p - cb_price) < 0.003:
-                    tail_slots.append(j)
-                elif p > cb_price + 0.003:
-                    break
+                available.append((hourly_data[j]["price"], j))
 
-        if not tail_slots:
+        if not available:
             continue
 
-        shift_count = min(len(tail_slots), cb_len)
-        if shift_count == 0:
-            continue
+        # For each charge slot (most expensive first), try to swap
+        # with a cheaper available slot
+        charge_slots = [
+            (hourly_data[i]["price"], i)
+            for i in range(cb_start, cb_end)
+            if actions[i] == "charge"
+        ]
+        charge_slots.sort(reverse=True)  # most expensive first
+        available.sort()  # cheapest first
 
-        slots_to_free = list(range(cb_start, cb_start + shift_count))
-        tail_slots.sort(reverse=True)
-        slots_to_fill = tail_slots[:shift_count]
-
-        for j in slots_to_free:
-            actions[j] = "idle"
-        for j in slots_to_fill:
-            actions[j] = "charge"
-        shifted += shift_count
-        _LOGGER.info(
-            "Pass 5: shifted %d charge slots later "
-            "(from t=%d to t=%d-%d, price %.1f ct)",
-            shift_count, cb_start,
-            min(slots_to_fill), max(slots_to_fill),
-            cb_price * 100,
-        )
+        avail_idx = 0
+        for c_price, c_idx in charge_slots:
+            if avail_idx >= len(available):
+                break
+            a_price, a_idx = available[avail_idx]
+            if a_price < c_price - 0.002:  # at least 0.2ct cheaper
+                actions[c_idx] = "idle"
+                actions[a_idx] = "charge"
+                shifted += 1
+                avail_idx += 1
+                _LOGGER.info(
+                    "Pass 5: swapped charge t=%d (%.1fct) → t=%d (%.1fct, %.1fct cheaper)",
+                    c_idx, c_price * 100, a_idx, a_price * 100,
+                    (c_price - a_price) * 100,
+                )
+            else:
+                break  # no more profitable swaps
 
     smoothed += shifted
 
