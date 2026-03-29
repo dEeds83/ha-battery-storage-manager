@@ -382,35 +382,76 @@ class DevicesMixin:
         _LOGGER.info("Solar charging: surplus=%.0fW, %s", surplus_w, active_str)
 
     async def _try_solar_opportunistic(self) -> bool:
-        """Check for solar surplus and charge opportunistically."""
-        true_surplus = self._calculate_true_solar_surplus()
-        if true_surplus is None or true_surplus <= 50:
+        """Prevent grid export by turning on chargers and adjusting inverter.
+
+        Simple rule: if we're exporting to the grid, use that energy.
+        1. If grid < -100W and a charger is off → turn it on
+        2. If grid > 200W and a charger is on → turn it off
+        3. PID handles inverter fine-tuning for zero-feed
+
+        No complex surplus calculation — just react to actual grid state.
+        """
+        if self._grid_power is None or self._battery_soc is None:
             return False
 
-        above_max_soc = (
-            self._battery_soc is not None and self._battery_soc >= self._max_soc
-        )
+        # Don't charge above max_soc with grid-assisted solar
+        # (pure solar above max_soc is handled separately if needed)
+        above_max = self._battery_soc >= self._max_soc
 
-        if above_max_soc:
-            min_charger = min(
-                (c["power"] for c in self._chargers if c["power"] > 0),
-                default=0,
+        active_chargers = [i for i, c in enumerate(self._chargers) if c["active"]]
+        inactive_chargers = [
+            i for i, c in enumerate(self._chargers)
+            if not c["active"] and c["power"] > 0
+        ]
+
+        if self._grid_power < -100 and inactive_chargers and not above_max:
+            # Exporting → turn on next charger to capture solar
+            next_idx = inactive_chargers[0]
+            _LOGGER.info(
+                "Grid export %.0fW → turning on charger C%d (%dW)",
+                abs(self._grid_power), next_idx + 1,
+                self._chargers[next_idx]["power"],
             )
-            if true_surplus >= min_charger * 0.8:
-                _LOGGER.debug(
-                    "Solar charge above max_soc: surplus=%.0fW (pure solar)",
-                    true_surplus,
-                )
-                await self._start_solar_charging(true_surplus)
-                return True
-            return False
+            await self.hass.services.async_call(
+                "switch", "turn_on",
+                {"entity_id": self._chargers[next_idx]["switch"]},
+            )
+            self._chargers[next_idx]["active"] = True
 
-        _LOGGER.debug(
-            "Opportunistic solar charge: surplus=%.0fW (grid=%.0fW)",
-            true_surplus, self._grid_power or 0,
-        )
-        await self._start_solar_charging(true_surplus)
-        return True
+            # Ensure inverter is on for PID zero-feed
+            if self._inverter_power_entity and not self._inverter_active:
+                if self._inverter_switch:
+                    await self.hass.services.async_call(
+                        "switch", "turn_on", {"entity_id": self._inverter_switch}
+                    )
+                self._inverter_active = True
+
+            self._operating_mode = MODE_SOLAR_CHARGING
+            return True
+
+        if active_chargers and self._operating_mode == MODE_SOLAR_CHARGING:
+            if self._grid_power > 200:
+                # Importing too much → turn off last charger
+                last_idx = active_chargers[-1]
+                _LOGGER.info(
+                    "Grid import %.0fW during solar charge → turning off C%d",
+                    self._grid_power, last_idx + 1,
+                )
+                await self.hass.services.async_call(
+                    "switch", "turn_off",
+                    {"entity_id": self._chargers[last_idx]["switch"]},
+                )
+                self._chargers[last_idx]["active"] = False
+                if not any(c["active"] for c in self._chargers):
+                    self._operating_mode = MODE_IDLE
+                return True
+
+            # PID zero-feed while solar charging
+            if self._inverter_power_entity:
+                await self._regulate_zero_feed()
+            return True
+
+        return False
 
     def _calculate_true_solar_surplus(self) -> float | None:
         """Calculate the true solar surplus available for charging.
@@ -427,31 +468,25 @@ class DevicesMixin:
         if self._solar_power is not None:
             if self._solar_power < 50:
                 return 0.0  # No meaningful solar production
-            # House consumption = grid import + solar - charger draw
-            # The inverter is NOT part of house consumption — it feeds
-            # FROM the battery, not from the house.
-            # grid_power = house - solar - inverter + chargers
-            # → house = grid_power + solar + inverter - chargers
-            # → surplus = solar - house = solar - grid - inverter + chargers
-            # But simpler: surplus is what's left after the house is fed.
-            # If grid < 0 (export), surplus = |grid| + charger_draw
-            # If grid > 0 (import), surplus = charger_draw - grid (if > 0)
-            # But with inverter active, grid reflects house - solar - inverter.
-            # So: house = grid + solar + inverter - chargers
-            #     surplus = solar - house = -grid - inverter + chargers
+
+            # When PID inverter is active, the grid-based formula
+            # (-grid - inverter + chargers) degenerates because PID
+            # keeps grid≈0, making it just (chargers - inverter).
+            # This causes feedback oscillation.
+            #
+            # Instead, use grid_power directly as surplus indicator:
+            # - No chargers/inverter active: surplus = max(0, -grid_power)
+            # - Chargers active: surplus = active_draw + max(0, -grid_power)
+            #   (what chargers already consume + what's still exported)
+            # - Inverter active (PID): same logic, inverter compensates
+            #   house consumption so grid reflects solar vs (house+chargers)
             active_draw = sum(
                 c.get("measured_power") or c["power"]
                 for c in self._chargers if c["active"]
             )
-            inverter_w = 0
-            if self._inverter_active:
-                inverter_w = self._inverter_actual_power or self._inverter_target_power or 0
-            # Solar surplus = solar production that exceeds house consumption.
-            # house_consumption = grid_import + solar + inverter - charger_draw
-            # solar_surplus = solar - house_consumption
-            #               = solar - (grid + solar + inverter - chargers)
-            #               = -grid - inverter + chargers
-            surplus = -self._grid_power - inverter_w + active_draw
+            # What the chargers already capture + what's still exported
+            export = max(0, -self._grid_power)
+            surplus = active_draw + export
             return max(0, surplus)
 
         # Fallback: grid-based inference when no solar sensor configured.
@@ -509,29 +544,20 @@ class DevicesMixin:
             _LOGGER.debug("Plan action: DISCHARGE")
             await self._start_discharging()
         elif action == "solar_charge":
-            true_surplus = self._calculate_true_solar_surplus()
-            if (
-                true_surplus is not None
-                and true_surplus > 50
-            ):
-                _LOGGER.debug(
-                    "Plan action: SOLAR_CHARGE - charging from solar surplus "
-                    "(grid_power=%.0fW, true_surplus=%.0fW)",
-                    self._grid_power, true_surplus,
-                )
-                await self._start_solar_charging(true_surplus)
-            elif (
-                self._allow_discharging
-                and self._grid_power is not None
-                and self._grid_power > 50
-                and not any(c["active"] for c in self._chargers)
-                and self._battery_soc > self._min_soc
-            ):
-                _LOGGER.debug("Plan action: SOLAR_CHARGE - discharging to cover grid import")
-                await self._start_discharging()
-            else:
-                _LOGGER.debug("Plan action: SOLAR_CHARGE - idle (no surplus/full)")
-                await self._set_mode_idle()
+            # Solar charge action: use the same grid-based logic
+            if not await self._try_solar_opportunistic():
+                if (
+                    self._allow_discharging
+                    and self._grid_power is not None
+                    and self._grid_power > 50
+                    and not any(c["active"] for c in self._chargers)
+                    and self._battery_soc > self._min_soc
+                ):
+                    _LOGGER.debug("Plan action: SOLAR_CHARGE - discharging to cover grid import")
+                    await self._start_discharging()
+                else:
+                    _LOGGER.debug("Plan action: SOLAR_CHARGE - idle")
+                    await self._set_mode_idle()
         elif action in ("hold", "idle"):
             if await self._try_solar_opportunistic():
                 _LOGGER.debug(
