@@ -404,8 +404,18 @@ class DevicesMixin:
             if not c["active"] and c["power"] > 0
         ]
 
-        if self._grid_power < -100 and inactive_chargers and not above_max:
-            # Exporting → turn on next charger to capture solar
+        # Only turn on chargers if solar is actually producing enough
+        # to justify it. Without this check, inverter PID overshoot
+        # (grid < -100) would trigger charger activation at peak prices.
+        solar_w = self._solar_power or 0
+        min_charger_power = min(
+            (c["power"] for c in self._chargers if c["power"] > 0),
+            default=440,
+        )
+        solar_sufficient = solar_w > min_charger_power * 0.3
+
+        if self._grid_power < -100 and inactive_chargers and not above_max and solar_sufficient:
+            # Exporting with real solar production → turn on next charger
             next_idx = inactive_chargers[0]
             _LOGGER.info(
                 "Grid export %.0fW → turning on charger C%d (%dW)",
@@ -430,6 +440,21 @@ class DevicesMixin:
             return True
 
         if active_chargers and self._operating_mode == MODE_SOLAR_CHARGING:
+            if not solar_sufficient:
+                # Solar dropped below threshold → turn off all chargers
+                _LOGGER.info(
+                    "Solar %.0fW too low for chargers → turning off all",
+                    solar_w,
+                )
+                for idx in active_chargers:
+                    await self.hass.services.async_call(
+                        "switch", "turn_off",
+                        {"entity_id": self._chargers[idx]["switch"]},
+                    )
+                    self._chargers[idx]["active"] = False
+                self._operating_mode = MODE_IDLE
+                return True
+
             if self._grid_power > 200:
                 # Importing too much → turn off last charger
                 last_idx = active_chargers[-1]
