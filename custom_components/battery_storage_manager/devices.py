@@ -187,45 +187,46 @@ class DevicesMixin:
             await self._regulate_zero_feed()
 
     async def _regulate_zero_feed(self) -> None:
-        """PID-regulated zero-feed control for the inverter."""
-        if self._grid_power is None:
+        """PID-regulated zero-feed control for the inverter.
+
+        Uses EMA-smoothed grid power to dampen oscillation from
+        toggle devices (fridge, heat pump, etc.).
+        """
+        # Use smoothed grid power for PID to avoid chasing toggle devices
+        grid = self._grid_power_ema if self._grid_power_ema is not None else self._grid_power
+        if grid is None:
             _LOGGER.debug("No grid power data available for zero-feed regulation")
             return
 
         max_power = self._inverter_power or 800
 
-        if self._grid_power < -10:
+        if grid < -10:
             # Exporting to grid — reduce inverter proportionally.
             # Use the PID setpoint approach instead of subtracting raw
             # export, to avoid oscillation and slamming target to 0.
-            export_w = abs(self._grid_power)
-            # Target should be: current_target minus overshoot, but keep
-            # at least 50W so the inverter doesn't shut down completely.
+            export_w = abs(grid)
             new_target = self._inverter_target_power - export_w * 0.5
-            # In discharge mode keep min 50W to prevent shutdown.
-            # In solar_charging mode allow 0W (solar covers everything).
             export_min = 50 if self._operating_mode == MODE_DISCHARGING else 0
             new_target = max(export_min, new_target)
             _LOGGER.info(
-                "Zero-feed: EXPORT %.0fW -> reducing inverter %.0f -> %.0fW",
-                export_w, self._inverter_target_power, new_target,
+                "Zero-feed: EXPORT %.0fW (raw %.0fW) -> reducing inverter %.0f -> %.0fW",
+                export_w, abs(self._grid_power or 0),
+                self._inverter_target_power, new_target,
             )
-            # Don't reset PID integral — we need the accumulated history
-            # to ramp back up quickly when house consumption increases.
-        elif self._grid_power <= 10:
+        elif grid <= 10:
             return
         else:
             setpoint = 25
-            error = self._grid_power - setpoint
+            error = grid - setpoint
 
             if error > 100:
                 new_target = self._inverter_target_power + error * 0.9
                 _LOGGER.debug(
-                    "Zero-feed FAST: import=%.0fW -> inverter=%.0fW",
-                    self._grid_power, new_target,
+                    "Zero-feed FAST: import=%.0fW (raw %.0fW) -> inverter=%.0fW",
+                    grid, self._grid_power or 0, new_target,
                 )
                 self._pid_integral = 0.0
-                self._pid_last_error = None  # reset D-term to avoid spike
+                self._pid_last_error = None
             else:
                 p_term = self._pid_kp * error
 
@@ -241,8 +242,8 @@ class DevicesMixin:
 
                 new_target = self._inverter_target_power + p_term + i_term + d_term
                 _LOGGER.debug(
-                    "Zero-feed PID: grid=%.0fW P=%.0f I=%.0f D=%.0f -> %.0fW",
-                    self._grid_power, p_term, i_term, d_term, new_target,
+                    "Zero-feed PID: grid=%.0fW (raw %.0fW) P=%.0f I=%.0f D=%.0f -> %.0fW",
+                    grid, self._grid_power or 0, p_term, i_term, d_term, new_target,
                 )
 
         # During discharge, keep at least 50W to prevent the inverter from

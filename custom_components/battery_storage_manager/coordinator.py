@@ -257,6 +257,7 @@ class BatteryStorageCoordinator(
         self._price_forecast: list[dict] = []
         self._battery_soc: float | None = None
         self._grid_power: float | None = None  # positive = import, negative = export
+        self._grid_power_ema: float | None = None  # EMA-smoothed grid power
         self._estimated_savings: float = 0.0
         self._unsub_listeners: list = []
         self._inverter_active = False
@@ -485,6 +486,19 @@ class BatteryStorageCoordinator(
             self._grid_power = -production
         else:
             self._grid_power = None
+
+        # Asymmetric EMA smoothing for PID:
+        # - Fast down (α=0.7): reduce inverter quickly when load drops
+        # - Slow up (α=0.2): dampen spikes from toggle devices (fridge etc.)
+        if self._grid_power is not None:
+            if self._grid_power_ema is None:
+                self._grid_power_ema = self._grid_power
+            else:
+                alpha = 0.2 if self._grid_power > self._grid_power_ema else 0.85
+                self._grid_power_ema = (
+                    alpha * self._grid_power
+                    + (1 - alpha) * self._grid_power_ema
+                )
 
         # Inverter actual power
         if self._inverter_actual_power_entity:
