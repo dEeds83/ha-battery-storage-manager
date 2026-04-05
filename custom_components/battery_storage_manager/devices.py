@@ -415,7 +415,10 @@ class DevicesMixin:
         )
         solar_sufficient = solar_w > min_charger_power * 0.3
 
-        if self._grid_power < -100 and inactive_chargers and not above_max and solar_sufficient:
+        # Allow solar charging above max_soc — free energy should never
+        # be wasted. The above_max check only blocks grid-assisted charging
+        # (handled by the DP plan via grid_max_soc).
+        if self._grid_power < -100 and inactive_chargers and solar_sufficient:
             # Exporting with real solar production → turn on next charger
             next_idx = inactive_chargers[0]
             _LOGGER.info(
