@@ -306,10 +306,7 @@ class SolarMixin:
                 for dt_obj, wh in wh_period.items():
                     try:
                         if isinstance(dt_obj, datetime):
-                            if dt_obj.tzinfo is None:
-                                from zoneinfo import ZoneInfo
-                                dt_obj = dt_obj.replace(tzinfo=ZoneInfo("UTC"))
-                            local_dt = dt_util.as_local(dt_obj)
+                            local_dt = dt_util.as_local(dt_obj) if dt_obj.tzinfo is not None else dt_obj
                             hour_key = local_dt.strftime("%Y-%m-%dT%H")
                         else:
                             hour_key = self._to_hour_key(str(dt_obj))

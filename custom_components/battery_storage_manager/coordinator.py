@@ -1360,15 +1360,13 @@ class BatteryStorageCoordinator(
         Always normalizes to local time so that keys from different sources
         (Tibber in UTC+1, Forecast.Solar in UTC, etc.) match correctly.
 
-        Naive datetime strings (no timezone) are assumed to be UTC, since
-        Forecast.Solar delivers UTC timestamps without timezone suffix.
+        Naive datetime strings (no timezone) are treated as local time,
+        since Forecast.Solar's watt_hours_period attribute keys are
+        local-time strings when accessed via the HA state API.
         """
-        from zoneinfo import ZoneInfo
         dt = datetime.fromisoformat(str(dt_str))
-        if dt.tzinfo is None:
-            # Assume UTC for naive timestamps (Forecast.Solar convention)
-            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-        dt = dt_util.as_local(dt)
+        if dt.tzinfo is not None:
+            dt = dt_util.as_local(dt)
         return dt.strftime("%Y-%m-%dT%H")
 
     def _find_cheap_hours(self, count: int = 4) -> list[dict]:
@@ -1655,6 +1653,9 @@ class BatteryStorageCoordinator(
             "solar_headroom_pct": self._solar_headroom_pct,
             "solar_power_w": self._solar_power,
             "solar_surplus_w": self._calculate_true_solar_surplus(),
+            "solar_forecast_keys": dict(sorted(
+                ((k, v) for k, v in self._solar_forecast.items()),
+            )[:8]) if self._solar_forecast else None,
             "battery_capacity_kwh": self._battery_capacity,
             "allow_grid_charging": self._allow_grid_charging,
             "allow_discharging": self._allow_discharging,
