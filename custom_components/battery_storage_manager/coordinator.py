@@ -1359,10 +1359,16 @@ class BatteryStorageCoordinator(
 
         Always normalizes to local time so that keys from different sources
         (Tibber in UTC+1, Forecast.Solar in UTC, etc.) match correctly.
+
+        Naive datetime strings (no timezone) are assumed to be UTC, since
+        Forecast.Solar delivers UTC timestamps without timezone suffix.
         """
+        from zoneinfo import ZoneInfo
         dt = datetime.fromisoformat(str(dt_str))
-        if dt.tzinfo is not None:
-            dt = dt_util.as_local(dt)
+        if dt.tzinfo is None:
+            # Assume UTC for naive timestamps (Forecast.Solar convention)
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        dt = dt_util.as_local(dt)
         return dt.strftime("%Y-%m-%dT%H")
 
     def _find_cheap_hours(self, count: int = 4) -> list[dict]:
