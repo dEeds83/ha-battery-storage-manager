@@ -715,7 +715,10 @@ class BatteryStorageCoordinator(
         # Positive current = charging, negative = discharging
         changed = False
 
-        if self._operating_mode in (MODE_CHARGING, MODE_SOLAR_CHARGING) and battery_power_w > 10:
+        # Only track efficiency during grid charging.  Solar charging has
+        # too much fluctuation (clouds, surplus variations) to give stable
+        # efficiency readings.
+        if self._operating_mode == MODE_CHARGING and battery_power_w > 10:
             grid_power_w = sum(
                 c.get("measured_power") or c["power"]
                 for c in self._chargers if c["active"]
