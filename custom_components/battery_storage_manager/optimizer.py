@@ -97,7 +97,7 @@ def solve_dp(
     # Terminal value
     all_prices = sorted(h["price"] for h in hourly_data)
     median_price = all_prices[len(all_prices) // 2] if all_prices else 0.25
-    uncertainty_discount = 0.7
+    uncertainty_discount = 0.85
     base_tv = max(0.0, median_price * efficiency * uncertainty_discount - half_cycle_eur)
     epex_tv = epex_terminal_value_per_kwh
     tv_per_kwh = max(base_tv, epex_tv)
