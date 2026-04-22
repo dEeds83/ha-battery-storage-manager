@@ -418,19 +418,26 @@ class DevicesMixin:
         # Allow solar charging above max_soc — free energy should never
         # be wasted. The above_max check only blocks grid-assisted charging
         # (handled by the DP plan via grid_max_soc).
-        if self._grid_power < -100 and inactive_chargers and solar_sufficient:
-            # Exporting with real solar production → turn on next charger
+        max_inverter = self._inverter_power or 800
+        next_charger_power = (
+            self._chargers[inactive_chargers[0]]["power"]
+            if inactive_chargers else 0
+        )
+        # Turn on next charger only if export exceeds ≥ 80% of its power.
+        # Prevents toggling when inverter can already cover the small deficit.
+        turn_on_threshold = max(100, int(next_charger_power * 0.8))
+        if (self._grid_power < -turn_on_threshold
+                and inactive_chargers and solar_sufficient):
             next_idx = inactive_chargers[0]
             _LOGGER.info(
-                "Grid export %.0fW → turning on charger C%d (%dW)",
-                abs(self._grid_power), next_idx + 1,
-                self._chargers[next_idx]["power"],
+                "Grid export %.0fW ≥ %dW → turning on charger C%d (%dW)",
+                abs(self._grid_power), turn_on_threshold,
+                next_idx + 1, next_charger_power,
             )
-            await self.hass.services.async_call(
-                "switch", "turn_on",
-                {"entity_id": self._chargers[next_idx]["switch"]},
+            await self._apply_charger_states(
+                {i for i, c in enumerate(self._chargers) if c["active"]}
+                | {next_idx}
             )
-            self._chargers[next_idx]["active"] = True
 
             # Ensure inverter is on for PID zero-feed
             if self._inverter_power_entity and not self._inverter_active:
@@ -450,27 +457,28 @@ class DevicesMixin:
                     "Solar %.0fW too low for chargers → turning off all",
                     solar_w,
                 )
-                for idx in active_chargers:
-                    await self.hass.services.async_call(
-                        "switch", "turn_off",
-                        {"entity_id": self._chargers[idx]["switch"]},
-                    )
-                    self._chargers[idx]["active"] = False
-                self._operating_mode = MODE_IDLE
+                await self._apply_charger_states(set())
+                if not any(c["active"] for c in self._chargers):
+                    self._operating_mode = MODE_IDLE
                 return True
 
-            if self._grid_power > 200:
-                # Importing too much → turn off last charger
+            # Turn off last charger only if grid import exceeds inverter
+            # headroom. Below that, let PID zero-feed compensate the deficit
+            # instead of toggling the charger (prevents oscillation).
+            inverter_headroom = max(
+                0, max_inverter - (self._inverter_target_power or 0)
+            )
+            turn_off_threshold = inverter_headroom + 200
+            if self._grid_power > turn_off_threshold:
                 last_idx = active_chargers[-1]
                 _LOGGER.info(
-                    "Grid import %.0fW during solar charge → turning off C%d",
-                    self._grid_power, last_idx + 1,
+                    "Grid import %.0fW > inverter headroom %.0fW+200 → "
+                    "turning off C%d",
+                    self._grid_power, inverter_headroom, last_idx + 1,
                 )
-                await self.hass.services.async_call(
-                    "switch", "turn_off",
-                    {"entity_id": self._chargers[last_idx]["switch"]},
+                await self._apply_charger_states(
+                    set(active_chargers) - {last_idx}
                 )
-                self._chargers[last_idx]["active"] = False
                 if not any(c["active"] for c in self._chargers):
                     self._operating_mode = MODE_IDLE
                 return True

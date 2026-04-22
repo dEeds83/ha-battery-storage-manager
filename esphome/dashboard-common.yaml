@@ -541,11 +541,11 @@ display:
           }
         }
         // Draw hatched columns for discharge (D) and filled for charge (C)
+        // Divide chart into equal segments, one per data point
+        float seg_w = (float)chart_w / price_count;
         for (int i = 0; i < action_count && i < price_count; i++) {
-          float x1 = chart_left + (float)i / (price_count - 1) * chart_w - chart_w / (price_count - 1) / 2;
-          float x2 = chart_left + (float)i / (price_count - 1) * chart_w + chart_w / (price_count - 1) / 2;
-          if (i == 0) x1 = chart_left;
-          if (i == price_count - 1) x2 = chart_right;
+          float x1 = chart_left + i * seg_w;
+          float x2 = chart_left + (i + 1) * seg_w;
           int ix1 = (int)x1, ix2 = (int)x2;
           if (actions[i] == 'D') {
             // Diagonal hatching for discharge

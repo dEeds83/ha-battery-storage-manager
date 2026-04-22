@@ -9,4 +9,5 @@ __pycache__/
 
 # ESPHome secrets (enthält WiFi-Passwörter, API-Keys)
 esphome/secrets.yaml
+esphome/battery-epaper-az.yaml
 .mcp.json
