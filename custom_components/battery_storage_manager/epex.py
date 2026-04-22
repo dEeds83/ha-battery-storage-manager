@@ -120,13 +120,14 @@ class EpexMixin:
             })
 
         predicted_prices = sorted(max(0, a + b * p["total"]) for p in epex_future)
-        median_future = predicted_prices[len(predicted_prices) // 2]
+        p75_idx = max(0, min(len(predicted_prices) - 1, int(len(predicted_prices) * 0.75)))
+        p75_future = predicted_prices[p75_idx]
         efficiency = self._battery_efficiency
         half_cycle = self._cycle_cost / 100 / 2
         uncertainty_discount = 0.8
         self._epex_terminal_value_per_kwh = max(
             0.0,
-            median_future * efficiency * uncertainty_discount - half_cycle
+            p75_future * efficiency * uncertainty_discount - half_cycle
         )
 
         epex_sig = f"{len(epex_future)}:{a:.4f}:{b:.4f}:{self._epex_terminal_value_per_kwh:.4f}"
@@ -135,7 +136,7 @@ class EpexMixin:
             tv_ct = self._epex_terminal_value_per_kwh * 100
             msg = (
                 f"EPEX Terminal-Value: {self._fmt_ct(tv_ct)} ct/kWh "
-                f"(Median Zukunft {self._fmt_ct(median_future * 100)} ct, "
+                f"(P75 Zukunft {self._fmt_ct(p75_future * 100)} ct, "
                 f"Unsicherheit 20%, "
                 f"Regression: {self._fmt_ct(a * 100)} ct + {b:.2f}\u00d7EPEX)"
             )
