@@ -313,8 +313,9 @@ class DevicesMixin:
         indexed = [(i, c) for i, c in enumerate(self._chargers) if c["power"] > 0]
         indexed.sort(key=lambda x: x[1]["power"], reverse=True)
 
-        above_max = self._battery_soc is not None and self._battery_soc >= self._max_soc
-        has_inverter = bool(self._inverter_power_entity) and not above_max
+        # SOC-Limit gilt nur für Netzladen (DP-Plan via grid_max_soc), nicht
+        # für Solar-Überschuss. WR-Hilfe auch oberhalb max_soc erlaubt.
+        has_inverter = bool(self._inverter_power_entity)
         max_inverter = self._inverter_power or 800
 
         # Select chargers: add if surplus covers >= 80% of charger power,
@@ -395,10 +396,6 @@ class DevicesMixin:
         if self._grid_power is None or self._battery_soc is None:
             return False
 
-        # Don't charge above max_soc with grid-assisted solar
-        # (pure solar above max_soc is handled separately if needed)
-        above_max = self._battery_soc >= self._max_soc
-
         active_chargers = [i for i, c in enumerate(self._chargers) if c["active"]]
         inactive_chargers = [
             i for i, c in enumerate(self._chargers)
@@ -416,23 +413,37 @@ class DevicesMixin:
         solar_sufficient = solar_w > min_charger_power * 0.3
 
         # Allow solar charging above max_soc — free energy should never
-        # be wasted. The above_max check only blocks grid-assisted charging
-        # (handled by the DP plan via grid_max_soc).
+        # be wasted. SOC-Limit gilt nur für Netzladen (DP-Plan via
+        # grid_max_soc), nicht für Solar-Überschuss.
         max_inverter = self._inverter_power or 800
+        has_inverter = bool(self._inverter_power_entity)
         next_charger_power = (
             self._chargers[inactive_chargers[0]]["power"]
             if inactive_chargers else 0
         )
-        # Turn on next charger only if export exceeds ≥ 80% of its power.
-        # Prevents toggling when inverter can already cover the small deficit.
-        turn_on_threshold = max(100, int(next_charger_power * 0.8))
-        if (self._grid_power < -turn_on_threshold
-                and inactive_chargers and solar_sufficient):
+        eff = getattr(self, "_battery_efficiency", 0.85) or 0.85
+        # Net-gain threshold: export > power × (1-eff)/(2-eff).
+        # With eff=0.85: ~13% of charger power. Below that, WR-Hilfe kostet
+        # mehr als sie einbringt.
+        min_export_netgain = int(next_charger_power * (1 - eff) / (2 - eff))
+        export_w = max(0, -self._grid_power)
+
+        # Enable turn-on when:
+        #  a) Export ≥ 80% charger → direct solar charging, or
+        #  b) Export ≥ net-gain threshold AND WR available AND deficit ≤ WR max
+        #     → round-trip via WR (battery gains net energy)
+        direct_ok = export_w >= next_charger_power * 0.8
+        deficit = next_charger_power - export_w
+        wr_ok = (
+            has_inverter and export_w >= min_export_netgain
+            and deficit <= max_inverter
+        )
+        if (inactive_chargers and solar_sufficient and (direct_ok or wr_ok)):
             next_idx = inactive_chargers[0]
+            reason = "direct" if direct_ok else f"WR-assist (deficit {deficit:.0f}W)"
             _LOGGER.info(
-                "Grid export %.0fW ≥ %dW → turning on charger C%d (%dW)",
-                abs(self._grid_power), turn_on_threshold,
-                next_idx + 1, next_charger_power,
+                "Grid export %.0fW → turning on charger C%d (%dW) [%s]",
+                export_w, next_idx + 1, next_charger_power, reason,
             )
             await self._apply_charger_states(
                 {i for i, c in enumerate(self._chargers) if c["active"]}
