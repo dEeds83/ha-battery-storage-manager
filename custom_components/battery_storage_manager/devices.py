@@ -462,19 +462,33 @@ class DevicesMixin:
                     self._operating_mode = MODE_IDLE
                 return True
 
-            # Turn off last charger only if grid import exceeds inverter
-            # headroom. Below that, let PID zero-feed compensate the deficit
-            # instead of toggling the charger (prevents oscillation).
-            inverter_headroom = max(
-                0, max_inverter - (self._inverter_target_power or 0)
-            )
-            turn_off_threshold = inverter_headroom + 200
-            if self._grid_power > turn_off_threshold:
-                last_idx = active_chargers[-1]
+            # Turn off last charger if inverter compensation exceeds its
+            # power draw. PID keeps grid≈0, so grid_power is not useful as
+            # signal. Instead: if inverter discharges more than the last
+            # charger consumes, we're round-tripping battery energy through
+            # the house (with efficiency losses) — turn charger off.
+            last_idx = active_chargers[-1]
+            last_power = self._chargers[last_idx]["power"]
+            inverter_tp = self._inverter_target_power or 0
+            # Hysteresis margin (50W) to prevent toggling at boundary.
+            if inverter_tp > last_power + 50:
                 _LOGGER.info(
-                    "Grid import %.0fW > inverter headroom %.0fW+200 → "
+                    "Inverter %.0fW > C%d draw %dW+50 → round-trip loss, "
                     "turning off C%d",
-                    self._grid_power, inverter_headroom, last_idx + 1,
+                    inverter_tp, last_idx + 1, last_power, last_idx + 1,
+                )
+                await self._apply_charger_states(
+                    set(active_chargers) - {last_idx}
+                )
+                if not any(c["active"] for c in self._chargers):
+                    self._operating_mode = MODE_IDLE
+                return True
+
+            # Fallback: hard grid import (PID saturated) → also turn off.
+            if self._grid_power > max_inverter + 200:
+                _LOGGER.info(
+                    "Grid import %.0fW > inverter max %dW+200 → turning off C%d",
+                    self._grid_power, max_inverter, last_idx + 1,
                 )
                 await self._apply_charger_states(
                     set(active_chargers) - {last_idx}
