@@ -168,12 +168,7 @@ class DevicesMixin:
                 self._current_price or 0,
             )
 
-            for charger in self._chargers:
-                if charger["switch"]:
-                    await self.hass.services.async_call(
-                        "switch", "turn_off", {"entity_id": charger["switch"]}
-                    )
-                    charger["active"] = False
+            await self._apply_charger_states(set())
 
             if self._inverter_switch:
                 await self.hass.services.async_call(
@@ -450,8 +445,18 @@ class DevicesMixin:
                 | {next_idx}
             )
 
-            # Ensure inverter is on for PID zero-feed
-            if self._inverter_power_entity and not self._inverter_active:
+            # Only set SOLAR_CHARGING + WR on if charger actually turned on
+            # (hysteresis may have blocked). Otherwise leave state untouched
+            # so caller can retry next tick.
+            if not self._chargers[next_idx]["active"]:
+                _LOGGER.debug(
+                    "Charger C%d turn-on blocked (hysteresis) — skip mode change",
+                    next_idx + 1,
+                )
+                return False
+
+            # Ensure inverter is on for PID zero-feed (only needed for WR-assist)
+            if wr_ok and self._inverter_power_entity and not self._inverter_active:
                 if self._inverter_switch:
                     await self.hass.services.async_call(
                         "switch", "turn_on", {"entity_id": self._inverter_switch}
@@ -600,9 +605,14 @@ class DevicesMixin:
                 _LOGGER.debug("Plan action: DISCHARGE skipped (discharging disabled)")
                 await self._set_mode_idle()
                 return
-            # Solar surplus check is handled globally by the coordinator
-            # calling _try_solar_opportunistic() after each action, using
-            # the solar power sensor for accurate surplus detection.
+            # Solar-Export hat Vorrang vor Discharge: erst opportunistic
+            # prüfen, nur wenn nix zu absorbieren → discharge.
+            if (self._grid_power is not None and self._grid_power < -50
+                    and await self._try_solar_opportunistic()):
+                _LOGGER.debug(
+                    "Plan DISCHARGE overridden by solar surplus absorption"
+                )
+                return
             _LOGGER.debug("Plan action: DISCHARGE")
             await self._start_discharging()
         elif action == "solar_charge":
