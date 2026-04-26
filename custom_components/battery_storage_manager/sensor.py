@@ -227,7 +227,11 @@ class GridPowerSensor(BatteryStorageBaseSensor):
 
 
 class ChargerStatusSensor(BatteryStorageBaseSensor):
-    """Sensor showing charger N status (dynamically created per charger)."""
+    """Sensor showing charger N status (dynamically created per charger).
+
+    For switch-type chargers: reports "Aktiv"/"Inaktiv".
+    For dimmer-type chargers: reports the current target power in W.
+    """
 
     _attr_icon = "mdi:battery-charging"
 
@@ -240,22 +244,47 @@ class ChargerStatusSensor(BatteryStorageBaseSensor):
             f"Ladegerät {num} Status",
         )
 
-    @property
-    def native_value(self) -> str:
+    def _charger(self) -> dict | None:
         if self.coordinator.data:
             chargers = self.coordinator.data.get("chargers", [])
             if self._charger_index < len(chargers):
-                return "Aktiv" if chargers[self._charger_index].get("active") else "Inaktiv"
-        return "Inaktiv"
+                return chargers[self._charger_index]
+        return None
+
+    @property
+    def native_value(self):
+        c = self._charger()
+        if c is None:
+            return "Inaktiv"
+        if c.get("type") == "dimmer":
+            return round(c.get("target_power") or 0)
+        return "Aktiv" if c.get("active") else "Inaktiv"
+
+    @property
+    def native_unit_of_measurement(self):
+        c = self._charger()
+        if c and c.get("type") == "dimmer":
+            return "W"
+        return None
 
     @property
     def extra_state_attributes(self):
-        if self.coordinator.data:
-            chargers = self.coordinator.data.get("chargers", [])
-            if self._charger_index < len(chargers):
-                c = chargers[self._charger_index]
-                return {"power_w": c.get("power", 0), "switch": c.get("switch", "")}
-        return {}
+        c = self._charger()
+        if c is None:
+            return {}
+        attrs = {
+            "power_w": c.get("power", 0),
+            "switch": c.get("switch", ""),
+            "type": c.get("type", "switch"),
+        }
+        if c.get("type") == "dimmer":
+            attrs.update({
+                "target_power": round(c.get("target_power") or 0),
+                "actual_power": round(c.get("measured_power") or 0),
+                "min_power": c.get("min_power", 0),
+                "max_power": c.get("power", 0),
+            })
+        return attrs
 
 
 class InverterStatusSensor(BatteryStorageBaseSensor):

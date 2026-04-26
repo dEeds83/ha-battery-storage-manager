@@ -28,6 +28,8 @@ from .const import (
     ATTR_OPERATING_MODE,
     ATTR_PLAN_SUMMARY,
     ATTR_STRATEGY,
+    CHARGER_TYPE_DIMMER,
+    CHARGER_TYPE_SWITCH,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_CURRENT_ENTITY,
     CONF_BATTERY_CYCLE_COST,
@@ -138,15 +140,10 @@ class BatteryStorageCoordinator(
         self._pulse_consumption_entity = self._config.get(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, "")
         self._pulse_production_entity = self._config.get(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, "")
 
-        # Chargers: list of {"switch": entity_id, "power": int, "power_entity": str, "active": bool}
-        self._chargers: list[dict] = []
-        for c in self._config.get(CONF_CHARGERS, []):
-            self._chargers.append({
-                "switch": c.get("switch", ""),
-                "power": c.get("power", 0),
-                "power_entity": c.get("power_entity", ""),
-                "active": False,
-            })
+        # Chargers: list of {"switch", "power", "power_entity", "type", "min_power", "active", ...}
+        self._chargers: list[dict] = [
+            self._build_charger_entry(c) for c in self._config.get(CONF_CHARGERS, [])
+        ]
 
         self._inverter_switch = self._config.get(CONF_INVERTER_FEED_SWITCH, "")
         self._inverter_power = self._config.get(CONF_INVERTER_FEED_POWER, 0)
@@ -410,6 +407,26 @@ class BatteryStorageCoordinator(
 
         return self._build_data()
 
+    @staticmethod
+    def _build_charger_entry(c: dict) -> dict:
+        """Normalize a CONF_CHARGERS dict into the runtime per-charger dict."""
+        return {
+            "switch": c.get("switch", ""),
+            "power": c.get("power", 0),
+            "power_entity": c.get("power_entity", ""),
+            "actual_power_entity": c.get("actual_power_entity", ""),
+            "type": c.get("type", CHARGER_TYPE_SWITCH),
+            "min_power": c.get("min_power", 0),
+            "active": False,
+            "target_power": 0.0,
+            "measured_power": None,
+        }
+
+    @property
+    def is_dimmer_setup(self) -> bool:
+        """True if the configured charger is a single dimmer."""
+        return any(c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers)
+
     def _read_sensor_states(self) -> None:
         """Read current sensor values from Home Assistant."""
         # Current electricity price
@@ -533,11 +550,16 @@ class BatteryStorageCoordinator(
             else:
                 self._outside_temp = None
 
-        # Read measured charger power from per-charger power sensors
+        # Read measured charger power from per-charger power sensors.
+        # For dimmer: prefer actual_power_entity (separate sensor); fall back
+        # to power_entity (number setpoint) which equals target.
         for c in self._chargers:
-            power_entity = c.get("power_entity", "")
-            if power_entity:
-                cp_state = self.hass.states.get(power_entity)
+            if c.get("type") == CHARGER_TYPE_DIMMER:
+                read_entity = c.get("actual_power_entity", "") or c.get("power_entity", "")
+            else:
+                read_entity = c.get("power_entity", "")
+            if read_entity:
+                cp_state = self.hass.states.get(read_entity)
                 if cp_state and cp_state.state not in ("unknown", "unavailable"):
                     try:
                         c["measured_power"] = abs(float(cp_state.state))
@@ -1529,15 +1551,9 @@ class BatteryStorageCoordinator(
             CONF_TIBBER_PULSE_PRODUCTION_ENTITY, self._pulse_production_entity
         )
         if CONF_CHARGERS in options:
-            new_chargers = []
-            for c in options[CONF_CHARGERS]:
-                new_chargers.append({
-                    "switch": c.get("switch", ""),
-                    "power": c.get("power", 0),
-                    "power_entity": c.get("power_entity", ""),
-                    "active": False,
-                })
-            self._chargers = new_chargers
+            self._chargers = [
+                self._build_charger_entry(c) for c in options[CONF_CHARGERS]
+            ]
         self._inverter_switch = options.get(
             CONF_INVERTER_FEED_SWITCH, self._inverter_switch
         )
@@ -1641,6 +1657,9 @@ class BatteryStorageCoordinator(
                     "index": i, "switch": c["switch"], "power": c["power"],
                     "active": c["active"],
                     "measured_power": c.get("measured_power"),
+                    "type": c.get("type", CHARGER_TYPE_SWITCH),
+                    "target_power": c.get("target_power", 0.0),
+                    "min_power": c.get("min_power", 0),
                 }
                 for i, c in enumerate(self._chargers)
             ],

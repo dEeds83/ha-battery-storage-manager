@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.32.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.33.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -91,16 +91,39 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 
 ### Schritt 2: Geräte
 
+Bei der Konfiguration wird zunächst der **Ladegerät-Typ** gewählt:
+
+- `switch` — mehrere statische On/Off-Ladegeräte (klassisch). Solarüberschuss wird in groben Stufen verteilt; ein dimmbarer Wechselrichter (WR) kompensiert kleine Defizite per PID.
+- `dimmer` — ein dimmbares Ladegerät (kontinuierlich 0..N Watt). Solarüberschuss wird exakt absorbiert, kein Charger-Toggling, keine WR-Round-Trip-Verluste.
+
+**Switch-Modus:**
+
 | Parameter | Beschreibung | Standard |
 |-----------|-------------|----------|
 | Ladegeräte Schalter | Multi-Select aller Ladegerät-Switches | – |
 | Standard-Leistung pro Ladegerät | Nennleistung in Watt (gilt für alle neuen Ladegeräte) | 800 W |
+| Leistungssensoren | Optionale Power-Sensoren je Ladegerät (gleiche Reihenfolge) | – |
+
+**Dimmer-Modus:**
+
+| Parameter | Beschreibung | Standard |
+|-----------|-------------|----------|
+| Sollwert-Entity | Number/Input-Number für die Sollleistung (Pflicht) | – |
+| Optionaler Enable-Switch | Switch zum Ein-/Ausschalten zusätzlich zum Sollwert | – |
+| Maximalleistung | Obergrenze in Watt | 1000 W |
+| Minimalleistung | Untergrenze; darunter wird auf 0 gesetzt | 0 W |
+| Ist-Leistung Sensor | Optionaler Sensor mit gemessener Leistung | – |
+
+**Wechselrichter (beide Modi, für Discharge):**
+
+| Parameter | Beschreibung | Standard |
+|-----------|-------------|----------|
 | Einspeise-Wechselrichter Switch | Schalter für Feed-Inverter (optional) | – |
 | Einspeise-Wechselrichter Power-Entity | Number/Input-Number-Entity für Leistungsregelung (optional) | – |
 | Einspeise-Wechselrichter Leistung | Maximale Nennleistung in Watt | 800 W |
 | Einspeise-Wechselrichter Ist-Leistung | Sensor mit aktueller Wechselrichter-Ausgangsleistung (optional) | – |
 
-> **Hinweis:** Es können beliebig viele Ladegeräte hinzugefügt werden. Im Options Flow behalten bestehende Ladegeräte ihre individuelle Leistung, neue bekommen die Standard-Leistung.
+> **Hinweis:** Im Switch-Modus können beliebig viele Ladegeräte hinzugefügt werden; im Dimmer-Modus genau eines. Beide Modi schließen sich gegenseitig aus. Der Wechselrichter wird im Dimmer-Modus nur für das Entladen genutzt (PID-Zero-Feed); Solarabsorption läuft direkt über den Dimmer.
 
 ### Schritt 3: Batterie
 

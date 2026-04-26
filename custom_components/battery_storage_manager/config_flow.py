@@ -9,6 +9,8 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CHARGER_TYPE_DIMMER,
+    CHARGER_TYPE_SWITCH,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_CURRENT_ENTITY,
     CONF_BATTERY_CYCLE_COST,
@@ -18,7 +20,13 @@ from .const import (
     CONF_CHARGER_ENTITIES,
     CONF_CHARGER_POWER_DEFAULT,
     CONF_CHARGER_POWER_ENTITIES,
+    CONF_CHARGER_TYPE,
     CONF_CHARGERS,
+    CONF_DIMMER_ACTUAL_POWER_ENTITY,
+    CONF_DIMMER_ENABLE_SWITCH,
+    CONF_DIMMER_MAX_POWER,
+    CONF_DIMMER_MIN_POWER,
+    CONF_DIMMER_POWER_ENTITY,
     CONF_EPEX_PREDICTOR_ENABLED,
     CONF_EPEX_PREDICTOR_REGION,
     CONF_HOUSE_CONSUMPTION_W,
@@ -94,8 +102,19 @@ STEP_TIBBER_SCHEMA = vol.Schema(
     }
 )
 
+_CHARGER_TYPE_SELECTOR = selector.SelectSelector(
+    selector.SelectSelectorConfig(
+        options=[CHARGER_TYPE_SWITCH, CHARGER_TYPE_DIMMER],
+        mode=selector.SelectSelectorMode.DROPDOWN,
+        translation_key="charger_type",
+    )
+)
+
+
 STEP_DEVICES_SCHEMA = vol.Schema(
     {
+        vol.Optional(CONF_CHARGER_TYPE, default=CHARGER_TYPE_SWITCH): _CHARGER_TYPE_SELECTOR,
+        # Switch-mode fields (multiple static chargers)
         vol.Optional(CONF_CHARGER_ENTITIES, default=[]): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch", multiple=True)
         ),
@@ -107,6 +126,27 @@ STEP_DEVICES_SCHEMA = vol.Schema(
         vol.Optional(CONF_CHARGER_POWER_ENTITIES, default=[]): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor", multiple=True)
         ),
+        # Dimmer-mode fields (single dimmable charger)
+        vol.Optional(CONF_DIMMER_POWER_ENTITY, default=""): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=["number", "input_number"])
+        ),
+        vol.Optional(CONF_DIMMER_ENABLE_SWITCH, default=""): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch")
+        ),
+        vol.Optional(CONF_DIMMER_MAX_POWER, default=1000): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=10000, step=50, unit_of_measurement="W"
+            )
+        ),
+        vol.Optional(CONF_DIMMER_MIN_POWER, default=0): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=2000, step=10, unit_of_measurement="W"
+            )
+        ),
+        vol.Optional(CONF_DIMMER_ACTUAL_POWER_ENTITY, default=""): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        # Inverter (used for discharge in both modes)
         vol.Optional(CONF_INVERTER_FEED_SWITCH, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
@@ -197,7 +237,7 @@ def _build_chargers_list(
     existing_chargers: list[dict] | None = None,
     power_entities: list[str] | None = None,
 ) -> list[dict]:
-    """Build chargers list, preserving per-charger power for known entities."""
+    """Build switch-type chargers list, preserving per-charger power for known entities."""
     existing_map = {}
     if existing_chargers:
         existing_map = {c["switch"]: c for c in existing_chargers}
@@ -213,8 +253,66 @@ def _build_chargers_list(
             "switch": eid,
             "power": existing.get("power", int(default_power)),
             "power_entity": power_entity,
+            "type": CHARGER_TYPE_SWITCH,
+            "min_power": 0,
         })
     return result
+
+
+def _build_dimmer_charger(
+    power_entity: str,
+    max_power: int,
+    min_power: int = 0,
+    enable_switch: str = "",
+    actual_power_entity: str = "",
+) -> list[dict]:
+    """Build a single-entry chargers list for dimmer mode."""
+    if not power_entity:
+        return []
+    return [{
+        "switch": enable_switch or "",
+        "power": int(max_power),
+        "power_entity": power_entity,
+        "actual_power_entity": actual_power_entity or "",
+        "type": CHARGER_TYPE_DIMMER,
+        "min_power": int(min_power),
+    }]
+
+
+def _extract_chargers_from_input(
+    user_input: dict,
+    existing_chargers: list[dict] | None = None,
+) -> list[dict]:
+    """Build CONF_CHARGERS list from a config-flow user_input dict.
+
+    Pops both switch-mode and dimmer-mode keys from user_input. Returns
+    the chargers list according to charger_type. Validates min/max for
+    dimmer.
+    """
+    charger_type = user_input.pop(CONF_CHARGER_TYPE, CHARGER_TYPE_SWITCH)
+    charger_entities = user_input.pop(CONF_CHARGER_ENTITIES, [])
+    default_power = user_input.pop(CONF_CHARGER_POWER_DEFAULT, 800)
+    power_entities = user_input.pop(CONF_CHARGER_POWER_ENTITIES, [])
+    dimmer_power_entity = user_input.pop(CONF_DIMMER_POWER_ENTITY, "")
+    dimmer_enable_switch = user_input.pop(CONF_DIMMER_ENABLE_SWITCH, "")
+    dimmer_max_power = user_input.pop(CONF_DIMMER_MAX_POWER, 1000)
+    dimmer_min_power = user_input.pop(CONF_DIMMER_MIN_POWER, 0)
+    dimmer_actual = user_input.pop(CONF_DIMMER_ACTUAL_POWER_ENTITY, "")
+
+    if charger_type == CHARGER_TYPE_DIMMER:
+        if dimmer_min_power > dimmer_max_power:
+            raise vol.Invalid("dimmer_min_power must be <= dimmer_max_power")
+        return _build_dimmer_charger(
+            dimmer_power_entity,
+            int(dimmer_max_power),
+            int(dimmer_min_power),
+            dimmer_enable_switch,
+            dimmer_actual,
+        )
+    return _build_chargers_list(
+        charger_entities, default_power, existing_chargers,
+        power_entities=power_entities,
+    )
 
 
 class BatteryStorageManagerConfigFlow(
@@ -222,7 +320,7 @@ class BatteryStorageManagerConfigFlow(
 ):
     """Handle a config flow for Battery Storage Manager."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -245,12 +343,7 @@ class BatteryStorageManagerConfigFlow(
     async def async_step_devices(self, user_input=None):
         """Handle the second step: Device entities."""
         if user_input is not None:
-            charger_entities = user_input.pop(CONF_CHARGER_ENTITIES, [])
-            default_power = user_input.pop(CONF_CHARGER_POWER_DEFAULT, 800)
-            power_entities = user_input.pop(CONF_CHARGER_POWER_ENTITIES, [])
-            self._data[CONF_CHARGERS] = _build_chargers_list(
-                charger_entities, default_power, power_entities=power_entities
-            )
+            self._data[CONF_CHARGERS] = _extract_chargers_from_input(user_input)
             self._data.update(user_input)
             return await self.async_step_battery()
 
@@ -388,20 +481,22 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
     async def async_step_devices(self, user_input=None):
         """Step 2: Device entities."""
         if user_input is not None:
-            charger_entities = user_input.pop(CONF_CHARGER_ENTITIES, [])
-            default_power = user_input.pop(CONF_CHARGER_POWER_DEFAULT, 800)
-            power_entities = user_input.pop(CONF_CHARGER_POWER_ENTITIES, [])
-            self._data[CONF_CHARGERS] = _build_chargers_list(
-                charger_entities, default_power, self._current_chargers(),
-                power_entities=power_entities,
+            self._data[CONF_CHARGERS] = _extract_chargers_from_input(
+                user_input, self._current_chargers()
             )
             self._data.update(user_input)
             return await self.async_step_battery()
 
         current_chargers = self._current_chargers()
-        current_entities = [c["switch"] for c in current_chargers]
-        # Show average of existing powers as default
-        current_powers = [c["power"] for c in current_chargers]
+        switch_chargers = [c for c in current_chargers if c.get("type", CHARGER_TYPE_SWITCH) == CHARGER_TYPE_SWITCH]
+        dimmer_charger = next(
+            (c for c in current_chargers if c.get("type") == CHARGER_TYPE_DIMMER), None
+        )
+        current_charger_type = (
+            CHARGER_TYPE_DIMMER if dimmer_charger else CHARGER_TYPE_SWITCH
+        )
+        current_entities = [c["switch"] for c in switch_chargers]
+        current_powers = [c["power"] for c in switch_chargers]
         avg_power = (
             int(sum(current_powers) / len(current_powers))
             if current_powers
@@ -412,6 +507,10 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
             step_id="devices",
             data_schema=vol.Schema(
                 {
+                    vol.Optional(
+                        CONF_CHARGER_TYPE,
+                        default=current_charger_type,
+                    ): _CHARGER_TYPE_SELECTOR,
                     vol.Optional(
                         CONF_CHARGER_ENTITIES,
                         default=current_entities,
@@ -428,9 +527,43 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                     ),
                     vol.Optional(
                         CONF_CHARGER_POWER_ENTITIES,
-                        default=[c.get("power_entity", "") for c in current_chargers],
+                        default=[c.get("power_entity", "") for c in switch_chargers],
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor", multiple=True)
+                    ),
+                    vol.Optional(
+                        CONF_DIMMER_POWER_ENTITY,
+                        default=dimmer_charger.get("power_entity", "") if dimmer_charger else "",
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain=["number", "input_number"])
+                    ),
+                    vol.Optional(
+                        CONF_DIMMER_ENABLE_SWITCH,
+                        default=dimmer_charger.get("switch", "") if dimmer_charger else "",
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="switch")
+                    ),
+                    vol.Optional(
+                        CONF_DIMMER_MAX_POWER,
+                        default=dimmer_charger.get("power", 1000) if dimmer_charger else 1000,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=10000, step=50, unit_of_measurement="W"
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DIMMER_MIN_POWER,
+                        default=dimmer_charger.get("min_power", 0) if dimmer_charger else 0,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=2000, step=10, unit_of_measurement="W"
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DIMMER_ACTUAL_POWER_ENTITY,
+                        default=dimmer_charger.get("actual_power_entity", "") if dimmer_charger else "",
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Optional(
                         CONF_INVERTER_FEED_SWITCH,

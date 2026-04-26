@@ -39,6 +39,18 @@ CONF_BATTERY_EFFICIENCY = "battery_efficiency"  # round-trip efficiency in perce
 DEFAULT_BATTERY_EFFICIENCY = 90  # percent
 CONF_OUTSIDE_TEMPERATURE_ENTITY = "outside_temperature_entity"  # outdoor temp for consumption model
 CONF_CHARGER_POWER_ENTITIES = "charger_power_entities"  # measured power sensors per charger
+
+# Charger types (per-entry "type" in CONF_CHARGERS list)
+CHARGER_TYPE_SWITCH = "switch"
+CHARGER_TYPE_DIMMER = "dimmer"
+# Top-level select in config_flow: which kind of charger setup
+CONF_CHARGER_TYPE = "charger_type"
+# Dimmer-specific config keys (used when CONF_CHARGER_TYPE == "dimmer")
+CONF_DIMMER_POWER_ENTITY = "dimmer_power_entity"  # writable number entity (setpoint)
+CONF_DIMMER_ENABLE_SWITCH = "dimmer_enable_switch"  # optional on/off switch
+CONF_DIMMER_MAX_POWER = "dimmer_max_power"  # max W (clamp)
+CONF_DIMMER_MIN_POWER = "dimmer_min_power"  # below this → 0
+CONF_DIMMER_ACTUAL_POWER_ENTITY = "dimmer_actual_power_entity"  # optional readback sensor
 CONF_BATTERY_VOLTAGE_ENTITY = "battery_voltage_entity"  # Smartshunt voltage
 CONF_BATTERY_CURRENT_ENTITY = "battery_current_entity"  # Smartshunt current
 

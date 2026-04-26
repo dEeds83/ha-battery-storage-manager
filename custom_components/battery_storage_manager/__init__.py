@@ -10,12 +10,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, HomeAssistant
 
-from .const import CONF_CHARGERS, DOMAIN, PLATFORMS
+from .const import CHARGER_TYPE_SWITCH, CONF_CHARGERS, DOMAIN, PLATFORMS
 from .coordinator import BatteryStorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-CARD_VERSION = "2.32.1"
+CARD_VERSION = "2.33.0"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 FRONTEND_CARDS = [
     "battery-plan-card.js",
@@ -170,6 +170,24 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.info(
             "Migration complete: %d chargers configured", len(chargers)
         )
+
+    if entry.version < 3:
+        _LOGGER.info("Migrating config entry from version %s to 3", entry.version)
+        new_data = dict(entry.data)
+        new_options = dict(entry.options)
+
+        def _add_type(chargers: list) -> None:
+            for c in chargers:
+                c.setdefault("type", CHARGER_TYPE_SWITCH)
+                c.setdefault("min_power", 0)
+
+        _add_type(new_data.get(CONF_CHARGERS, []))
+        _add_type(new_options.get(CONF_CHARGERS, []))
+
+        hass.config_entries.async_update_entry(
+            entry, data=new_data, options=new_options, version=3
+        )
+        _LOGGER.info("Migration to v3 complete: chargers tagged as type=switch")
 
     return True
 

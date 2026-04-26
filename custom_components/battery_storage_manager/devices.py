@@ -7,6 +7,8 @@ import logging
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CHARGER_TYPE_DIMMER,
+    CHARGER_TYPE_SWITCH,
     MODE_CHARGING,
     MODE_DISCHARGING,
     MODE_IDLE,
@@ -22,6 +24,29 @@ class DevicesMixin:
     def _sync_device_states(self) -> None:
         """Synchronize internal active flags with actual switch entity states."""
         for i, charger in enumerate(self._chargers):
+            ctype = charger.get("type", CHARGER_TYPE_SWITCH)
+            if ctype == CHARGER_TYPE_DIMMER:
+                # Read setpoint from number; active = setpoint > 0.
+                power_entity = charger.get("power_entity", "")
+                if power_entity:
+                    pe_state = self.hass.states.get(power_entity)
+                    if pe_state and pe_state.state not in ("unknown", "unavailable"):
+                        try:
+                            charger["target_power"] = float(pe_state.state)
+                            charger["active"] = charger["target_power"] > 0
+                        except (ValueError, TypeError):
+                            pass
+                # Optional enable-switch sync.
+                enable_switch = charger.get("switch", "")
+                if enable_switch:
+                    sw_state = self.hass.states.get(enable_switch)
+                    if sw_state and sw_state.state not in ("unknown", "unavailable"):
+                        sw_on = sw_state.state == "on"
+                        # If disabled externally, mark inactive even with non-zero target.
+                        if not sw_on:
+                            charger["active"] = False
+                continue
+
             if not charger["switch"]:
                 continue
             state = self.hass.states.get(charger["switch"])
@@ -88,12 +113,8 @@ class DevicesMixin:
             self._current_price or 0,
         )
 
-        for charger in self._chargers:
-            if charger["switch"]:
-                await self.hass.services.async_call(
-                    "switch", "turn_on", {"entity_id": charger["switch"]}
-                )
-                charger["active"] = True
+        for i, charger in enumerate(self._chargers):
+            await self._set_charger(i, charger.get("power", 0), on=True)
 
         self._reset_pid()
         if self._inverter_switch:
@@ -105,15 +126,34 @@ class DevicesMixin:
 
         self._operating_mode = MODE_CHARGING
 
-    async def _apply_charger_states(self, should_be_on: set[int]) -> None:
-        """Set each charger on or off, respecting minimum on/off times."""
-        now = dt_util.utcnow()
-        for i, charger in enumerate(self._chargers):
-            if not charger["switch"]:
-                continue
-            want_on = i in should_be_on
-            last_switch = self._charger_last_switch_time.get(i)
+    async def _apply_charger_states(
+        self,
+        should_be_on: set[int],
+        dimmer_targets: dict[int, float] | None = None,
+    ) -> None:
+        """Apply per-charger on/off (switch) or target power (dimmer).
 
+        Switch-type respects min on/off hysteresis. Dimmer-type uses
+        continuous setpoints — no hysteresis (no relay wear). When
+        ``dimmer_targets`` is None, dimmers default to max power if in
+        ``should_be_on``, otherwise 0.
+        """
+        now = dt_util.utcnow()
+        dimmer_targets = dimmer_targets or {}
+        for i, charger in enumerate(self._chargers):
+            ctype = charger.get("type", CHARGER_TYPE_SWITCH)
+            want_on = i in should_be_on
+
+            if ctype == CHARGER_TYPE_DIMMER:
+                target = dimmer_targets.get(
+                    i, charger.get("power", 0) if want_on else 0
+                )
+                await self._set_dimmer_power(i, target if want_on else 0)
+                continue
+
+            if not charger.get("switch"):
+                continue
+            last_switch = self._charger_last_switch_time.get(i)
             if want_on and not charger["active"]:
                 if last_switch and (now - last_switch) < self._charger_min_off_time:
                     _LOGGER.debug(
@@ -302,8 +342,128 @@ class DevicesMixin:
             },
         )
 
+    async def _set_dimmer_power(self, idx: int, value_w: float) -> None:
+        """Set a dimmer-type charger to a target power.
+
+        Mirrors `_set_inverter_power`: clamps to [0, max_power], applies
+        min_power cutoff, deadband, and writes via number `set_value`.
+        Optional enable-switch is toggled to match value > 0.
+        """
+        if idx < 0 or idx >= len(self._chargers):
+            return
+        c = self._chargers[idx]
+        if c.get("type") != CHARGER_TYPE_DIMMER:
+            return
+        power_entity = c.get("power_entity", "")
+        if not power_entity:
+            return
+
+        max_p = c.get("power", 0) or 0
+        min_p = c.get("min_power", 0) or 0
+        target = max(0, min(max_p, round(value_w)))
+        if 0 < target < min_p:
+            target = 0
+
+        # Optional enable-switch: keep in sync with target > 0.
+        enable_switch = c.get("switch", "")
+        want_on = target > 0
+        if enable_switch and want_on != c.get("active", False):
+            await self.hass.services.async_call(
+                "switch",
+                "turn_on" if want_on else "turn_off",
+                {"entity_id": enable_switch},
+            )
+
+        # Deadband: skip tiny changes.
+        if abs(target - (c.get("target_power") or 0)) < 10:
+            c["active"] = want_on
+            return
+
+        domain = power_entity.split(".")[0]
+        await self.hass.services.async_call(
+            domain,
+            "set_value",
+            {
+                "entity_id": power_entity,
+                "value": target,
+            },
+        )
+        c["target_power"] = float(target)
+        c["active"] = want_on
+
+    async def _set_charger(self, idx: int, target_w: float, on: bool) -> None:
+        """Dispatch a charger update by type.
+
+        - switch-type: turn the relay on/off via service call (no power).
+        - dimmer-type: set continuous power; 0 W when ``on`` is False.
+        """
+        if idx < 0 or idx >= len(self._chargers):
+            return
+        c = self._chargers[idx]
+        if c.get("type") == CHARGER_TYPE_DIMMER:
+            await self._set_dimmer_power(idx, target_w if on else 0)
+        else:
+            if not c.get("switch"):
+                return
+            await self.hass.services.async_call(
+                "switch",
+                "turn_on" if on else "turn_off",
+                {"entity_id": c["switch"]},
+            )
+            c["active"] = on
+
+    async def _regulate_dimmer_zero_feed(self) -> None:
+        """One-step adjust the dimmer setpoint to zero out grid power.
+
+        Uses the existing EMA-smoothed grid power. No PID needed because the
+        dimmer is a load that consumes exactly what it's told.
+        Positive grid (import) → reduce dimmer; negative (export) → raise.
+        """
+        # Find the (single) dimmer.
+        idx = next(
+            (i for i, c in enumerate(self._chargers)
+             if c.get("type") == CHARGER_TYPE_DIMMER),
+            -1,
+        )
+        if idx < 0:
+            return
+        grid = (
+            self._grid_power_ema if self._grid_power_ema is not None
+            else self._grid_power
+        )
+        if grid is None:
+            return
+        c = self._chargers[idx]
+        current = c.get("target_power") or 0.0
+        # gain 0.8 — fast convergence with EMA-smoothed input
+        new_target = current + (-grid) * 0.8
+        await self._set_dimmer_power(idx, new_target)
+
     async def _start_solar_charging(self, surplus_w: float) -> None:
         """Activate chargers proportionally to available solar surplus."""
+        # Dimmer mode: single continuous load, take min(surplus, max).
+        if any(c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers):
+            idx = next(
+                i for i, c in enumerate(self._chargers)
+                if c.get("type") == CHARGER_TYPE_DIMMER
+            )
+            c = self._chargers[idx]
+            target = max(0, min(c.get("power", 0), int(surplus_w)))
+            await self._set_dimmer_power(idx, target)
+            # WR aus / 0 — Dimmer absorbiert exakt, kein Round-Trip.
+            if self._inverter_switch and self._inverter_active:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": self._inverter_switch}
+                )
+                self._inverter_active = False
+            await self._set_inverter_power(0)
+            self._operating_mode = MODE_SOLAR_CHARGING
+            _LOGGER.info(
+                "Solar charging (dimmer): surplus=%.0fW → target=%dW",
+                surplus_w, target,
+            )
+            return
+
         if not self._chargers:
             await self._set_mode_idle()
             return
@@ -393,6 +553,15 @@ class DevicesMixin:
         """
         if self._grid_power is None or self._battery_soc is None:
             return False
+
+        # Dimmer mode: continuous absorb via single number-entity. No PID,
+        # no greedy switch logic, no WR-roundtrip.
+        if any(c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers):
+            await self._regulate_dimmer_zero_feed()
+            # Mode reflects whether dimmer is actively absorbing.
+            if any(c.get("active") for c in self._chargers):
+                self._operating_mode = MODE_SOLAR_CHARGING
+            return True
 
         active_chargers = [i for i, c in enumerate(self._chargers) if c["active"]]
         inactive_chargers = [
