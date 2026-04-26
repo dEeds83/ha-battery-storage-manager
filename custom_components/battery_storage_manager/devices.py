@@ -168,8 +168,6 @@ class DevicesMixin:
                 self._current_price or 0,
             )
 
-            await self._apply_charger_states(set())
-
             if self._inverter_switch:
                 await self.hass.services.async_call(
                     "switch", "turn_on", {"entity_id": self._inverter_switch}
@@ -177,6 +175,11 @@ class DevicesMixin:
 
             self._inverter_active = True
             self._operating_mode = MODE_DISCHARGING
+
+        # Retry charger-off every tick — min_on_time hysteresis may have
+        # blocked the initial off attempt.
+        if any(c["active"] for c in self._chargers):
+            await self._apply_charger_states(set())
 
         if self._inverter_power_entity:
             await self._regulate_zero_feed()
