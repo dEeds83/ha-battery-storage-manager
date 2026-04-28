@@ -15,7 +15,7 @@ from .coordinator import BatteryStorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-CARD_VERSION = "2.35.1"
+CARD_VERSION = "2.35.2"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 FRONTEND_CARDS = [
     "battery-plan-card.js",
@@ -198,6 +198,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = BatteryStorageCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
+
+    # Bei Start: Dimmer-Sollwert auf 0 zurücksetzen, damit kein Reststand
+    # aus einer Pre-Restart-Phase (z.B. ESPHome-Default) übernommen wird.
+    await coordinator.reset_dimmer_on_start()
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 

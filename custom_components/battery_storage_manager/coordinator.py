@@ -1523,7 +1523,10 @@ class BatteryStorageCoordinator(
 
     async def stop_all(self) -> None:
         """Turn off all chargers and inverters."""
-        for charger in self._chargers:
+        for i, charger in enumerate(self._chargers):
+            if charger.get("type") == CHARGER_TYPE_DIMMER:
+                await self._set_dimmer_power(i, 0)
+                continue
             if charger["switch"]:
                 await self.hass.services.async_call(
                     "switch", "turn_off", {"entity_id": charger["switch"]}
@@ -1538,6 +1541,17 @@ class BatteryStorageCoordinator(
         self._inverter_active = False
 
         self._operating_mode = MODE_IDLE
+
+    async def reset_dimmer_on_start(self) -> None:
+        """At integration startup, force any dimmer charger to 0 W.
+
+        Prevents a stale pre-restart setpoint from immediately drawing
+        power before the optimizer / opportunistic logic has decided.
+        """
+        for i, charger in enumerate(self._chargers):
+            if charger.get("type") == CHARGER_TYPE_DIMMER:
+                _LOGGER.info("Startup: resetting dimmer C%d to 0 W", i + 1)
+                await self._set_dimmer_power(i, 0)
 
     def apply_options(self, options: dict) -> None:
         """Apply updated options from the options flow (live, no restart needed)."""
