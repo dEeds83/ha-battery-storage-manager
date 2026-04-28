@@ -418,7 +418,19 @@ class DevicesMixin:
         Uses the existing EMA-smoothed grid power. No PID needed because the
         dimmer is a load that consumes exactly what it's told.
         Positive grid (import) → reduce dimmer; negative (export) → raise.
+
+        WR wird in diesem Modus garantiert ausgeschaltet — Dimmer absorbiert
+        Solar exakt, keine WR-Kompensation nötig (kein Round-Trip).
         """
+        # WR muss aus sein. Schaltet ihn ab falls aus früherer Phase noch an.
+        if self._inverter_active or (self._inverter_target_power or 0) > 0:
+            if self._inverter_switch:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": self._inverter_switch}
+                )
+            await self._set_inverter_power(0)
+            self._inverter_active = False
+
         # Find the (single) dimmer.
         idx = next(
             (i for i, c in enumerate(self._chargers)
