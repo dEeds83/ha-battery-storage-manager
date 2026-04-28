@@ -579,16 +579,31 @@ class DevicesMixin:
         # Dimmer mode: continuous absorb via single number-entity. No PID,
         # no greedy switch logic, no WR-roundtrip.
         if any(c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers):
-            # Während aktiv discharged wird (Plan=discharge), Dimmer auf 0
-            # halten — Solar-Export ist gewollt (Verkauf bei hohem Preis).
+            idx = next(
+                (i for i, c in enumerate(self._chargers)
+                 if c.get("type") == CHARGER_TYPE_DIMMER),
+                -1,
+            )
+            # Discharge-Mode: WR liefert via PID, Dimmer auf 0 — ausser
+            # Solar-Export besteht trotz WR=0. Dann absorbiert Dimmer den
+            # Rest (unabhängig vom SOC, da Einspeisung wertlos ist).
             if self._operating_mode == MODE_DISCHARGING:
-                idx = next(
-                    (i for i, c in enumerate(self._chargers)
-                     if c.get("type") == CHARGER_TYPE_DIMMER),
-                    -1,
+                if idx < 0:
+                    return False
+                grid = (
+                    self._grid_power_ema if self._grid_power_ema is not None
+                    else self._grid_power
                 )
-                if idx >= 0 and (self._chargers[idx].get("target_power") or 0) > 0:
-                    await self._set_dimmer_power(idx, 0)
+                inverter_target = self._inverter_target_power or 0
+                # WR ist effektiv auf 0 UND es geht trotzdem Strom raus →
+                # Dimmer aufdrehen statt verschenken.
+                if grid is not None and grid < -50 and inverter_target <= 5:
+                    current = self._chargers[idx].get("target_power") or 0.0
+                    new_target = current + (-grid) * 0.8
+                    await self._set_dimmer_power(idx, new_target)
+                else:
+                    if (self._chargers[idx].get("target_power") or 0) > 0:
+                        await self._set_dimmer_power(idx, 0)
                 return False
             await self._regulate_dimmer_zero_feed()
             # Mode reflects whether dimmer is actively absorbing.
