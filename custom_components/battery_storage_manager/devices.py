@@ -672,6 +672,23 @@ class DevicesMixin:
                     self._operating_mode = MODE_IDLE
                 return True
 
+            # Sustained grid-import while WR is also discharging from battery
+            # → Round-Trip-Verlust: WR pumpt aus Batterie, Charger zahlt Netz,
+            # Solar reicht nicht für Charger + Haus. Letzten Charger weg.
+            inverter_actual = self._inverter_actual_power or 0
+            if self._grid_power > 100 and inverter_actual > 50:
+                _LOGGER.info(
+                    "Grid import %.0fW + inverter %.0fW (battery discharge) "
+                    "→ round-trip loss, turning off C%d",
+                    self._grid_power, inverter_actual, last_idx + 1,
+                )
+                await self._apply_charger_states(
+                    set(active_chargers) - {last_idx}
+                )
+                if not any(c["active"] for c in self._chargers):
+                    self._operating_mode = MODE_IDLE
+                return True
+
             # Fallback: hard grid import (PID saturated) → also turn off.
             if self._grid_power > max_inverter + 200:
                 _LOGGER.info(
