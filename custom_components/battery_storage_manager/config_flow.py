@@ -126,11 +126,14 @@ STEP_DEVICES_SCHEMA = vol.Schema(
         vol.Optional(CONF_CHARGER_POWER_ENTITIES, default=[]): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor", multiple=True)
         ),
-        # Dimmer-mode fields (single dimmable charger)
-        vol.Optional(CONF_DIMMER_POWER_ENTITY, default=""): selector.EntitySelector(
+        # Dimmer-mode fields (single dimmable charger).
+        # Optional EntitySelectors WITHOUT default — empty default="" fails
+        # entity_id validation in HA frontend ("neither valid entity ID nor
+        # UUID" error persists even after picking a valid entity).
+        vol.Optional(CONF_DIMMER_POWER_ENTITY): selector.EntitySelector(
             selector.EntitySelectorConfig(domain=["number", "input_number"])
         ),
-        vol.Optional(CONF_DIMMER_ENABLE_SWITCH, default=""): selector.EntitySelector(
+        vol.Optional(CONF_DIMMER_ENABLE_SWITCH): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
         vol.Optional(CONF_DIMMER_MAX_POWER, default=1000): selector.NumberSelector(
@@ -143,7 +146,7 @@ STEP_DEVICES_SCHEMA = vol.Schema(
                 min=0, max=2000, step=10, unit_of_measurement="W"
             )
         ),
-        vol.Optional(CONF_DIMMER_ACTUAL_POWER_ENTITY, default=""): selector.EntitySelector(
+        vol.Optional(CONF_DIMMER_ACTUAL_POWER_ENTITY): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
         ),
         # Inverter (used for discharge in both modes)
@@ -487,6 +490,12 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
             self._data.update(user_input)
             return await self.async_step_battery()
 
+        def _opt_entity(key: str, current: str):
+            """vol.Optional with default only if current is a real entity_id."""
+            if current:
+                return vol.Optional(key, default=current)
+            return vol.Optional(key)
+
         current_chargers = self._current_chargers()
         switch_chargers = [c for c in current_chargers if c.get("type", CHARGER_TYPE_SWITCH) == CHARGER_TYPE_SWITCH]
         dimmer_charger = next(
@@ -531,15 +540,15 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor", multiple=True)
                     ),
-                    vol.Optional(
+                    _opt_entity(
                         CONF_DIMMER_POWER_ENTITY,
-                        default=dimmer_charger.get("power_entity", "") if dimmer_charger else "",
+                        dimmer_charger.get("power_entity", "") if dimmer_charger else "",
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain=["number", "input_number"])
                     ),
-                    vol.Optional(
+                    _opt_entity(
                         CONF_DIMMER_ENABLE_SWITCH,
-                        default=dimmer_charger.get("switch", "") if dimmer_charger else "",
+                        dimmer_charger.get("switch", "") if dimmer_charger else "",
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="switch")
                     ),
@@ -559,9 +568,9 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                             min=0, max=2000, step=10, unit_of_measurement="W"
                         )
                     ),
-                    vol.Optional(
+                    _opt_entity(
                         CONF_DIMMER_ACTUAL_POWER_ENTITY,
-                        default=dimmer_charger.get("actual_power_entity", "") if dimmer_charger else "",
+                        dimmer_charger.get("actual_power_entity", "") if dimmer_charger else "",
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
