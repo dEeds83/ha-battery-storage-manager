@@ -396,7 +396,9 @@ class BatteryStorageCoordinator(
         # Always capture free solar surplus, regardless of strategy/mode.
         # _calculate_true_solar_surplus() now uses the solar power sensor
         # directly, so it won't mistake inverter overshoot for solar.
-        if self._operating_mode in (MODE_IDLE, MODE_DISCHARGING):
+        if self._operating_mode in (
+            MODE_IDLE, MODE_DISCHARGING, MODE_SOLAR_CHARGING
+        ):
             await self._try_solar_opportunistic()
 
         # Persist efficiency data periodically (piggyback on action history ~10 min)
