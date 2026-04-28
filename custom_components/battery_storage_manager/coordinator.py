@@ -1135,6 +1135,7 @@ class BatteryStorageCoordinator(
         charge_count = 0
         discharge_count = 0
         grid_charge_kwh = 0.0
+        total_charge_kwh = 0.0
 
         for i, h in enumerate(hourly_data):
             action = actions[i]
@@ -1146,6 +1147,7 @@ class BatteryStorageCoordinator(
                 else:
                     delta_kwh = min(charge_kwh_slot, (self._max_soc - estimated_soc) / 100 * cap)
                     grid_charge_kwh += delta_kwh * h["grid_fraction"]
+                    total_charge_kwh += delta_kwh
             elif action == "discharge":
                 if estimated_soc <= self._min_soc:
                     action = "idle"
@@ -1196,7 +1198,11 @@ class BatteryStorageCoordinator(
             return f"{total_min}min"
 
         if charge_count:
-            parts.append(f"{_fmt_duration(charge_count)} Laden ({self._fmt_ct(grid_charge_kwh)} kWh)")
+            parts.append(
+                f"{_fmt_duration(charge_count)} Laden "
+                f"({self._fmt_ct(total_charge_kwh)} kWh, davon "
+                f"{self._fmt_ct(grid_charge_kwh)} kWh Netz)"
+            )
         if discharge_count:
             parts.append(f"{_fmt_duration(discharge_count)} Entladen")
         self._plan_summary = " | ".join(parts) if parts else "Kein Plan erstellt"
