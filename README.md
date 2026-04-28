@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.35.3-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.35.4-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -112,7 +112,7 @@ Bei der Konfiguration wird zunächst der **Ladegerät-Typ** gewählt:
 | Optionaler Enable-Switch | Switch zum Ein-/Ausschalten zusätzlich zum Sollwert | – |
 | Maximalleistung | Obergrenze in Watt | 1000 W |
 | Minimalleistung | Untergrenze; darunter wird auf 0 gesetzt | 0 W |
-| Ist-Leistung Sensor | Optionaler Sensor mit gemessener Leistung | – |
+| AC-Eingangsleistung Sensor | Optionaler Sensor mit gemessener AC-Leistung (Eingang, **nicht** DC-Ausgang). Wird für Effizienz-Tracking verwendet. | – |
 
 **Wechselrichter (beide Modi, für Discharge):**
 
