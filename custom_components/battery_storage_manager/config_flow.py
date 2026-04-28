@@ -138,12 +138,14 @@ STEP_DEVICES_SCHEMA = vol.Schema(
         ),
         vol.Optional(CONF_DIMMER_MAX_POWER, default=1000): selector.NumberSelector(
             selector.NumberSelectorConfig(
-                min=0, max=10000, step=50, unit_of_measurement="W"
+                min=0, max=20000, step=1, unit_of_measurement="W",
+                mode=selector.NumberSelectorMode.BOX,
             )
         ),
         vol.Optional(CONF_DIMMER_MIN_POWER, default=0): selector.NumberSelector(
             selector.NumberSelectorConfig(
-                min=0, max=2000, step=10, unit_of_measurement="W"
+                min=0, max=20000, step=1, unit_of_measurement="W",
+                mode=selector.NumberSelectorMode.BOX,
             )
         ),
         vol.Optional(CONF_DIMMER_ACTUAL_POWER_ENTITY): selector.EntitySelector(
@@ -557,7 +559,8 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         default=dimmer_charger.get("power", 1000) if dimmer_charger else 1000,
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=0, max=10000, step=50, unit_of_measurement="W"
+                            min=0, max=20000, step=1, unit_of_measurement="W",
+                            mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
                     vol.Optional(
@@ -565,7 +568,8 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         default=dimmer_charger.get("min_power", 0) if dimmer_charger else 0,
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=0, max=2000, step=10, unit_of_measurement="W"
+                            min=0, max=20000, step=1, unit_of_measurement="W",
+                            mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
                     _opt_entity(
