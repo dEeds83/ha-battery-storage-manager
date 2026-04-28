@@ -244,8 +244,8 @@ class DevicesMixin:
             # export, to avoid oscillation and slamming target to 0.
             export_w = abs(grid)
             new_target = self._inverter_target_power - export_w * 0.5
-            export_min = 50 if self._operating_mode == MODE_DISCHARGING else 0
-            new_target = max(export_min, new_target)
+            # Kein Min-Export erzwingen: Einspeisung ohne Vergütung ist Verlust.
+            new_target = max(0, new_target)
             _LOGGER.info(
                 "Zero-feed: EXPORT %.0fW (raw %.0fW) -> reducing inverter %.0f -> %.0fW",
                 export_w, abs(self._grid_power or 0),
@@ -287,7 +287,7 @@ class DevicesMixin:
         # During discharge, keep at least 50W to prevent the inverter from
         # effectively shutting down.  The PID will ramp back up on the next
         # cycle when house consumption pulls from the grid again.
-        min_target = 50 if self._operating_mode == MODE_DISCHARGING else 0
+        min_target = 0  # kein Min-Export erzwingen (Einspeisung wertlos)
         new_target = max(min_target, min(max_power, new_target))
 
         if abs(new_target - self._inverter_target_power) < 10:
@@ -567,6 +567,17 @@ class DevicesMixin:
         # Dimmer mode: continuous absorb via single number-entity. No PID,
         # no greedy switch logic, no WR-roundtrip.
         if any(c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers):
+            # Während aktiv discharged wird (Plan=discharge), Dimmer auf 0
+            # halten — Solar-Export ist gewollt (Verkauf bei hohem Preis).
+            if self._operating_mode == MODE_DISCHARGING:
+                idx = next(
+                    (i for i, c in enumerate(self._chargers)
+                     if c.get("type") == CHARGER_TYPE_DIMMER),
+                    -1,
+                )
+                if idx >= 0 and (self._chargers[idx].get("target_power") or 0) > 0:
+                    await self._set_dimmer_power(idx, 0)
+                return False
             await self._regulate_dimmer_zero_feed()
             # Mode reflects whether dimmer is actively absorbing.
             if any(c.get("active") for c in self._chargers):
@@ -804,14 +815,9 @@ class DevicesMixin:
                 _LOGGER.debug("Plan action: DISCHARGE skipped (discharging disabled)")
                 await self._set_mode_idle()
                 return
-            # Solar-Export hat Vorrang vor Discharge: erst opportunistic
-            # prüfen, nur wenn nix zu absorbieren → discharge.
-            if (self._grid_power is not None and self._grid_power < -50
-                    and await self._try_solar_opportunistic()):
-                _LOGGER.debug(
-                    "Plan DISCHARGE overridden by solar surplus absorption"
-                )
-                return
+            # Plan-Discharge gewinnt: kein Round-Trip via Dimmer-Absorbing.
+            # PID-Zero-Feed regelt WR auf grid≈0; bei Solar-Überschuss geht
+            # WR auf 0 (min_target=0, kein erzwungener Export).
             _LOGGER.debug("Plan action: DISCHARGE")
             await self._start_discharging()
         elif action == "solar_charge":
