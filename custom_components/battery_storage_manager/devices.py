@@ -647,7 +647,7 @@ class DevicesMixin:
                 )
                 await self._apply_charger_states(set())
                 if not any(c["active"] for c in self._chargers):
-                    self._operating_mode = MODE_IDLE
+                    await self._set_mode_idle()
                 return True
 
             # Turn off last charger if inverter compensation exceeds its
@@ -669,7 +669,7 @@ class DevicesMixin:
                     set(active_chargers) - {last_idx}
                 )
                 if not any(c["active"] for c in self._chargers):
-                    self._operating_mode = MODE_IDLE
+                    await self._set_mode_idle()
                 return True
 
             # Sustained grid-import while WR is also discharging from battery
@@ -686,7 +686,7 @@ class DevicesMixin:
                     set(active_chargers) - {last_idx}
                 )
                 if not any(c["active"] for c in self._chargers):
-                    self._operating_mode = MODE_IDLE
+                    await self._set_mode_idle()
                 return True
 
             # Fallback: hard grid import (PID saturated) → also turn off.
@@ -699,7 +699,7 @@ class DevicesMixin:
                     set(active_chargers) - {last_idx}
                 )
                 if not any(c["active"] for c in self._chargers):
-                    self._operating_mode = MODE_IDLE
+                    await self._set_mode_idle()
                 return True
 
             # PID zero-feed while solar charging
