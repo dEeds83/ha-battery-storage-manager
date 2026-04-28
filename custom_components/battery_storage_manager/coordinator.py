@@ -264,6 +264,7 @@ class BatteryStorageCoordinator(
         # Runtime toggles
         self._allow_grid_charging = True
         self._allow_discharging = True
+        self._allow_solar_charging = True  # zero-export master switch
         self._use_solar_forecast = bool(
             self._solar_forecast_entity or self._solar_forecast_entities
         )
@@ -1683,6 +1684,7 @@ class BatteryStorageCoordinator(
             "battery_capacity_kwh": self._battery_capacity,
             "allow_grid_charging": self._allow_grid_charging,
             "allow_discharging": self._allow_discharging,
+            "allow_solar_charging": self._allow_solar_charging,
             "use_solar_forecast": self._use_solar_forecast,
             "solar_power": self._solar_power,
             "solar_calibration_factor": self._solar_calibration_factor,
@@ -1804,6 +1806,17 @@ class BatteryStorageCoordinator(
         """Enable or disable battery discharging."""
         self._allow_discharging = value
         _LOGGER.info("Discharging %s", "enabled" if value else "disabled")
+
+    @property
+    def allow_solar_charging(self) -> bool:
+        """Whether solar-surplus absorption (charging from PV) is allowed."""
+        return self._allow_solar_charging
+
+    @allow_solar_charging.setter
+    def allow_solar_charging(self, value: bool) -> None:
+        """Enable or disable solar-surplus absorption (zero-export master)."""
+        self._allow_solar_charging = value
+        _LOGGER.info("Solar charging %s", "enabled" if value else "disabled")
 
     @property
     def use_solar_forecast(self) -> bool:

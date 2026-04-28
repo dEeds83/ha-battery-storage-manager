@@ -36,6 +36,7 @@ async def async_setup_entry(
         ForceDischargeSwitch(coordinator, entry),
         AllowGridChargingSwitch(coordinator, entry),
         AllowDischargingSwitch(coordinator, entry),
+        AllowSolarChargingSwitch(coordinator, entry),
         UseSolarForecastSwitch(coordinator, entry),
     ]
 
@@ -175,6 +176,38 @@ class AllowDischargingSwitch(BatteryStorageBaseSwitch):
 
     def _apply_restored_state(self, is_on: bool) -> None:
         self.coordinator.allow_discharging = is_on
+
+
+class AllowSolarChargingSwitch(BatteryStorageBaseSwitch):
+    """Master switch for solar-surplus absorption (zero-export toggle).
+
+    When OFF: no opportunistic absorption, all excess solar is exported.
+    When ON (default): chargers/dimmer absorb surplus per existing logic.
+    """
+
+    _attr_icon = "mdi:solar-power"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "allow_solar_charging", "Solarladen erlauben"
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.allow_solar_charging
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self.coordinator.allow_solar_charging = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self.coordinator.allow_solar_charging = False
+        # Immediately stop active solar absorption.
+        await self.coordinator.stop_all()
+        self.async_write_ha_state()
+
+    def _apply_restored_state(self, is_on: bool) -> None:
+        self.coordinator.allow_solar_charging = is_on
 
 
 class UseSolarForecastSwitch(BatteryStorageBaseSwitch):

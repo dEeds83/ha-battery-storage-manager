@@ -441,6 +441,9 @@ class DevicesMixin:
 
     async def _start_solar_charging(self, surplus_w: float) -> None:
         """Activate chargers proportionally to available solar surplus."""
+        if not getattr(self, "_allow_solar_charging", True):
+            await self._set_mode_idle()
+            return
         # Dimmer mode: single continuous load, take min(surplus, max).
         if any(c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers):
             idx = next(
@@ -552,6 +555,13 @@ class DevicesMixin:
         No complex surplus calculation — just react to actual grid state.
         """
         if self._grid_power is None or self._battery_soc is None:
+            return False
+
+        # Master switch: solar charging globally disabled → ensure all
+        # chargers are off and exit. Excess solar is exported.
+        if not getattr(self, "_allow_solar_charging", True):
+            if any(c["active"] for c in self._chargers) or self._inverter_active:
+                await self._set_mode_idle()
             return False
 
         # Dimmer mode: continuous absorb via single number-entity. No PID,
