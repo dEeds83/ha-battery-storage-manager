@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.37.2-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.38.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -190,6 +190,7 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Optimierungs-Log | Letzte Optimierungsentscheidung als State, vollständiges Log (max 50 Einträge) als Attribut |
 | Aktionshistorie | Tatsächlich ausgeführte Aktionen (48h, 10-Min-Intervalle, persistent) |
 | Gemessene Effizienz | Roundtrip-Effizienz aus Smartshunt V×I vs. Charger/Inverter-Leistung (Lade-/Entlade-/Roundtrip als Attribute) |
+| Speicher Durchschnittspreis | Volumengewichteter Durchschnittspreis (ct/kWh) der aktuell im Speicher liegenden Energie. Solar = 0 ct, Netzladen = aktueller Tibber-Preis. Persistent über Restart. Attribute: stored_kwh, stored_cost_eur |
 
 ### Schalter
 

@@ -45,6 +45,7 @@ async def async_setup_entry(
         OptimizationLogSensor(coordinator, entry),
         ActionHistorySensor(coordinator, entry),
         MeasuredEfficiencySensor(coordinator, entry),
+        StoredEnergyAvgPriceSensor(coordinator, entry),
     ]
 
     # Dynamic charger status sensors
@@ -825,3 +826,34 @@ class MeasuredEfficiencySensor(BatteryStorageBaseSensor):
             f"gemessen ({measured}%)" if measured else f"konfiguriert ({configured}%)"
         )
         return attrs
+
+
+class StoredEnergyAvgPriceSensor(BatteryStorageBaseSensor):
+    """Sensor showing the volume-weighted average price (ct/kWh) of the
+    energy currently stored in the battery."""
+
+    _attr_icon = "mdi:cash-clock"
+    _attr_native_unit_of_measurement = "ct/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "stored_energy_avg_price",
+            "Speicher Durchschnittspreis",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("stored_avg_price_ct")
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        d = self.coordinator.data
+        return {
+            "stored_kwh": d.get("stored_kwh"),
+            "stored_cost_eur": d.get("stored_cost_eur"),
+        }

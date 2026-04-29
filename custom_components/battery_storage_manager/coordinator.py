@@ -211,6 +211,11 @@ class BatteryStorageCoordinator(
         self._measured_discharge_efficiency: float | None = None
         self._measured_roundtrip_efficiency: float | None = None
 
+        # Average price of currently stored battery energy (FIFO-light:
+        # running cost-pool, avg = pool / stored_kwh).
+        self._stored_kwh: float = 0.0
+        self._stored_cost_eur: float = 0.0
+
         # Action history: records what was ACTUALLY executed (not just planned)
         # Persistent, 10-min intervals, max 288 entries (48h)
         self._action_history: list[dict] = []
@@ -636,9 +641,16 @@ class BatteryStorageCoordinator(
             self._eff_discharge_battery_kwh = today_data.get("discharge_battery_kwh", 0.0)
             self._eff_discharge_grid_kwh = today_data.get("discharge_grid_kwh", 0.0)
             self._eff_today_date = today_data.get("date")
+            stored = data.get("stored_energy") or {}
+            self._stored_kwh = float(stored.get("kwh", 0.0) or 0.0)
+            self._stored_cost_eur = float(stored.get("cost_eur", 0.0) or 0.0)
             _LOGGER.info(
-                "Loaded efficiency data: %d days history, today %s",
+                "Loaded efficiency data: %d days history, today %s, "
+                "stored=%.2f kWh @ %.2f ct/kWh avg",
                 len(self._eff_history), self._eff_today_date,
+                self._stored_kwh,
+                (self._stored_cost_eur / self._stored_kwh * 100)
+                if self._stored_kwh > 0.01 else 0,
             )
         self._recalculate_rolling_efficiency()
 
@@ -652,6 +664,10 @@ class BatteryStorageCoordinator(
                 "charge_battery_kwh": round(self._eff_charge_battery_kwh, 4),
                 "discharge_battery_kwh": round(self._eff_discharge_battery_kwh, 4),
                 "discharge_grid_kwh": round(self._eff_discharge_grid_kwh, 4),
+            },
+            "stored_energy": {
+                "kwh": round(self._stored_kwh, 4),
+                "cost_eur": round(self._stored_cost_eur, 4),
             },
         })
 
@@ -754,6 +770,32 @@ class BatteryStorageCoordinator(
         battery_power_w = self._battery_voltage * self._battery_current
         # Positive current = charging, negative = discharging
         changed = False
+
+        # Stored-energy cost-pool (avg price of currently stored energy).
+        # Charge → kWh added at current price (Solar = 0 EUR).
+        # Discharge → kWh removed at current avg (avg unverändert).
+        if abs(battery_power_w) > 10:
+            delta_kwh = abs(battery_power_w) * dt_hours / 1000
+            cap = self._battery_capacity or 0
+            if battery_power_w > 0:
+                # Solar im SOLAR_CHARGING-Mode kostenlos, sonst Tibber-Preis.
+                price_eur = 0.0
+                if self._operating_mode == MODE_CHARGING:
+                    price_eur = float(self._current_price or 0)
+                self._stored_cost_eur += delta_kwh * price_eur
+                self._stored_kwh += delta_kwh
+                if cap > 0 and self._stored_kwh > cap:
+                    # Cap auf Kapazität, avg bleibt konstant.
+                    self._stored_kwh = cap
+            else:
+                if self._stored_kwh > 0.001:
+                    avg = self._stored_cost_eur / self._stored_kwh
+                    take = min(delta_kwh, self._stored_kwh)
+                    self._stored_cost_eur -= take * avg
+                    self._stored_kwh -= take
+                    if self._stored_kwh < 0.01:
+                        self._stored_kwh = 0.0
+                        self._stored_cost_eur = 0.0
 
         # Only track efficiency during grid charging.  Solar charging has
         # too much fluctuation (clouds, surplus variations) to give stable
@@ -1774,6 +1816,11 @@ class BatteryStorageCoordinator(
                 ((k, v) for k, v in self._solar_forecast.items()),
             )[:8]) if self._solar_forecast else None,
             "battery_capacity_kwh": self._battery_capacity,
+            "stored_kwh": round(self._stored_kwh, 3),
+            "stored_cost_eur": round(self._stored_cost_eur, 4),
+            "stored_avg_price_ct": round(
+                self._stored_cost_eur / self._stored_kwh * 100, 2
+            ) if self._stored_kwh > 0.01 else None,
             "allow_grid_charging": self._allow_grid_charging,
             "allow_discharging": self._allow_discharging,
             "allow_solar_charging": self._allow_solar_charging,
