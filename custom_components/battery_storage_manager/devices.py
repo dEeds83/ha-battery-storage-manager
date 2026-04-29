@@ -230,6 +230,17 @@ class DevicesMixin:
         Uses EMA-smoothed grid power to dampen oscillation from
         toggle devices (fridge, heat pump, etc.).
         """
+        # Settle-Throttle: Nach einem Write ein paar Sekunden warten,
+        # damit der Wechselrichter den neuen Sollwert physisch
+        # umsetzen kann, bevor wir die Wirkung wieder messen und
+        # nachregeln. Ohne Throttle übersteuert der PID auf alten
+        # Messwerten.
+        now_ts = dt_util.utcnow().timestamp()
+        if (self._inverter_last_write_ts is not None
+                and (now_ts - self._inverter_last_write_ts)
+                < self._inverter_settle_seconds):
+            return
+
         # Use smoothed grid power for PID to avoid chasing toggle devices
         grid = self._grid_power_ema if self._grid_power_ema is not None else self._grid_power
         if grid is None:
@@ -294,6 +305,7 @@ class DevicesMixin:
             return
 
         self._inverter_target_power = new_target
+        self._inverter_last_write_ts = now_ts
 
         domain = self._inverter_power_entity.split(".")[0]
         await self.hass.services.async_call(
@@ -332,6 +344,7 @@ class DevicesMixin:
             return
 
         self._inverter_target_power = value
+        self._inverter_last_write_ts = dt_util.utcnow().timestamp()
         domain = self._inverter_power_entity.split(".")[0]
         await self.hass.services.async_call(
             domain,

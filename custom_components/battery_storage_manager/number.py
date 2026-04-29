@@ -8,6 +8,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -31,6 +32,7 @@ async def async_setup_entry(
         MaxSOCNumber(coordinator, entry),
         PriceLowThresholdNumber(coordinator, entry),
         PriceHighThresholdNumber(coordinator, entry),
+        InverterSettleSecondsNumber(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -181,3 +183,32 @@ class PriceHighThresholdNumber(BatteryStorageBaseNumber):
 
     def _apply_restored_value(self, value: float) -> None:
         self.coordinator.price_high_threshold = value
+
+
+class InverterSettleSecondsNumber(BatteryStorageBaseNumber):
+    """Settle-Zeit nach jedem Inverter-Setpoint-Write."""
+
+    _attr_icon = "mdi:timer-cog-outline"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 60
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "s"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry,
+            "inverter_settle_seconds", "Wechselrichter Settle-Zeit",
+        )
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator._inverter_settle_seconds
+
+    async def async_set_native_value(self, value: float) -> None:
+        self.coordinator._inverter_settle_seconds = float(value)
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    def _apply_restored_value(self, value: float) -> None:
+        self.coordinator._inverter_settle_seconds = float(value)

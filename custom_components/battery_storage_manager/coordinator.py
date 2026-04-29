@@ -286,6 +286,11 @@ class BatteryStorageCoordinator(
         self._pid_kp: float = 0.6   # proportional gain
         self._pid_ki: float = 0.15  # integral gain
         self._pid_kd: float = 0.1   # derivative gain
+        # Settle-Zeit: Wechselrichter braucht ein paar Sekunden, um auf
+        # einen neuen Sollwert zu reagieren. Solange unterdrücken wir
+        # weitere Regel-Schritte, sonst PID-Übersteuerung.
+        self._inverter_last_write_ts: float | None = None
+        self._inverter_settle_seconds: float = 8.0
 
         # Hysteresis state for charger switching
         self._charger_last_switch_time: dict[int, datetime] = {}
