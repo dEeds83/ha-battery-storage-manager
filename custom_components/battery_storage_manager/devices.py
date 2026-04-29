@@ -874,7 +874,17 @@ class DevicesMixin:
 
     async def _execute_plan_action(self, action: str) -> None:
         """Execute the action from the battery plan for the current hour."""
-        if action == "charge" and self._battery_soc < self._max_soc:
+        if action == "charge":
+            # Plan will Netzladen — gilt nur unterhalb max_soc.
+            if self._battery_soc >= self._max_soc:
+                # max_soc gilt nur für Netzladen. Solar-Absorption über
+                # max_soc weiterhin erlaubt (z.B. bei Dimmer).
+                _LOGGER.debug(
+                    "Plan action: CHARGE — SOC≥max_soc, fall back to solar-absorb"
+                )
+                if not await self._try_solar_opportunistic():
+                    await self._set_mode_idle()
+                return
             if not self._allow_grid_charging:
                 _LOGGER.debug("Plan action: CHARGE skipped (grid charging disabled)")
                 await self._set_mode_idle()
