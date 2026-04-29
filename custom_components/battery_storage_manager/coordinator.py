@@ -1691,18 +1691,24 @@ class BatteryStorageCoordinator(
                 )
 
     async def _async_dimmer_fast_tick(self, now=None) -> None:
-        """3s loop: schnelle Dimmer-Nachregelung zwischen den 15s-Coordinator-Ticks."""
+        """3s loop: Sensor-Reads + Dimmer-Nachregelung. Plan bleibt im 15s-Tick."""
         if not self.is_dimmer_setup:
             return
-        if self._operating_mode not in (MODE_IDLE, MODE_SOLAR_CHARGING, MODE_DISCHARGING):
-            return
-        if not self._allow_solar_charging:
-            return
-        self._read_grid_power_fast()
+        # Volle Sensor-Reads (Preise, SOC, Grid, Solar, Charger-Power etc.).
+        self._read_sensor_states()
+        self._sync_device_states()
+        # Opportunistic-Dimmer-Anpassung nur in passenden Modi.
+        if (self._allow_solar_charging
+                and self._operating_mode in (MODE_IDLE, MODE_SOLAR_CHARGING, MODE_DISCHARGING)):
+            try:
+                await self._try_solar_opportunistic()
+            except Exception:
+                _LOGGER.warning("Dimmer fast-tick opportunistic error", exc_info=True)
+        # Push aktualisierte Daten an Entities (UI live).
         try:
-            await self._try_solar_opportunistic()
+            self.async_set_updated_data(self._build_data())
         except Exception:
-            _LOGGER.warning("Dimmer fast-tick error", exc_info=True)
+            _LOGGER.debug("fast-tick set_updated_data failed", exc_info=True)
 
     def _build_data(self) -> dict[str, Any]:
         """Build the data dict exposed to entities."""
