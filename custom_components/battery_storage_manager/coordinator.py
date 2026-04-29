@@ -1794,10 +1794,16 @@ class BatteryStorageCoordinator(
                 await self._try_solar_opportunistic()
         except Exception:
             _LOGGER.warning("Fast-tick error", exc_info=True)
+        # WICHTIG: Kein async_set_updated_data verwenden — das würde
+        # den geplanten 15-s-Refresh des DataUpdateCoordinators canceln
+        # und neu schedulen. Bei 3-s-Fast-Tick liefe der 15-s-Tick nie
+        # mehr (Plan, Tibber-Forecast, EPEX-Predictor blockiert).
+        # Stattdessen: data direkt setzen + Listener informieren.
         try:
-            self.async_set_updated_data(self._build_data())
+            self.data = self._build_data()
+            self.async_update_listeners()
         except Exception:
-            _LOGGER.debug("fast-tick set_updated_data failed", exc_info=True)
+            _LOGGER.debug("fast-tick listener update failed", exc_info=True)
 
     def _build_data(self) -> dict[str, Any]:
         """Build the data dict exposed to entities."""
