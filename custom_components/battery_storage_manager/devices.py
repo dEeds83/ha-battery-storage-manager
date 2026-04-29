@@ -368,11 +368,13 @@ class DevicesMixin:
             target = 0
 
         # Optional enable-switch nur einschalten wenn nötig, nie ausschalten.
+        # Auch bei state="unavailable" turn_on senden — Steckdose könnte
+        # offline sein und reagiert dann sobald erreichbar.
         enable_switch = c.get("switch", "")
         want_on = target > 0
         if enable_switch and want_on:
             sw_state = self.hass.states.get(enable_switch)
-            if sw_state is not None and sw_state.state == "off":
+            if sw_state is None or sw_state.state != "on":
                 await self.hass.services.async_call(
                     "switch", "turn_on", {"entity_id": enable_switch},
                 )

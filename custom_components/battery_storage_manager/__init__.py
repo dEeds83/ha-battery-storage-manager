@@ -15,7 +15,7 @@ from .coordinator import BatteryStorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-CARD_VERSION = "2.38.3"
+CARD_VERSION = "2.38.4"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 FRONTEND_CARDS = [
     "battery-plan-card.js",
@@ -197,11 +197,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     coordinator = BatteryStorageCoordinator(hass, entry)
-    await coordinator.async_config_entry_first_refresh()
 
     # Bei Start: Dimmer-Sollwert auf 0 zurücksetzen, damit kein Reststand
     # aus einer Pre-Restart-Phase (z.B. ESPHome-Default) übernommen wird.
+    # Muss VOR dem ersten Refresh laufen, sonst überschreibt der Reset
+    # die direkt vom Plan gesetzte Charging-Aktion.
     await coordinator.reset_dimmer_on_start()
+
+    await coordinator.async_config_entry_first_refresh()
 
     # Dimmer-Nachregelung: triggert auf Tibber-Pulse-State-Updates
     # (typisch alle 3 s) → keine Tick-Miss-Drift. Plus 10-s-Heartbeat

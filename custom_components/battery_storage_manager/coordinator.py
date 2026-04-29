@@ -1616,11 +1616,29 @@ class BatteryStorageCoordinator(
 
         Prevents a stale pre-restart setpoint from immediately drawing
         power before the optimizer / opportunistic logic has decided.
+
+        Schreibt direkt set_value(0) und umgeht das Deadband — interner
+        target_power wäre nach Init 0 und der Deadband-Check würde den
+        Schreibvorgang überspringen, ohne dass die Hardware tatsächlich
+        auf 0 gesetzt wird.
         """
         for i, charger in enumerate(self._chargers):
-            if charger.get("type") == CHARGER_TYPE_DIMMER:
-                _LOGGER.info("Startup: resetting dimmer C%d to 0 W", i + 1)
-                await self._set_dimmer_power(i, 0)
+            if charger.get("type") != CHARGER_TYPE_DIMMER:
+                continue
+            power_entity = charger.get("power_entity", "")
+            if not power_entity:
+                continue
+            domain = power_entity.split(".")[0]
+            try:
+                await self.hass.services.async_call(
+                    domain, "set_value",
+                    {"entity_id": power_entity, "value": 0},
+                )
+            except Exception:
+                _LOGGER.debug("Reset dimmer set_value failed", exc_info=True)
+            charger["target_power"] = 0.0
+            charger["active"] = False
+            _LOGGER.info("Startup: dimmer C%d reset to 0 W", i + 1)
 
     def apply_options(self, options: dict) -> None:
         """Apply updated options from the options flow (live, no restart needed)."""
