@@ -347,7 +347,10 @@ class DevicesMixin:
 
         Mirrors `_set_inverter_power`: clamps to [0, max_power], applies
         min_power cutoff, deadband, and writes via number `set_value`.
-        Optional enable-switch is toggled to match value > 0.
+        Optional enable-switch wird einmalig eingeschaltet, aber NICHT bei
+        target=0 wieder ausgeschaltet — Netzteil bleibt an und wird auf 0
+        geregelt (kein ständiges On/Off-Toggling). Komplettes Aus passiert
+        nur via stop_all().
         """
         if idx < 0 or idx >= len(self._chargers):
             return
@@ -364,15 +367,15 @@ class DevicesMixin:
         if 0 < target < min_p:
             target = 0
 
-        # Optional enable-switch: keep in sync with target > 0.
+        # Optional enable-switch nur einschalten wenn nötig, nie ausschalten.
         enable_switch = c.get("switch", "")
         want_on = target > 0
-        if enable_switch and want_on != c.get("active", False):
-            await self.hass.services.async_call(
-                "switch",
-                "turn_on" if want_on else "turn_off",
-                {"entity_id": enable_switch},
-            )
+        if enable_switch and want_on:
+            sw_state = self.hass.states.get(enable_switch)
+            if sw_state is not None and sw_state.state == "off":
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": enable_switch},
+                )
 
         # Deadband: skip tiny changes.
         if abs(target - (c.get("target_power") or 0)) < 10:

@@ -1531,7 +1531,13 @@ class BatteryStorageCoordinator(
         """Turn off all chargers and inverters."""
         for i, charger in enumerate(self._chargers):
             if charger.get("type") == CHARGER_TYPE_DIMMER:
+                # Komplettes Stop: Power 0 + optionaler Enable-Switch off.
                 await self._set_dimmer_power(i, 0)
+                enable_switch = charger.get("switch", "")
+                if enable_switch:
+                    await self.hass.services.async_call(
+                        "switch", "turn_off", {"entity_id": enable_switch}
+                    )
                 continue
             if charger["switch"]:
                 await self.hass.services.async_call(

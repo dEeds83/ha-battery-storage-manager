@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.36.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.36.2-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -175,7 +175,7 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Aktueller Strompreis | Strompreis in EUR/kWh mit günstigen/teuren Stunden als Attribute |
 | Speicher Ladestand | Ladezustand in Prozent mit dynamischem Batterie-Icon |
 | Netzleistung | Aktueller Netzbezug/-einspeisung in Watt mit Richtungsanzeige |
-| Ladegerät N Status | Aktiv/Inaktiv pro konfiguriertem Ladegerät (dynamisch erzeugt) mit Leistung als Attribut |
+| Ladegerät N Status | Switch-Modus: Aktiv/Inaktiv pro Charger. Dimmer-Modus: aktueller Sollwert in W (target_power, actual_power, min/max als Attribute). Dynamisch erzeugt. |
 | Wechselrichter Status | Aktiv / Inaktiv |
 | Wechselrichter Leistung | Aktuelle Ist-Leistung des Einspeise-Wechselrichters in Watt |
 | Wechselrichter Soll-Leistung | Vom Plugin gesetzter Zielwert für den Wechselrichter in Watt |
@@ -343,34 +343,58 @@ Wenn aktiviert, beeinflusst die EPEX-Prognose die Planung über einen **Terminal
 
 Das System ist auf AC-gekoppelte Speicher ausgelegt: Solarüberschuss fließt durchs Hausnetz und braucht die Ladegeräte, um in die Batterie zu kommen.
 
-| Grid-Export | Aktion |
+#### Switch-Modus (mehrere statische Ladegeräte)
+
+Greedy-Auswahl pro Slot, Schwellen pro Charger:
+
+| Bedingung | Aktion |
 |---|---|
-| < -100W (Export) | Nächsten Charger einschalten |
-| -100W bis +200W | PID-Inverter regelt Feinabstimmung |
-| > +200W (Import) | Letzten Charger ausschalten |
+| Export ≥ 80% Charger-Power | Charger direkt einschalten |
+| Export ≥ Net-Gain-Schwelle (~13%) UND WR kann Defizit decken | Charger mit WR-Hilfe einschalten (Round-Trip mit Netto-Gewinn) |
+| WR-Sollwert > letzter Charger + 50W | Letzten Charger aus (Round-Trip-Verlust) |
+| Grid-Import > 100W UND WR-Ist > 50W | Letzten Charger aus (WR pumpt Batterie ins Netz) |
+| Grid-Import > WR-Max + 200W | Letzten Charger aus (PID gesättigt) |
 
-Kein Strom wird ins Netz verschenkt: Bei Grid-Export wird automatisch der nächste verfügbare Charger eingeschaltet. Bei zu viel Grid-Import wird der letzte Charger wieder abgeschaltet. Der PID-Inverter regelt die Nulleinspeisung dazwischen.
+Solar in Stufen → PID-WR füllt Lücke zwischen den Stufen, Hysterese verhindert Charger-Toggling.
 
-**Opportunistisches Solar-Laden:** Auch bei Plan-Aktionen "Halten" und "Idle" wird Solarüberschuss automatisch mitgenommen. Kostenlose Solarenergie wird nie verschenkt – der Plan kontrolliert nur Netz-Laden und Entlade-Zeitpunkte.
+#### Dimmer-Modus (ein dimmbares Ladegerät)
 
-**Solar über max_soc:** Auch wenn der SOC das konfigurierte Maximum erreicht hat, wird reiner Solarüberschuss weiterhin geladen (kostenlose Energie). Nur der Wechselrichter-Defizit-Modus (der Netzstrom nutzt) wird über max_soc blockiert.
+Single Continuous Load — Dimmer absorbiert exakt den Überschuss:
 
-| SOC | Reiner Solar | Solar + WR-Defizit | Netz-Laden |
+| Bedingung | Aktion |
+|---|---|
+| Solar > Haus-Verbrauch | Dimmer-Sollwert = Export, einstufige Regelung mit gain 0.8 (kein PID nötig) |
+| Plan = Charge | Dimmer auf Maximalleistung |
+| Plan = Discharge, WR aktiv | Dimmer auf 0, WR liefert via PID |
+| Plan = Discharge, WR auf 0 trotz Export | Dimmer absorbiert Rest (kein Export-Verlust) |
+
+WR ist im Solar-Charging-Modus **garantiert aus** — Dimmer regelt direkt, kein Round-Trip. Optionaler Enable-Switch bleibt eingeschaltet und Sollwert geht auf 0 (kein ständiges Toggling).
+
+**Opportunistisches Solar-Laden:** Auch bei Plan-Aktionen "Halten" und "Idle" wird Solarüberschuss automatisch mitgenommen. Kostenlose Solarenergie wird nie verschenkt — der Plan kontrolliert nur Netz-Laden und Entlade-Zeitpunkte.
+
+**Solar über max_soc:** Auch wenn der SOC das konfigurierte Maximum erreicht hat, wird Solarüberschuss weiterhin geladen (kostenlose Energie). SOC-Limit gilt nur für Netzladen (DP-Plan via grid_max_soc). WR-Hilfe ist auch oberhalb max_soc erlaubt — Round-Trip ist netto positiv solange Solar ausreicht.
+
+| SOC | Solar (direkt) | Solar + WR-Defizit | Netz-Laden |
 |---|---|---|---|
 | < max_soc | ✅ | ✅ | ✅ |
-| ≥ max_soc | ✅ Kostenlos | ❌ Zieht Netzstrom | ❌ |
+| ≥ max_soc | ✅ | ✅ | ❌ |
 
-**Betriebsmodus:** Der Sensor zeigt `solar_charging` (gold) wenn von Solar geladen wird, `charging` (grün) bei Netz-Laden – so ist im Dashboard sofort erkennbar, woher die Energie kommt.
+**Master-Schalter:** `Solarladen erlauben` deaktiviert die gesamte Solar-Absorption. Im Off-Zustand wird Überschuss komplett ins Netz exportiert (z.B. negative Strompreise).
+
+**Betriebsmodus:** Der Sensor zeigt `solar_charging` (gold) wenn von Solar geladen wird, `charging` (grün) bei Netz-Laden — so ist im Dashboard sofort erkennbar, woher die Energie kommt.
 
 ### PID-geregelte Nulleinspeisung
 
-Statt einfacher additiver Anpassung nutzt der Wechselrichter einen PID-Regler:
+Statt einfacher additiver Anpassung nutzt der Wechselrichter einen PID-Regler (nur im Switch-Modus + Discharge):
 - **P** (proportional, Kp=0.6): Sofortige Reaktion auf Abweichung
 - **I** (integral, Ki=0.15): Gleicht dauerhafte Offsets aus
 - **D** (derivative, Kd=0.1): Dämpft schnelle Schwankungen
 - **Anti-Windup**: Begrenzt den Integralterm
 - **Asymmetrische Regelung**: Export sofort korrigieren, 0-50W Import tolerieren
 - **Setpoint**: 25W Netzbezug (Mitte der 0-50W Toleranzzone)
+- **min_target = 0**: Kein Mindest-Export erzwungen (Einspeisung ohne Vergütung wäre Verlust). Bei vollem Solar geht WR auf 0.
+
+Im **Dimmer-Modus** kommt kein PID zum Einsatz — der Dimmer ist eine kontinuierliche Last und konvergiert in 1-2 Ticks per einstufiger Regelung mit EMA-geglättetem Grid-Signal.
 
 ### Lernende Verbrauchsprognose
 
@@ -416,6 +440,7 @@ Beispiel: Forecast sagt 10 kWh, um 12:00 erst 2 kWh statt 4 kWh → Restprognose
 |--------|----------|
 | Netzladen erlauben | Plan-Aktionen "charge" werden übersprungen (idle stattdessen) |
 | Entladen erlauben | Plan-Aktionen "discharge" werden übersprungen |
+| Solarladen erlauben | Keine Solar-Absorption — Überschuss wird vollständig exportiert (Master-Schalter, Zero-Export-Toggle) |
 | Solarprognose nutzen | Solarprognosen werden nicht gelesen, Plan basiert nur auf Preisen |
 
 ## ePaper Dashboard (optional)
