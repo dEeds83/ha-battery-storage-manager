@@ -1659,6 +1659,51 @@ class BatteryStorageCoordinator(
             unsub()
         self._unsub_listeners.clear()
 
+    def _read_grid_power_fast(self) -> None:
+        """Lightweight refresh of grid_power + EMA (used in 3s dimmer loop)."""
+        consumption = None
+        production = None
+        cons_state = self.hass.states.get(self._pulse_consumption_entity)
+        if cons_state and cons_state.state not in ("unknown", "unavailable"):
+            try:
+                consumption = float(cons_state.state)
+            except (ValueError, TypeError):
+                pass
+        prod_state = self.hass.states.get(self._pulse_production_entity)
+        if prod_state and prod_state.state not in ("unknown", "unavailable"):
+            try:
+                production = float(prod_state.state)
+            except (ValueError, TypeError):
+                pass
+        if consumption is not None and production is not None:
+            self._grid_power = consumption - production
+        elif consumption is not None:
+            self._grid_power = consumption
+        elif production is not None:
+            self._grid_power = -production
+        if self._grid_power is not None:
+            if self._grid_power_ema is None:
+                self._grid_power_ema = self._grid_power
+            else:
+                alpha = 0.2 if self._grid_power > self._grid_power_ema else 0.85
+                self._grid_power_ema = (
+                    alpha * self._grid_power + (1 - alpha) * self._grid_power_ema
+                )
+
+    async def _async_dimmer_fast_tick(self, now=None) -> None:
+        """3s loop: schnelle Dimmer-Nachregelung zwischen den 15s-Coordinator-Ticks."""
+        if not self.is_dimmer_setup:
+            return
+        if self._operating_mode not in (MODE_IDLE, MODE_SOLAR_CHARGING, MODE_DISCHARGING):
+            return
+        if not self._allow_solar_charging:
+            return
+        self._read_grid_power_fast()
+        try:
+            await self._try_solar_opportunistic()
+        except Exception:
+            _LOGGER.warning("Dimmer fast-tick error", exc_info=True)
+
     def _build_data(self) -> dict[str, Any]:
         """Build the data dict exposed to entities."""
         cheap_hours = self._find_cheap_hours(3)

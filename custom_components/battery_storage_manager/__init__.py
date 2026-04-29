@@ -15,7 +15,7 @@ from .coordinator import BatteryStorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-CARD_VERSION = "2.36.4"
+CARD_VERSION = "2.37.0"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 FRONTEND_CARDS = [
     "battery-plan-card.js",
@@ -202,6 +202,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Bei Start: Dimmer-Sollwert auf 0 zurücksetzen, damit kein Reststand
     # aus einer Pre-Restart-Phase (z.B. ESPHome-Default) übernommen wird.
     await coordinator.reset_dimmer_on_start()
+
+    # Schnelle 3-Sekunden-Schleife für Dimmer-Nachregelung (zwischen den
+    # 15-Sekunden-Coordinator-Ticks). Stop in coordinator.stop() via
+    # _unsub_listeners.
+    from datetime import timedelta as _td
+    from homeassistant.helpers.event import async_track_time_interval
+    coordinator._unsub_listeners.append(
+        async_track_time_interval(
+            hass, coordinator._async_dimmer_fast_tick, _td(seconds=3)
+        )
+    )
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
