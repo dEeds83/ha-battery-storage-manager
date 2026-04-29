@@ -450,8 +450,12 @@ class DevicesMixin:
             return
         c = self._chargers[idx]
         current = c.get("target_power") or 0.0
-        # gain 0.8 — fast convergence with EMA-smoothed input
-        new_target = current + (-grid) * 0.8
+        # Ziel: leichter Netzbezug 0-25 W (Mitte 12 W). Innerhalb der
+        # Deadband keine Änderung — sonst gain 0.8 auf Setpoint-Abweichung.
+        if 0 <= grid <= 25:
+            return
+        setpoint = 12
+        new_target = current + (setpoint - grid) * 0.8
         await self._set_dimmer_power(idx, new_target)
 
     async def _start_solar_charging(self, surplus_w: float) -> None:
@@ -603,7 +607,8 @@ class DevicesMixin:
                 # spart Standby-Verbrauch.
                 if grid is not None and grid < -50 and inverter_target <= 5:
                     current = self._chargers[idx].get("target_power") or 0.0
-                    new_target = current + (-grid) * 0.8
+                    # Setpoint +12 W Import (Ziel 0-25 W).
+                    new_target = current + (12 - grid) * 0.8
                     await self._set_dimmer_power(idx, new_target)
                     if self._inverter_active:
                         if self._inverter_switch:
