@@ -230,22 +230,29 @@ class DevicesMixin:
         Uses EMA-smoothed grid power to dampen oscillation from
         toggle devices (fridge, heat pump, etc.).
         """
-        # Settle-Throttle: Nach einem Write ein paar Sekunden warten,
-        # damit der Wechselrichter den neuen Sollwert physisch
-        # umsetzen kann, bevor wir die Wirkung wieder messen und
-        # nachregeln. Ohne Throttle übersteuert der PID auf alten
-        # Messwerten.
-        now_ts = dt_util.utcnow().timestamp()
-        if (self._inverter_last_write_ts is not None
-                and (now_ts - self._inverter_last_write_ts)
-                < self._inverter_settle_seconds):
-            return
-
         # Use smoothed grid power for PID to avoid chasing toggle devices
         grid = self._grid_power_ema if self._grid_power_ema is not None else self._grid_power
         if grid is None:
             _LOGGER.debug("No grid power data available for zero-feed regulation")
             return
+
+        # Settle-Throttle: Nach einem Write warten, bis der Wechselrichter
+        # den Sollwert physisch umgesetzt hat. Asymmetrisch — Reduktionen
+        # (Netz-Export) dürfen schon nach halber Settle-Zeit, weil
+        # ungeförderte Einspeisung Verlust ist und schnell weg muss.
+        # Hochregeln bekommt die volle Settle-Zeit, weil Überschwinger
+        # dort weniger schmerzen als Oszillation.
+        now_ts = dt_util.utcnow().timestamp()
+        if self._inverter_last_write_ts is not None:
+            elapsed = now_ts - self._inverter_last_write_ts
+            is_reduction = grid < -10
+            min_wait = (
+                self._inverter_settle_seconds / 2
+                if is_reduction
+                else self._inverter_settle_seconds
+            )
+            if elapsed < min_wait:
+                return
 
         max_power = self._inverter_power or 800
 
