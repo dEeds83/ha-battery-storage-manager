@@ -450,13 +450,31 @@ class DevicesMixin:
             return
         c = self._chargers[idx]
         current = c.get("target_power") or 0.0
-        # Ziel: leichter Netzbezug 0-25 W (Mitte 12 W). Innerhalb der
-        # Deadband keine Änderung — sonst gain 0.8 auf Setpoint-Abweichung.
-        if 0 <= grid <= 25:
+        new_target = self._dimmer_zero_feed_step(current, grid)
+        if new_target is None:
             return
-        setpoint = 12
-        new_target = current + (setpoint - grid) * 0.8
         await self._set_dimmer_power(idx, new_target)
+
+    @staticmethod
+    def _dimmer_zero_feed_step(current: float, grid: float) -> float | None:
+        """Compute next dimmer setpoint to converge on grid in 0..25 W.
+
+        Konservativ ausgelegt um Oszillation zu vermeiden:
+        - Deadband 0..25 W → keine Änderung (Toleranzfenster).
+        - Setpoint 12 W (Mitte). Gain 0.5 (vorher 0.8 → Überschwingen).
+        - Slew-Rate-Limit: max ±200 W pro Schritt.
+        Returns None wenn keine Änderung nötig.
+        """
+        if 0 <= grid <= 25:
+            return None
+        setpoint = 12
+        delta = (setpoint - grid) * 0.5
+        # Slew-Rate
+        if delta > 200:
+            delta = 200
+        elif delta < -200:
+            delta = -200
+        return current + delta
 
     async def _start_solar_charging(self, surplus_w: float) -> None:
         """Activate chargers proportionally to available solar surplus."""
@@ -607,9 +625,9 @@ class DevicesMixin:
                 # spart Standby-Verbrauch.
                 if grid is not None and grid < -50 and inverter_target <= 5:
                     current = self._chargers[idx].get("target_power") or 0.0
-                    # Setpoint +12 W Import (Ziel 0-25 W).
-                    new_target = current + (12 - grid) * 0.8
-                    await self._set_dimmer_power(idx, new_target)
+                    nt = self._dimmer_zero_feed_step(current, grid)
+                    if nt is not None:
+                        await self._set_dimmer_power(idx, nt)
                     if self._inverter_active:
                         if self._inverter_switch:
                             await self.hass.services.async_call(
