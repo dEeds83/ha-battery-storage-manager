@@ -1748,20 +1748,34 @@ class BatteryStorageCoordinator(
                 )
 
     async def _async_dimmer_fast_tick(self, now=None) -> None:
-        """3s loop: Sensor-Reads + Dimmer-Nachregelung. Plan bleibt im 15s-Tick."""
+        """Fast loop: Sensor-Reads + Plan-Aktion + Dimmer-Nachregelung.
+
+        Trigger: Tibber-Pulse-State-Change + 10 s Heartbeat. Führt die
+        aktuelle Plan-Aktion idempotent aus (mode-Guards in _start_*),
+        damit Mode + Dimmer-Sollwert auch zwischen den 15-s-Coordinator-
+        Ticks synchron bleiben. Plan-Berechnung selbst (DP-Solver,
+        Solar-Forecast etc.) läuft weiterhin nur im 15-s-Tick.
+        """
         if not self.is_dimmer_setup:
             return
-        # Volle Sensor-Reads (Preise, SOC, Grid, Solar, Charger-Power etc.).
         self._read_sensor_states()
         self._sync_device_states()
-        # Opportunistic-Dimmer-Anpassung nur in passenden Modi.
-        if (self._allow_solar_charging
-                and self._operating_mode in (MODE_IDLE, MODE_SOLAR_CHARGING, MODE_DISCHARGING)):
-            try:
+        try:
+            if (self._strategy == STRATEGY_PRICE_OPTIMIZED
+                    and self._battery_soc is not None):
+                action = self._get_current_plan_action()
+                if action:
+                    await self._execute_plan_action(action)
+                elif (self._allow_solar_charging
+                      and self._operating_mode in (
+                          MODE_IDLE, MODE_SOLAR_CHARGING, MODE_DISCHARGING)):
+                    await self._try_solar_opportunistic()
+            elif (self._allow_solar_charging
+                  and self._operating_mode in (
+                      MODE_IDLE, MODE_SOLAR_CHARGING, MODE_DISCHARGING)):
                 await self._try_solar_opportunistic()
-            except Exception:
-                _LOGGER.warning("Dimmer fast-tick opportunistic error", exc_info=True)
-        # Push aktualisierte Daten an Entities (UI live).
+        except Exception:
+            _LOGGER.warning("Fast-tick error", exc_info=True)
         try:
             self.async_set_updated_data(self._build_data())
         except Exception:
