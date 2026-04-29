@@ -98,6 +98,7 @@ class MinSOCNumber(BatteryStorageBaseNumber):
     async def async_set_native_value(self, value: float) -> None:
         self.coordinator.min_soc = int(value)
         self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
     def _apply_restored_value(self, value: float) -> None:
         self.coordinator.min_soc = int(value)
@@ -122,6 +123,7 @@ class MaxSOCNumber(BatteryStorageBaseNumber):
     async def async_set_native_value(self, value: float) -> None:
         self.coordinator.max_soc = int(value)
         self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
     def _apply_restored_value(self, value: float) -> None:
         self.coordinator.max_soc = int(value)
@@ -148,6 +150,7 @@ class PriceLowThresholdNumber(BatteryStorageBaseNumber):
     async def async_set_native_value(self, value: float) -> None:
         self.coordinator.price_low_threshold = value
         self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
     def _apply_restored_value(self, value: float) -> None:
         self.coordinator.price_low_threshold = value
@@ -174,6 +177,7 @@ class PriceHighThresholdNumber(BatteryStorageBaseNumber):
     async def async_set_native_value(self, value: float) -> None:
         self.coordinator.price_high_threshold = value
         self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
     def _apply_restored_value(self, value: float) -> None:
         self.coordinator.price_high_threshold = value
