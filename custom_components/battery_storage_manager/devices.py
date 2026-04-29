@@ -599,14 +599,30 @@ class DevicesMixin:
                 )
                 inverter_target = self._inverter_target_power or 0
                 # WR ist effektiv auf 0 UND es geht trotzdem Strom raus →
-                # Dimmer aufdrehen statt verschenken.
+                # Dimmer aufdrehen statt verschenken. WR komplett aus,
+                # spart Standby-Verbrauch.
                 if grid is not None and grid < -50 and inverter_target <= 5:
                     current = self._chargers[idx].get("target_power") or 0.0
                     new_target = current + (-grid) * 0.8
                     await self._set_dimmer_power(idx, new_target)
+                    if self._inverter_active:
+                        if self._inverter_switch:
+                            await self.hass.services.async_call(
+                                "switch", "turn_off",
+                                {"entity_id": self._inverter_switch},
+                            )
+                        await self._set_inverter_power(0)
+                        self._inverter_active = False
                 else:
                     if (self._chargers[idx].get("target_power") or 0) > 0:
                         await self._set_dimmer_power(idx, 0)
+                    # WR wieder einschalten falls Solar nicht mehr reicht.
+                    if self._inverter_switch and not self._inverter_active:
+                        await self.hass.services.async_call(
+                            "switch", "turn_on",
+                            {"entity_id": self._inverter_switch},
+                        )
+                        self._inverter_active = True
                 return False
             await self._regulate_dimmer_zero_feed()
             # Mode reflects whether dimmer is actively absorbing.
