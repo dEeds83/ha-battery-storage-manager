@@ -411,6 +411,21 @@ class BatteryStorageCoordinator(
         return self._build_data()
 
     @staticmethod
+    def _charger_active_draw_w(c: dict) -> float:
+        """Best-effort current AC draw of an active charger.
+
+        - measured_power (Sensor) wenn vorhanden — gilt für beide Typen.
+        - sonst Dimmer: target_power (Sollwert ist gute Schätzung).
+        - sonst Switch: c["power"] (Nennleistung).
+        """
+        mp = c.get("measured_power")
+        if mp is not None:
+            return float(mp)
+        if c.get("type") == CHARGER_TYPE_DIMMER:
+            return float(c.get("target_power") or 0)
+        return float(c.get("power") or 0)
+
+    @staticmethod
     def _build_charger_entry(c: dict) -> dict:
         """Normalize a CONF_CHARGERS dict into the runtime per-charger dict."""
         return {
@@ -745,7 +760,7 @@ class BatteryStorageCoordinator(
         # efficiency readings.
         if self._operating_mode == MODE_CHARGING and battery_power_w > 10:
             grid_power_w = sum(
-                c.get("measured_power") or c["power"]
+                self._charger_active_draw_w(c)
                 for c in self._chargers if c["active"]
             )
             if grid_power_w > 0:

@@ -809,7 +809,7 @@ class DevicesMixin:
             # - Inverter active (PID): same logic, inverter compensates
             #   house consumption so grid reflects solar vs (house+chargers)
             active_draw = sum(
-                c.get("measured_power") or c["power"]
+                self._charger_active_draw_w(c)
                 for c in self._chargers if c["active"]
             )
             # What the chargers already capture + what's still exported
