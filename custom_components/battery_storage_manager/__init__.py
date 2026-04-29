@@ -15,7 +15,7 @@ from .coordinator import BatteryStorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-CARD_VERSION = "2.38.0"
+CARD_VERSION = "2.38.1"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 FRONTEND_CARDS = [
     "battery-plan-card.js",
@@ -203,14 +203,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # aus einer Pre-Restart-Phase (z.B. ESPHome-Default) übernommen wird.
     await coordinator.reset_dimmer_on_start()
 
-    # Schnelle 3-Sekunden-Schleife für Dimmer-Nachregelung (zwischen den
-    # 15-Sekunden-Coordinator-Ticks). Stop in coordinator.stop() via
-    # _unsub_listeners.
+    # Dimmer-Nachregelung: triggert auf Tibber-Pulse-State-Updates
+    # (typisch alle 3 s) → keine Tick-Miss-Drift. Plus 10-s-Heartbeat
+    # als Fallback falls Pulse-Sensor stillsteht.
     from datetime import timedelta as _td
-    from homeassistant.helpers.event import async_track_time_interval
+    from homeassistant.helpers.event import (
+        async_track_state_change_event,
+        async_track_time_interval,
+    )
+
+    async def _on_pulse_state(_event):
+        await coordinator._async_dimmer_fast_tick()
+
+    pulse_entities = [
+        e for e in (
+            coordinator._pulse_consumption_entity,
+            coordinator._pulse_production_entity,
+        ) if e
+    ]
+    if pulse_entities:
+        coordinator._unsub_listeners.append(
+            async_track_state_change_event(
+                hass, pulse_entities, _on_pulse_state
+            )
+        )
+    # Heartbeat-Fallback (Sensor-Stall-Erkennung).
     coordinator._unsub_listeners.append(
         async_track_time_interval(
-            hass, coordinator._async_dimmer_fast_tick, _td(seconds=3)
+            hass, coordinator._async_dimmer_fast_tick, _td(seconds=10)
         )
     )
 
