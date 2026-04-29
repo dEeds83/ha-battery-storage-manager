@@ -10,6 +10,7 @@ from homeassistant.helpers import selector
 
 from .const import (
     CHARGER_TYPE_DIMMER,
+    CHARGER_TYPE_HYBRID,
     CHARGER_TYPE_SWITCH,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_CURRENT_ENTITY,
@@ -104,7 +105,7 @@ STEP_TIBBER_SCHEMA = vol.Schema(
 
 _CHARGER_TYPE_SELECTOR = selector.SelectSelector(
     selector.SelectSelectorConfig(
-        options=[CHARGER_TYPE_SWITCH, CHARGER_TYPE_DIMMER],
+        options=[CHARGER_TYPE_SWITCH, CHARGER_TYPE_DIMMER, CHARGER_TYPE_HYBRID],
         mode=selector.SelectSelectorMode.DROPDOWN,
         translation_key="charger_type",
     )
@@ -314,6 +315,20 @@ def _extract_chargers_from_input(
             dimmer_enable_switch,
             dimmer_actual,
         )
+    if charger_type == CHARGER_TYPE_HYBRID:
+        if dimmer_min_power > dimmer_max_power:
+            raise vol.Invalid("dimmer_min_power must be <= dimmer_max_power")
+        # Dimmer zuerst (Solar-Absorption), dann Switches (nur Netz-Laden).
+        return _build_dimmer_charger(
+            dimmer_power_entity,
+            int(dimmer_max_power),
+            int(dimmer_min_power),
+            dimmer_enable_switch,
+            dimmer_actual,
+        ) + _build_chargers_list(
+            charger_entities, default_power, existing_chargers,
+            power_entities=power_entities,
+        )
     return _build_chargers_list(
         charger_entities, default_power, existing_chargers,
         power_entities=power_entities,
@@ -503,9 +518,12 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
         dimmer_charger = next(
             (c for c in current_chargers if c.get("type") == CHARGER_TYPE_DIMMER), None
         )
-        current_charger_type = (
-            CHARGER_TYPE_DIMMER if dimmer_charger else CHARGER_TYPE_SWITCH
-        )
+        if dimmer_charger and switch_chargers:
+            current_charger_type = CHARGER_TYPE_HYBRID
+        elif dimmer_charger:
+            current_charger_type = CHARGER_TYPE_DIMMER
+        else:
+            current_charger_type = CHARGER_TYPE_SWITCH
         current_entities = [c["switch"] for c in switch_chargers]
         current_powers = [c["power"] for c in switch_chargers]
         avg_power = (

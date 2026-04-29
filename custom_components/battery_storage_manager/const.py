@@ -43,7 +43,11 @@ CONF_CHARGER_POWER_ENTITIES = "charger_power_entities"  # measured power sensors
 # Charger types (per-entry "type" in CONF_CHARGERS list)
 CHARGER_TYPE_SWITCH = "switch"
 CHARGER_TYPE_DIMMER = "dimmer"
-# Top-level select in config_flow: which kind of charger setup
+# Top-level select in config_flow: which kind of charger setup.
+# "hybrid" = Dimmer (Solar) + Switch-Charger (nur Netz-Laden).
+# Pro Charger-Eintrag bleibt "type" entweder "switch" oder "dimmer";
+# "hybrid" ist nur die Setup-Variante.
+CHARGER_TYPE_HYBRID = "hybrid"
 CONF_CHARGER_TYPE = "charger_type"
 # Dimmer-specific config keys (used when CONF_CHARGER_TYPE == "dimmer")
 CONF_DIMMER_POWER_ENTITY = "dimmer_power_entity"  # writable number entity (setpoint)

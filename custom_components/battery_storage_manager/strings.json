@@ -22,7 +22,7 @@
         "title": "Device Configuration",
         "description": "Configure the chargers and the controllable inverter. Select all charger switches and set the default power per charger.",
         "data": {
-          "charger_type": "Charger type (switch = multiple static, dimmer = single dimmable)",
+          "charger_type": "Charger type (switch = multiple static, dimmer = single dimmable, hybrid = dimmer + switches for grid charging only)",
           "charger_entities": "Charger switches (switch-mode, order matters)",
           "charger_power_default": "Default charger power (W, switch-mode)",
           "charger_power_entities": "Charger power sensors (optional, switch-mode, same order as switches)",
@@ -54,6 +54,15 @@
           "battery_current_entity": "Battery current sensor (optional, e.g. Smartshunt)"
         }
       }
+    },
+    "selector": {
+      "charger_type": {
+        "options": {
+          "switch": "Switch (multiple static chargers)",
+          "dimmer": "Dimmer (single continuously dimmable charger)",
+          "hybrid": "Hybrid (dimmer + switches for grid charging only)"
+        }
+      }
     }
   },
   "options": {
@@ -79,7 +88,7 @@
         "title": "Device Configuration",
         "description": "Adjust chargers and inverter settings. The power value applies to newly added chargers; existing chargers keep their power.",
         "data": {
-          "charger_type": "Charger type (switch = multiple static, dimmer = single dimmable)",
+          "charger_type": "Charger type (switch = multiple static, dimmer = single dimmable, hybrid = dimmer + switches for grid charging only)",
           "charger_entities": "Charger switches (switch-mode, order matters)",
           "charger_power_default": "Default charger power (W, switch-mode)",
           "charger_power_entities": "Charger power sensors (optional, switch-mode, same order as switches)",
@@ -109,6 +118,15 @@
           "battery_efficiency": "Battery round-trip efficiency (%)",
           "battery_voltage_entity": "Battery voltage sensor (optional)",
           "battery_current_entity": "Battery current sensor (optional)"
+        }
+      }
+    },
+    "selector": {
+      "charger_type": {
+        "options": {
+          "switch": "Switch (multiple static chargers)",
+          "dimmer": "Dimmer (single continuously dimmable charger)",
+          "hybrid": "Hybrid (dimmer + switches for grid charging only)"
         }
       }
     }

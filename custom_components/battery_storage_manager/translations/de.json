@@ -22,7 +22,7 @@
         "title": "Geräte Konfiguration",
         "description": "Konfiguriere die Ladegeräte und den steuerbaren Wechselrichter. Wähle alle Ladegerät-Schalter aus und setze die Standard-Leistung pro Ladegerät.",
         "data": {
-          "charger_type": "Ladegerät-Typ (switch = mehrere statische, dimmer = ein dimmbares)",
+          "charger_type": "Ladegerät-Typ (switch = mehrere statische, dimmer = ein dimmbares, hybrid = Dimmer + Switches nur fürs Netz-Laden)",
           "charger_entities": "Ladegeräte Schalter (switch-Modus, Reihenfolge beachten)",
           "charger_power_default": "Standard-Leistung pro Ladegerät (W, switch-Modus)",
           "charger_power_entities": "Leistungssensoren der Ladegeräte (optional, switch-Modus, gleiche Reihenfolge)",
@@ -54,6 +54,15 @@
           "battery_current_entity": "Batterie-Strom-Sensor (optional, z.B. Victron Smartshunt)"
         }
       }
+    },
+    "selector": {
+      "charger_type": {
+        "options": {
+          "switch": "Switch (mehrere statische Ladegeräte)",
+          "dimmer": "Dimmer (ein stufenlos regelbares Ladegerät)",
+          "hybrid": "Hybrid (Dimmer + Switches nur fürs Netz-Laden)"
+        }
+      }
     }
   },
   "options": {
@@ -79,7 +88,7 @@
         "title": "Geräte Konfiguration",
         "description": "Ladegeräte und Wechselrichter-Einstellungen anpassen. Die Leistung gilt für neu hinzugefügte Ladegeräte; bestehende behalten ihre Leistung.",
         "data": {
-          "charger_type": "Ladegerät-Typ (switch = mehrere statische, dimmer = ein dimmbares)",
+          "charger_type": "Ladegerät-Typ (switch = mehrere statische, dimmer = ein dimmbares, hybrid = Dimmer + Switches nur fürs Netz-Laden)",
           "charger_entities": "Ladegeräte Schalter (switch-Modus, Reihenfolge beachten)",
           "charger_power_default": "Standard-Leistung pro Ladegerät (W, switch-Modus)",
           "charger_power_entities": "Leistungssensoren der Ladegeräte (optional, switch-Modus, gleiche Reihenfolge)",
@@ -109,6 +118,15 @@
           "battery_efficiency": "Batterie Roundtrip-Effizienz (%)",
           "battery_voltage_entity": "Batterie-Spannungs-Sensor (optional)",
           "battery_current_entity": "Batterie-Strom-Sensor (optional)"
+        }
+      }
+    },
+    "selector": {
+      "charger_type": {
+        "options": {
+          "switch": "Switch (mehrere statische Ladegeräte)",
+          "dimmer": "Dimmer (ein stufenlos regelbares Ladegerät)",
+          "hybrid": "Hybrid (Dimmer + Switches nur fürs Netz-Laden)"
         }
       }
     }

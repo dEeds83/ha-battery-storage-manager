@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.38.9-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.39.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -123,7 +123,7 @@ Bei der Konfiguration wird zunächst der **Ladegerät-Typ** gewählt:
 | Einspeise-Wechselrichter Leistung | Maximale Nennleistung in Watt | 800 W |
 | Einspeise-Wechselrichter Ist-Leistung | Sensor mit aktueller Wechselrichter-Ausgangsleistung (optional) | – |
 
-> **Hinweis:** Im Switch-Modus können beliebig viele Ladegeräte hinzugefügt werden; im Dimmer-Modus genau eines. Beide Modi schließen sich gegenseitig aus. Der Wechselrichter wird im Dimmer-Modus nur für das Entladen genutzt (PID-Zero-Feed); Solarabsorption läuft direkt über den Dimmer.
+> **Hinweis:** Im Switch-Modus können beliebig viele Ladegeräte hinzugefügt werden; im Dimmer-Modus genau eines. Im **Hybrid-Modus** wird der Dimmer für stufenlose Solar-Absorption genutzt und zusätzlich konfigurierte Switch-Lader **ausschließlich** beim Netz-Laden (Plan-Charge / `force_charge`) parallel zugeschaltet — bei Solar und Discharge bleiben sie aus. Der Wechselrichter wird im Dimmer-Modus nur für das Entladen genutzt (PID-Zero-Feed); Solarabsorption läuft direkt über den Dimmer.
 
 ### Schritt 3: Batterie
 
