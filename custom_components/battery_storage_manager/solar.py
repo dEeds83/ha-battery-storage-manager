@@ -137,6 +137,55 @@ class SolarMixin:
             self._solar_calibration_factor, self._expected_solar_kwh,
         )
 
+    def _zero_solar_at_negative_prices(self) -> None:
+        """Set solar forecast to 0 in hours where the grid price is negative.
+
+        Reflects the runtime PV-Gate: bei `price < 0` werden konfigurierte
+        PV-Switches abgeschaltet, der Speicherplan muss in diesen Slots
+        also mit 0 Solar rechnen (sonst überschätzt DP den Self-Consumption-
+        Beitrag und plant Netz-Laden zu defensiv).
+
+        Greift nur wenn PV-Switches konfiguriert sind UND der Gate-Toggle
+        an ist — sonst läuft die PV real weiter und der Forecast bleibt
+        gültig.
+        """
+        if not self._solar_switches:
+            return
+        if not self._allow_solar_pv_gate:
+            return
+        if not self._solar_forecast or not self._price_forecast:
+            return
+
+        negative_keys: set[str] = set()
+        for p in self._price_forecast:
+            try:
+                price = float(p.get("total", 0))
+            except (TypeError, ValueError):
+                continue
+            if price < 0:
+                start = p.get("start", "")
+                if not start:
+                    continue
+                try:
+                    negative_keys.add(self._to_hour_key(start))
+                except (ValueError, TypeError):
+                    continue
+
+        if not negative_keys:
+            return
+
+        zeroed_wh = 0.0
+        for key in negative_keys:
+            if key in self._solar_forecast:
+                zeroed_wh += self._solar_forecast[key]
+                self._solar_forecast[key] = 0.0
+
+        if zeroed_wh > 0:
+            _LOGGER.debug(
+                "Solar-Forecast in %d Negativpreis-Slots auf 0 gesetzt (%.2f kWh entfernt)",
+                len(negative_keys), zeroed_wh / 1000,
+            )
+
     def _apply_intraday_solar_correction(self) -> None:
         """Adjust remaining solar forecast using a Kalman filter."""
         if not self._solar_energy_today_entity:

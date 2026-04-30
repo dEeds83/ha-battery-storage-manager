@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.40.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.40.2-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -35,7 +35,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **PID-geregelte Nulleinspeisung** – Wechselrichter-Leistung wird sanft und schwingungsfrei geregelt (P/I/D)
 - **Hysterese-Schaltung** – Mindest-Ein-/Ausschaltzeiten verhindern Ladegeräte-Flackern (120s/60s)
 - **Geräte-Synchronisierung** – Interner Status wird bei jedem Zyklus mit echten Switch-Zuständen abgeglichen
-- **PV-Abschaltung bei negativen Preisen** – Konfigurierbare Multi-Select PV-Switches werden bei negativem Strompreis automatisch ausgeschaltet (kein Einspeise-Verlust, Netz-Ladung wird nicht durch Eigen-PV verdünnt) und bei Preis ≥ 0 ct/kWh wieder eingeschaltet
+- **PV-Abschaltung bei negativen Preisen** – Konfigurierbare Multi-Select PV-Switches werden bei negativem Strompreis automatisch ausgeschaltet (kein Einspeise-Verlust, Netz-Ladung wird nicht durch Eigen-PV verdünnt) und bei Preis ≥ 0 ct/kWh wieder eingeschaltet. Solar-Forecast für Negativpreis-Slots wird im Speicherplan auf 0 gesetzt, damit DP-Optimizer den entgangenen PV-Beitrag korrekt berücksichtigt
 
 ### Weitere Features
 - **Solarprognose-Integration** – Forecast.Solar, Solcast, mehrere Anlagen summierbar
