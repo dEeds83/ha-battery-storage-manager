@@ -45,6 +45,7 @@ from .const import (
     CONF_SOLAR_FORECAST_ENTITY,
     CONF_SOLAR_ENERGY_TODAY_ENTITY,
     CONF_SOLAR_POWER_ENTITY,
+    CONF_SOLAR_SWITCHES,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
@@ -166,6 +167,10 @@ STEP_DEVICES_SCHEMA = vol.Schema(
         ),
         vol.Optional(CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
+        ),
+        # PV-Schalter: bei negativem Strompreis abschalten, sonst an.
+        vol.Optional(CONF_SOLAR_SWITCHES, default=[]): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch", multiple=True)
         ),
     }
 )
@@ -621,6 +626,12 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         default=self._current(CONF_INVERTER_FEED_ACTUAL_POWER_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(
+                        CONF_SOLAR_SWITCHES,
+                        default=self._current(CONF_SOLAR_SWITCHES, []),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="switch", multiple=True)
                     ),
                 }
             ),

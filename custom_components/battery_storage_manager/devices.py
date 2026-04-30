@@ -102,6 +102,43 @@ class DevicesMixin:
                         )
                         self._inverter_target_power = actual_power
 
+    async def _apply_solar_price_gate(self) -> None:
+        """Schalte PV-Anlagen ab solange Strompreis negativ ist.
+
+        Negativer Preis = Einspeisen kostet Geld und Netz-Ladung
+        (force_charge / Plan-Charge) wird durch Eigen-PV verdünnt.
+        Bei Preis ≥ 0 oder unbekanntem Preis bleiben/sind die
+        Schalter wieder aktiv. Idempotent: jede Iteration vergleicht
+        Soll mit Ist-State und sendet nur bei Abweichung den Service.
+        """
+        if not self._solar_switches:
+            return
+        if self._current_price is None:
+            return
+
+        desired_off = self._current_price < 0
+        target_state = "off" if desired_off else "on"
+        service = "turn_off" if desired_off else "turn_on"
+
+        for entity_id in self._solar_switches:
+            state = self.hass.states.get(entity_id)
+            if state is None:
+                continue
+            if state.state in ("unknown", "unavailable"):
+                continue
+            if state.state == target_state:
+                continue
+            await self.hass.services.async_call(
+                "switch", service, {"entity_id": entity_id}
+            )
+            _LOGGER.info(
+                "Solar-Schalter %s -> %s (Preis %.4f EUR/kWh)",
+                entity_id, target_state, self._current_price,
+            )
+
+        if desired_off != self._solar_switches_paused:
+            self._solar_switches_paused = desired_off
+
     async def _start_charging(self) -> None:
         """Activate chargers to charge the battery."""
         if self._operating_mode == MODE_CHARGING:

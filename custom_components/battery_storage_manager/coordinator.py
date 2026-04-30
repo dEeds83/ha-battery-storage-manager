@@ -60,6 +60,7 @@ from .const import (
     CONF_SOLAR_FORECAST_ENTITIES,
     CONF_SOLAR_FORECAST_ENTITY,
     CONF_SOLAR_POWER_ENTITY,
+    CONF_SOLAR_SWITCHES,
     SOLAR_CALIBRATION_ROLLING_DAYS,
     STORAGE_KEY_SOLAR_CALIBRATION,
     STORAGE_VERSION_SOLAR_CALIBRATION,
@@ -168,6 +169,15 @@ class BatteryStorageCoordinator(
         self._solar_power_entity = self._config.get(CONF_SOLAR_POWER_ENTITY, "")
         self._solar_power: float | None = None  # current solar production in W
         self._solar_energy_today_entity = self._config.get(CONF_SOLAR_ENERGY_TODAY_ENTITY, "")
+
+        # PV-Schalter: bei negativem Strompreis abschalten (Einspeisen würde
+        # Geld kosten / Netz-Ladung verdünnen). Idempotenz über Soll-Ist-
+        # Vergleich pro Tick — manuelle Eingriffe werden beim nächsten
+        # Preis-Übergang automatisch korrigiert.
+        self._solar_switches: list[str] = [
+            s for s in self._config.get(CONF_SOLAR_SWITCHES, []) if s
+        ]
+        self._solar_switches_paused: bool = False
 
         # Solar forecast calibration
         self._solar_calibration_store = Store(
@@ -392,6 +402,7 @@ class BatteryStorageCoordinator(
         await self._record_consumption()
         await self._update_price_forecast()
         await self._extend_prices_with_epex()
+        await self._apply_solar_price_gate()
         await self._read_solar_forecast()
         self._apply_solar_calibration()
         self._apply_intraday_solar_correction()

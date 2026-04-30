@@ -34,7 +34,8 @@
           "inverter_feed_switch": "Einspeise-Wechselrichter Schalter (optional, nur Ein/Aus)",
           "inverter_feed_power_entity": "Einspeise-Wechselrichter Leistungs-Entity (optional, für Nulleinspeisung)",
           "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)",
-          "inverter_feed_actual_power_entity": "Einspeise-Wechselrichter Ist-Leistung Sensor (optional, aktuelle Ausgangsleistung)"
+          "inverter_feed_actual_power_entity": "Einspeise-Wechselrichter Ist-Leistung Sensor (optional, aktuelle Ausgangsleistung)",
+          "solar_switches": "PV-Schalter (optional, werden bei negativem Strompreis abgeschaltet)"
         }
       },
       "battery": {
@@ -100,7 +101,8 @@
           "inverter_feed_switch": "Einspeise-Wechselrichter Schalter (optional)",
           "inverter_feed_power_entity": "Einspeise-Wechselrichter Leistungs-Entity (optional)",
           "inverter_feed_power": "Einspeise-Wechselrichter Max-Leistung (W)",
-          "inverter_feed_actual_power_entity": "Einspeise-Wechselrichter Ist-Leistung Sensor (optional)"
+          "inverter_feed_actual_power_entity": "Einspeise-Wechselrichter Ist-Leistung Sensor (optional)",
+          "solar_switches": "PV-Schalter (optional, werden bei negativem Strompreis abgeschaltet)"
         }
       },
       "battery": {

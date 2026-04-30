@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.39.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.40.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -35,6 +35,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **PID-geregelte Nulleinspeisung** – Wechselrichter-Leistung wird sanft und schwingungsfrei geregelt (P/I/D)
 - **Hysterese-Schaltung** – Mindest-Ein-/Ausschaltzeiten verhindern Ladegeräte-Flackern (120s/60s)
 - **Geräte-Synchronisierung** – Interner Status wird bei jedem Zyklus mit echten Switch-Zuständen abgeglichen
+- **PV-Abschaltung bei negativen Preisen** – Konfigurierbare Multi-Select PV-Switches werden bei negativem Strompreis automatisch ausgeschaltet (kein Einspeise-Verlust, Netz-Ladung wird nicht durch Eigen-PV verdünnt) und bei Preis ≥ 0 ct/kWh wieder eingeschaltet
 
 ### Weitere Features
 - **Solarprognose-Integration** – Forecast.Solar, Solcast, mehrere Anlagen summierbar
@@ -122,6 +123,7 @@ Bei der Konfiguration wird zunächst der **Ladegerät-Typ** gewählt:
 | Einspeise-Wechselrichter Power-Entity | Number/Input-Number-Entity für Leistungsregelung (optional) | – |
 | Einspeise-Wechselrichter Leistung | Maximale Nennleistung in Watt | 800 W |
 | Einspeise-Wechselrichter Ist-Leistung | Sensor mit aktueller Wechselrichter-Ausgangsleistung (optional) | – |
+| PV-Schalter | Multi-Select Switch-Entitäten der PV-Anlage(n) (optional). Werden bei negativem Strompreis automatisch ausgeschaltet und sobald der Preis wieder ≥ 0 ct/kWh ist wieder eingeschaltet. | – |
 
 > **Hinweis:** Im Switch-Modus können beliebig viele Ladegeräte hinzugefügt werden; im Dimmer-Modus genau eines. Im **Hybrid-Modus** wird der Dimmer für stufenlose Solar-Absorption genutzt und zusätzlich konfigurierte Switch-Lader **ausschließlich** beim Netz-Laden (Plan-Charge / `force_charge`) parallel zugeschaltet — bei Solar und Discharge bleiben sie aus. Der Wechselrichter wird im Dimmer-Modus nur für das Entladen genutzt (PID-Zero-Feed); Solarabsorption läuft direkt über den Dimmer.
 

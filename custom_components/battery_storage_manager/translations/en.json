@@ -34,7 +34,8 @@
           "inverter_feed_switch": "Feed inverter switch (optional, on/off only)",
           "inverter_feed_power_entity": "Feed inverter power entity (optional, for zero-feed control)",
           "inverter_feed_power": "Feed inverter max power (W)",
-          "inverter_feed_actual_power_entity": "Feed inverter actual power sensor (optional, current output)"
+          "inverter_feed_actual_power_entity": "Feed inverter actual power sensor (optional, current output)",
+          "solar_switches": "PV switches (optional, turned off at negative grid prices)"
         }
       },
       "battery": {
@@ -100,7 +101,8 @@
           "inverter_feed_switch": "Feed inverter switch (optional)",
           "inverter_feed_power_entity": "Feed inverter power entity (optional)",
           "inverter_feed_power": "Feed inverter max power (W)",
-          "inverter_feed_actual_power_entity": "Feed inverter actual power sensor (optional)"
+          "inverter_feed_actual_power_entity": "Feed inverter actual power sensor (optional)",
+          "solar_switches": "PV switches (optional, turned off at negative grid prices)"
         }
       },
       "battery": {
