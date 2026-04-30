@@ -113,6 +113,23 @@ class DevicesMixin:
         """
         if not self._solar_switches:
             return
+
+        # Runtime-Toggle aus: falls vorher pausiert, wieder einschalten,
+        # damit kein PV-Switch dauerhaft "stranded off" bleibt.
+        if not self._allow_solar_pv_gate:
+            if self._solar_switches_paused:
+                for entity_id in self._solar_switches:
+                    state = self.hass.states.get(entity_id)
+                    if state is None or state.state in ("unknown", "unavailable"):
+                        continue
+                    if state.state == "on":
+                        continue
+                    await self.hass.services.async_call(
+                        "switch", "turn_on", {"entity_id": entity_id}
+                    )
+                self._solar_switches_paused = False
+            return
+
         if self._current_price is None:
             return
 

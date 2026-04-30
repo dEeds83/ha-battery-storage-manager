@@ -38,6 +38,7 @@ async def async_setup_entry(
         AllowDischargingSwitch(coordinator, entry),
         AllowSolarChargingSwitch(coordinator, entry),
         UseSolarForecastSwitch(coordinator, entry),
+        AllowSolarPvGateSwitch(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -234,6 +235,41 @@ class UseSolarForecastSwitch(BatteryStorageBaseSwitch):
 
     def _apply_restored_state(self, is_on: bool) -> None:
         self.coordinator.use_solar_forecast = is_on
+
+
+class AllowSolarPvGateSwitch(BatteryStorageBaseSwitch):
+    """Toggle PV auto-disable at negative grid prices.
+
+    ON (default): konfigurierte PV-Switches werden bei negativem
+    Tibber-Preis ausgeschaltet, bei Preis >= 0 wieder ein.
+    OFF: keine automatische Steuerung; falls aktuell pausiert,
+    werden Switches einmalig wieder eingeschaltet (kein Stranded-Off).
+    """
+
+    _attr_icon = "mdi:solar-panel-large"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "allow_solar_pv_gate",
+            "PV-Abschaltung bei Negativpreis",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.allow_solar_pv_gate
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self.coordinator.allow_solar_pv_gate = True
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self.coordinator.allow_solar_pv_gate = False
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    def _apply_restored_state(self, is_on: bool) -> None:
+        self.coordinator.allow_solar_pv_gate = is_on
 
 
 class ForceDischargeSwitch(BatteryStorageBaseSwitch):
