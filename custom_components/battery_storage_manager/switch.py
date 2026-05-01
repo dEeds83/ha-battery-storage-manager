@@ -39,6 +39,7 @@ async def async_setup_entry(
         AllowSolarChargingSwitch(coordinator, entry),
         UseSolarForecastSwitch(coordinator, entry),
         AllowSolarPvGateSwitch(coordinator, entry),
+        ForceSolarOffSwitch(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -270,6 +271,41 @@ class AllowSolarPvGateSwitch(BatteryStorageBaseSwitch):
 
     def _apply_restored_state(self, is_on: bool) -> None:
         self.coordinator.allow_solar_pv_gate = is_on
+
+
+class ForceSolarOffSwitch(BatteryStorageBaseSwitch):
+    """Manueller Override: PV-Schalter zwangsweise aus.
+
+    ON: alle konfigurierten PV-Switches werden ausgeschaltet, unabhängig
+    vom Strompreis oder vom PV-Gate-Toggle. Speicherplan rechnet mit
+    Solar=0 für die gesamte Forecast-Horizont.
+    OFF (Default): normale Logik (Negativpreis-Gate falls aktiv).
+    """
+
+    _attr_icon = "mdi:solar-panel"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "force_solar_off",
+            "Solaranlagen aus (manuell)",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.force_solar_off
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self.coordinator.force_solar_off = True
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self.coordinator.force_solar_off = False
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    def _apply_restored_state(self, is_on: bool) -> None:
+        self.coordinator.force_solar_off = is_on
 
 
 class ForceDischargeSwitch(BatteryStorageBaseSwitch):

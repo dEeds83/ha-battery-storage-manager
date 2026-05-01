@@ -180,6 +180,8 @@ class BatteryStorageCoordinator(
         self._solar_switches_paused: bool = False
         # Runtime-Toggle: PV-Abschaltung bei Negativpreis aktiv?
         self._allow_solar_pv_gate: bool = True
+        # Manueller Override: PV-Schalter zwangsweise aus, unabhängig vom Preis.
+        self._force_solar_off: bool = False
 
         # Solar forecast calibration
         self._solar_calibration_store = Store(
@@ -2013,6 +2015,19 @@ class BatteryStorageCoordinator(
         """Enable or disable solar-surplus absorption (zero-export master)."""
         self._allow_solar_charging = value
         _LOGGER.info("Solar charging %s", "enabled" if value else "disabled")
+
+    @property
+    def force_solar_off(self) -> bool:
+        """Whether PV switches are force-disabled by user."""
+        return self._force_solar_off
+
+    @force_solar_off.setter
+    def force_solar_off(self, value: bool) -> None:
+        self._force_solar_off = value
+        _LOGGER.info(
+            "Solar PV force-off %s",
+            "enabled" if value else "disabled",
+        )
 
     @property
     def allow_solar_pv_gate(self) -> bool:

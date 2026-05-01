@@ -138,22 +138,33 @@ class SolarMixin:
         )
 
     def _zero_solar_at_negative_prices(self) -> None:
-        """Set solar forecast to 0 in hours where the grid price is negative.
+        """Set solar forecast to 0 wherever PV is/will be disabled.
 
-        Reflects the runtime PV-Gate: bei `price < 0` werden konfigurierte
-        PV-Switches abgeschaltet, der Speicherplan muss in diesen Slots
-        also mit 0 Solar rechnen (sonst überschätzt DP den Self-Consumption-
-        Beitrag und plant Netz-Laden zu defensiv).
+        - force_solar_off=True → gesamter Forecast auf 0 (User hat PV
+          manuell stillgelegt; Plan rechnet ohne Solar-Beitrag).
+        - allow_solar_pv_gate=True → nur Slots mit price < 0 auf 0.
+        - sonst → kein Eingriff, Forecast bleibt gültig.
 
-        Greift nur wenn PV-Switches konfiguriert sind UND der Gate-Toggle
-        an ist — sonst läuft die PV real weiter und der Forecast bleibt
-        gültig.
+        Greift in beiden Fällen nur wenn PV-Switches konfiguriert sind.
         """
         if not self._solar_switches:
             return
+        if not self._solar_forecast:
+            return
+
+        if self._force_solar_off:
+            zeroed_wh = sum(self._solar_forecast.values())
+            self._solar_forecast = {k: 0.0 for k in self._solar_forecast}
+            if zeroed_wh > 0:
+                _LOGGER.debug(
+                    "Solar-Forecast komplett auf 0 (force_solar_off, %.2f kWh entfernt)",
+                    zeroed_wh / 1000,
+                )
+            return
+
         if not self._allow_solar_pv_gate:
             return
-        if not self._solar_forecast or not self._price_forecast:
+        if not self._price_forecast:
             return
 
         negative_keys: set[str] = set()

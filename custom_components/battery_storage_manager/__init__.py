@@ -15,7 +15,7 @@ from .coordinator import BatteryStorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-CARD_VERSION = "2.40.2"
+CARD_VERSION = "2.41.0"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 FRONTEND_CARDS = [
     "battery-plan-card.js",

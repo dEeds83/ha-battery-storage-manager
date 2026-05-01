@@ -103,37 +103,36 @@ class DevicesMixin:
                         self._inverter_target_power = actual_power
 
     async def _apply_solar_price_gate(self) -> None:
-        """Schalte PV-Anlagen ab solange Strompreis negativ ist.
+        """Steuere PV-Schalter: Force-Off, Preis-Gate oder Frei.
 
-        Negativer Preis = Einspeisen kostet Geld und Netz-Ladung
-        (force_charge / Plan-Charge) wird durch Eigen-PV verdünnt.
-        Bei Preis ≥ 0 oder unbekanntem Preis bleiben/sind die
-        Schalter wieder aktiv. Idempotent: jede Iteration vergleicht
-        Soll mit Ist-State und sendet nur bei Abweichung den Service.
+        Priorität:
+          1. force_solar_off=True       → immer aus (manueller Override)
+          2. allow_pv_gate + price < 0  → aus (Negativpreis-Schutz)
+          3. allow_pv_gate + price ≥ 0  → an
+          4. allow_pv_gate + price=None → no-op (Tibber down, nichts ändern)
+          5. !allow_pv_gate, !force_off → an (Auto-Steuerung deaktiviert)
+
+        Idempotent: pro Tick Soll-Ist-Vergleich, Service-Call nur bei
+        Abweichung. Manuelle Eingriffe werden beim nächsten Tick
+        automatisch korrigiert.
         """
         if not self._solar_switches:
             return
 
-        # Runtime-Toggle aus: falls vorher pausiert, wieder einschalten,
-        # damit kein PV-Switch dauerhaft "stranded off" bleibt.
-        if not self._allow_solar_pv_gate:
-            if self._solar_switches_paused:
-                for entity_id in self._solar_switches:
-                    state = self.hass.states.get(entity_id)
-                    if state is None or state.state in ("unknown", "unavailable"):
-                        continue
-                    if state.state == "on":
-                        continue
-                    await self.hass.services.async_call(
-                        "switch", "turn_on", {"entity_id": entity_id}
-                    )
-                self._solar_switches_paused = False
-            return
+        # Soll-Zustand bestimmen.
+        if self._force_solar_off:
+            desired_off = True
+            reason = "force-off"
+        elif self._allow_solar_pv_gate:
+            if self._current_price is None:
+                return  # kein Preis → keine Entscheidung
+            desired_off = self._current_price < 0
+            reason = f"Preis {self._current_price:.4f} EUR/kWh"
+        else:
+            # Gate aus, kein Force-Off → alle Switches an.
+            desired_off = False
+            reason = "gate-off"
 
-        if self._current_price is None:
-            return
-
-        desired_off = self._current_price < 0
         target_state = "off" if desired_off else "on"
         service = "turn_off" if desired_off else "turn_on"
 
@@ -149,12 +148,11 @@ class DevicesMixin:
                 "switch", service, {"entity_id": entity_id}
             )
             _LOGGER.info(
-                "Solar-Schalter %s -> %s (Preis %.4f EUR/kWh)",
-                entity_id, target_state, self._current_price,
+                "Solar-Schalter %s -> %s (%s)",
+                entity_id, target_state, reason,
             )
 
-        if desired_off != self._solar_switches_paused:
-            self._solar_switches_paused = desired_off
+        self._solar_switches_paused = desired_off
 
     async def _start_charging(self) -> None:
         """Activate chargers to charge the battery."""
