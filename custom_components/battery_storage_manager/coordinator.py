@@ -420,12 +420,17 @@ class BatteryStorageCoordinator(
             await self._run_self_consumption()
         # STRATEGY_MANUAL: no automatic charge/discharge actions
 
-        # Always capture free solar surplus, regardless of strategy/mode.
+        # Capture free solar surplus, regardless of strategy/mode.
         # _calculate_true_solar_surplus() now uses the solar power sensor
         # directly, so it won't mistake inverter overshoot for solar.
-        if self._operating_mode in (
-            MODE_IDLE, MODE_DISCHARGING, MODE_SOLAR_CHARGING
-        ):
+        # Bei STRATEGY_MANUAL aber nicht: der User hat explizit Force-
+        # Charge/Force-Discharge angefordert; Opportunistic-Absorption
+        # würde den Modus auf SOLAR_CHARGING flippen und damit den
+        # ForceDischargeSwitch in der UI fälschlich als aus zeigen.
+        if (self._strategy != STRATEGY_MANUAL
+                and self._operating_mode in (
+                    MODE_IDLE, MODE_DISCHARGING, MODE_SOLAR_CHARGING
+                )):
             await self._try_solar_opportunistic()
 
         # Persist efficiency data periodically (piggyback on action history ~10 min)
