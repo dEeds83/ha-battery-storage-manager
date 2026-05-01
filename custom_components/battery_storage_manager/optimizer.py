@@ -711,6 +711,32 @@ def smooth_plan(
             final_swaps, reverted,
         )
 
+    # SOC-Feasibility-Cleanup vor Final Pass 5:
+    # DP/Pass 6 markieren manchmal mehr Charge-Slots als nötig — _create_
+    # battery_plan würde sie später per max_soc-Cap zu idle machen, aber zur
+    # Pass-5-Zeit zählen sie noch als charge und verfälschen die "teuerster
+    # Charge"-Auswahl. Lösung: simuliere SOC, jeder charge-Slot wo SOC bereits
+    # max_soc erreicht hat → idle. Frees ineffective charges als available
+    # für sinnvollen Swap.
+    if charge_kwh_slot > 0:
+        sim_soc = current_soc
+        cleaned = 0
+        for i in range(n):
+            if actions[i] == "charge":
+                if sim_soc >= max_soc - 0.5:
+                    actions[i] = "idle"
+                    cleaned += 1
+                else:
+                    sim_soc = min(max_soc, sim_soc + charge_kwh_slot / cap * 100)
+            elif actions[i] == "discharge":
+                sim_soc = max(min_soc, sim_soc - discharge_kwh_slot / cap * 100)
+        if cleaned:
+            smoothed += cleaned
+            _LOGGER.info(
+                "Pre-Pass-5 SOC-cleanup: %d ineffective charge slots -> idle",
+                cleaned,
+            )
+
     # Final Pass 5: garantierter iterativer Swap-Pass.
     # Wiederholt: tausche teuersten Charge-Slot eines Blocks mit billigstem
     # idle/hold-Slot zwischen Block-Ende und nächstem Discharge, solange
