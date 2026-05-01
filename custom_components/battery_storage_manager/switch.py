@@ -131,6 +131,10 @@ class ForceChargeSwitch(BatteryStorageBaseSwitch):
         await self.coordinator.stop_all()
         self.async_write_ha_state()
 
+    def _apply_restored_state(self, is_on: bool) -> None:
+        if is_on:
+            self.hass.async_create_task(self.coordinator.force_charge())
+
 
 class AllowGridChargingSwitch(BatteryStorageBaseSwitch):
     """Switch to allow/disallow charging from grid."""
@@ -330,3 +334,7 @@ class ForceDischargeSwitch(BatteryStorageBaseSwitch):
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.stop_all()
         self.async_write_ha_state()
+
+    def _apply_restored_state(self, is_on: bool) -> None:
+        if is_on:
+            self.hass.async_create_task(self.coordinator.force_discharge())
