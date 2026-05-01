@@ -717,6 +717,7 @@ def smooth_plan(
     # mind. 0.2 ct/kWh Verbesserung. Loop bis kein Swap mehr möglich.
     # Gegen "stranded expensive charge" wenn DP/Pass 6 quantisiert.
     final_shifted = 0
+    diag_blocks_logged = False
     for guard in range(200):
         # Charge-Blöcke pro Iteration neu bestimmen.
         blocks: list[tuple[int, int]] = []
@@ -733,6 +734,14 @@ def smooth_plan(
             blocks.append((block_s, n - block_s))
         if not blocks:
             break
+
+        if not diag_blocks_logged:
+            _LOGGER.info(
+                "Final Pass 5 DIAG: %d charge blocks: %s",
+                len(blocks),
+                [(s, l, hourly_data[s]["price"] * 100) for s, l in blocks],
+            )
+            diag_blocks_logged = True
 
         best_swap: tuple[float, int, int, float, float] | None = None  # (gain, c_idx, a_idx, c_price, a_price)
         for cb_start, cb_len in blocks:
@@ -760,11 +769,20 @@ def smooth_plan(
             c_price, c_idx = charges_in_block[0]
 
             gain = c_price - a_price
+            if guard == 0:
+                _LOGGER.info(
+                    "Final Pass 5 DIAG block@t=%d: most_exp_charge=t=%d (%.2fct), "
+                    "cheapest_avail=t=%d (%.2fct), gain=%.2fct, available_count=%d",
+                    cb_start, c_idx, c_price * 100,
+                    a_idx, a_price * 100, gain * 100, len(available),
+                )
             if gain > 0.002:
                 if best_swap is None or gain > best_swap[0]:
                     best_swap = (gain, c_idx, a_idx, c_price, a_price)
 
         if best_swap is None:
+            if guard == 0:
+                _LOGGER.info("Final Pass 5 DIAG: no profitable swap found")
             break
         gain, c_idx, a_idx, c_price, a_price = best_swap
         actions[c_idx] = "idle"
