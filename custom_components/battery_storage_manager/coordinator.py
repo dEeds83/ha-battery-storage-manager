@@ -848,7 +848,17 @@ class BatteryStorageCoordinator(
         If we think we're charging but no charger is on, reset to idle.
         Same for discharging with inverter off.  This catches post-restart
         inconsistencies and external switch changes.
+
+        Bei STRATEGY_MANUAL (Force-Charge / Force-Discharge) wird der Modus
+        nicht resettet — der User hat explizit Discharge/Charge angefordert
+        und der WR/Charger kann temporär aus sein (z.B. PID-Target=0 bei
+        Solar-Überschuss während Discharge). Sonst würde der entsprechende
+        UI-Switch (ForceDischarge / ForceCharge) sich selbst ausschalten
+        sobald die Hardware kurz pausiert.
         """
+        if self._strategy == STRATEGY_MANUAL:
+            return
+
         any_charger_on = any(c["active"] for c in self._chargers)
 
         if self._operating_mode in (MODE_CHARGING, MODE_SOLAR_CHARGING) and not any_charger_on:
