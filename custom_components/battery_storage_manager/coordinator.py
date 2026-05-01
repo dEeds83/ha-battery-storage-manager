@@ -418,7 +418,17 @@ class BatteryStorageCoordinator(
             await self._run_price_optimization()
         elif self._strategy == STRATEGY_SELF_CONSUMPTION:
             await self._run_self_consumption()
-        # STRATEGY_MANUAL: no automatic charge/discharge actions
+        elif self._strategy == STRATEGY_MANUAL:
+            # Force-Discharge/Force-Charge: jeden Tick idempotent neu
+            # aufrufen, damit _regulate_zero_feed() (PID) bzw. Charger-
+            # Sync laufen. Ohne das bleibt der WR auf dem initial Setpoint
+            # und folgt keinen Last-Änderungen mehr.
+            if (self._operating_mode == MODE_DISCHARGING
+                    and self._allow_discharging):
+                await self._start_discharging()
+            elif (self._operating_mode == MODE_CHARGING
+                    and self._allow_grid_charging):
+                await self._start_charging()
 
         # Capture free solar surplus, regardless of strategy/mode.
         # _calculate_true_solar_surplus() now uses the solar power sensor
