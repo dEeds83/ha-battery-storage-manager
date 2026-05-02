@@ -731,6 +731,21 @@ class DevicesMixin:
                         )
                         self._inverter_active = True
                 return False
+            # Hybrid-Modus: Switch-Type-Charger ausschalten, falls noch
+            # aus vorigem Plan-Charge aktiv. Solar-Absorb läuft ausschliesslich
+            # über den Dimmer; Switches dürfen nur bei Plan-Charge / force_charge
+            # mitlaufen (siehe _start_charging).
+            for i, c in enumerate(self._chargers):
+                if (c.get("type", CHARGER_TYPE_SWITCH) == CHARGER_TYPE_SWITCH
+                        and c.get("active") and c.get("switch")):
+                    await self.hass.services.async_call(
+                        "switch", "turn_off", {"entity_id": c["switch"]}
+                    )
+                    c["active"] = False
+                    _LOGGER.info(
+                        "Hybrid Solar-Absorb: Switch-Charger %d aus (%s)",
+                        i + 1, c["switch"],
+                    )
             await self._regulate_dimmer_zero_feed()
             # Mode reflects whether dimmer is actively absorbing.
             if any(c.get("active") for c in self._chargers):
