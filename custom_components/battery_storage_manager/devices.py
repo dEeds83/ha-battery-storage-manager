@@ -182,6 +182,7 @@ class DevicesMixin:
         self,
         should_be_on: set[int],
         dimmer_targets: dict[int, float] | None = None,
+        apply_to_dimmer: bool = True,
     ) -> None:
         """Apply per-charger on/off (switch) or target power (dimmer).
 
@@ -189,6 +190,10 @@ class DevicesMixin:
         continuous setpoints — no hysteresis (no relay wear). When
         ``dimmer_targets`` is None, dimmers default to max power if in
         ``should_be_on``, otherwise 0.
+
+        ``apply_to_dimmer=False`` lässt Dimmer unangetastet — wird vom
+        Solar-Opportunistic-Pfad eigenständig geregelt (z.B. während
+        Discharge mit Solar-Surplus).
         """
         now = dt_util.utcnow()
         dimmer_targets = dimmer_targets or {}
@@ -197,6 +202,8 @@ class DevicesMixin:
             want_on = i in should_be_on
 
             if ctype == CHARGER_TYPE_DIMMER:
+                if not apply_to_dimmer:
+                    continue
                 target = dimmer_targets.get(
                     i, charger.get("power", 0) if want_on else 0
                 )
@@ -269,9 +276,12 @@ class DevicesMixin:
             self._operating_mode = MODE_DISCHARGING
 
         # Retry charger-off every tick — min_on_time hysteresis may have
-        # blocked the initial off attempt.
-        if any(c["active"] for c in self._chargers):
-            await self._apply_charger_states(set())
+        # blocked the initial off attempt. Dimmer NICHT antasten — wird
+        # von _try_solar_opportunistic im Discharge-Branch geregelt
+        # (Solar-Surplus → Dimmer-Absorb statt Discharge ins Netz).
+        if any(c["active"] for c in self._chargers
+               if c.get("type", CHARGER_TYPE_SWITCH) != CHARGER_TYPE_DIMMER):
+            await self._apply_charger_states(set(), apply_to_dimmer=False)
 
         if self._inverter_power_entity:
             await self._regulate_zero_feed()
