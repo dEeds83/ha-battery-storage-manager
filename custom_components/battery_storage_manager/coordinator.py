@@ -1098,14 +1098,23 @@ class BatteryStorageCoordinator(
         # after at least one slot with solar > 0), so tomorrow's forecast
         # doesn't block cheap grid charging today.
         expected_surplus_kwh = 0.0
+        solar_total_kwh = 0.0
         seen_solar = False
         for h in slot_data:
             if h.get("solar_wh_hour", 0) > 0:
                 seen_solar = True
                 expected_surplus_kwh += h.get("solar_surplus_kwh", 0)
+                solar_total_kwh += h.get("solar_kwh", 0)
             elif seen_solar:
                 # Sun has set — stop counting
                 break
+        # Sicherheits-Floor: selbst bei ueberschaetzem House-Forecast soll
+        # mind. 70% des erwarteten Solar als Headroom reserviert sein. Ohne
+        # diesen Floor lieferte surplus oft 0 (house >= solar im Forecast),
+        # DP lud bis grid_max_soc voll, Solar uebertraf realen Verbrauch und
+        # Battery erreichte 100% schon mittags -> Solar-Surplus exportiert.
+        # 0.7 weil Hausverbrauch tagsueber meist deutlich unter Solar-Peak.
+        expected_surplus_kwh = max(expected_surplus_kwh, solar_total_kwh * 0.7)
         if cap > 0 and expected_surplus_kwh > 0:
             headroom_pct = min(
                 expected_surplus_kwh / cap * 100,
