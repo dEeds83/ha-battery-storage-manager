@@ -295,7 +295,27 @@ class DevicesMixin:
         # Use smoothed grid power for PID to avoid chasing toggle devices
         grid = self._grid_power_ema if self._grid_power_ema is not None else self._grid_power
         if grid is None:
-            _LOGGER.debug("No grid power data available for zero-feed regulation")
+            # Safety: bei verlorenem Grid-Sensor (Tibber Pulse offline) WR
+            # nicht auf altem Setpoint stehen lassen — sonst läuft Discharge
+            # ungeregelt ins Netz. Nach 3 stale Ticks (~45s @ 15s-Intervall)
+            # WR stufenweise (-200W/Tick) Richtung 0 fahren.
+            stale = getattr(self, "_grid_power_stale_ticks", 0)
+            if stale >= 3 and (self._inverter_target_power or 0) > 0:
+                new_target = max(0, (self._inverter_target_power or 0) - 200)
+                _LOGGER.warning(
+                    "Grid-Sensor %d Ticks stale — Safety-Rampe WR %.0f -> %.0fW",
+                    stale, self._inverter_target_power, new_target,
+                )
+                self._inverter_target_power = new_target
+                self._inverter_last_write_ts = dt_util.utcnow().timestamp()
+                domain = self._inverter_power_entity.split(".")[0]
+                await self.hass.services.async_call(
+                    domain, "set_value",
+                    {"entity_id": self._inverter_power_entity,
+                     "value": round(new_target)},
+                )
+            else:
+                _LOGGER.debug("No grid power data available for zero-feed regulation")
             return
 
         # Settle-Throttle: Nach einem Write warten, bis der Wechselrichter

@@ -274,6 +274,12 @@ class BatteryStorageCoordinator(
         self._battery_soc: float | None = None
         self._grid_power: float | None = None  # positive = import, negative = export
         self._grid_power_ema: float | None = None  # EMA-smoothed grid power
+        # Watchdog: Anzahl konsekutiver Update-Ticks ohne gültigen
+        # Grid-Power-Sensor. Bei aktivem Inverter-Discharge wird nach
+        # mehreren Ticks ohne Sensor sicher auf 0 heruntergefahren —
+        # sonst bliebe der WR auf altem Setpoint hängen und exportiert
+        # ungeregelt ins Netz.
+        self._grid_power_stale_ticks: int = 0
         self._estimated_savings: float = 0.0
         self._unsub_listeners: list = []
         self._inverter_active = False
@@ -562,6 +568,11 @@ class BatteryStorageCoordinator(
             self._grid_power = -production
         else:
             self._grid_power = None
+
+        if self._grid_power is None:
+            self._grid_power_stale_ticks += 1
+        else:
+            self._grid_power_stale_ticks = 0
 
         # Asymmetric EMA smoothing for PID:
         # - Fast down (α=0.7): reduce inverter quickly when load drops
