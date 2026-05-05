@@ -1110,12 +1110,11 @@ class BatteryStorageCoordinator(
                 # Sun has set — stop counting
                 break
         # Sicherheits-Floor: selbst bei ueberschaetzem House-Forecast soll
-        # mind. 70% des erwarteten Solar als Headroom reserviert sein. Ohne
+        # mind. 50% des erwarteten Solar als Headroom reserviert sein. Ohne
         # diesen Floor lieferte surplus oft 0 (house >= solar im Forecast),
-        # DP lud bis grid_max_soc voll, Solar uebertraf realen Verbrauch und
-        # Battery erreichte 100% schon mittags -> Solar-Surplus exportiert.
-        # 0.7 weil Hausverbrauch tagsueber meist deutlich unter Solar-Peak.
-        expected_surplus_kwh = max(expected_surplus_kwh, solar_total_kwh * 0.7)
+        # DP lud bis grid_max_soc voll, Solar uebertraf realen Verbrauch
+        # und Battery erreichte 100% -> Export.
+        expected_surplus_kwh = max(expected_surplus_kwh, solar_total_kwh * 0.5)
         if cap > 0 and expected_surplus_kwh > 0:
             headroom_pct = min(
                 expected_surplus_kwh / cap * 100,
