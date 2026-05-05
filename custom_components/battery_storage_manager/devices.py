@@ -713,9 +713,10 @@ class DevicesMixin:
                  if c.get("type") == CHARGER_TYPE_DIMMER),
                 -1,
             )
-            # Discharge-Mode: WR liefert via PID, Dimmer auf 0 — ausser
-            # Solar-Export besteht trotz WR=0. Dann absorbiert Dimmer den
-            # Rest (unabhängig vom SOC, da Einspeisung wertlos ist).
+            # Discharge-Mode: Dimmer absorbiert Solar-Surplus, WR uebernimmt
+            # nur wenn Dimmer nicht reicht. EIN gemeinsamer zero-feed-step
+            # fuer up und down vermeidet das alte 0<->Wert-Flackern an der
+            # Surplus-Schwelle (Hard-Cutoff bei grid>=-50 wurde entfernt).
             if self._operating_mode == MODE_DISCHARGING:
                 if idx < 0:
                     return False
@@ -723,28 +724,35 @@ class DevicesMixin:
                     self._grid_power_ema if self._grid_power_ema is not None
                     else self._grid_power
                 )
+                if grid is None:
+                    return False
+
+                current = self._chargers[idx].get("target_power") or 0.0
                 inverter_target = self._inverter_target_power or 0
-                # WR ist effektiv auf 0 UND es geht trotzdem Strom raus →
-                # Dimmer aufdrehen statt verschenken. WR komplett aus,
-                # spart Standby-Verbrauch.
-                if grid is not None and grid < -50 and inverter_target <= 5:
-                    current = self._chargers[idx].get("target_power") or 0.0
+
+                # Dimmer nur regeln solange WR effektiv aus ist (sonst
+                # konkurrieren beide um dasselbe Grid-Signal). Zero-feed-step
+                # hat Deadband 0..25W -> kein Schwingen bei stabilem Grid.
+                if inverter_target <= 5:
                     nt = self._dimmer_zero_feed_step(current, grid)
                     if nt is not None:
                         await self._set_dimmer_power(idx, nt)
-                    if self._inverter_active:
-                        if self._inverter_switch:
-                            await self.hass.services.async_call(
-                                "switch", "turn_off",
-                                {"entity_id": self._inverter_switch},
-                            )
-                        await self._set_inverter_power(0)
-                        self._inverter_active = False
-                else:
-                    if (self._chargers[idx].get("target_power") or 0) > 0:
-                        await self._set_dimmer_power(idx, 0)
-                    # WR wieder einschalten falls Solar nicht mehr reicht.
-                    if self._inverter_switch and not self._inverter_active:
+                        current = nt
+
+                # WR-Logik haengt am aktuellen Dimmer-Target:
+                # - Dimmer absorbiert (>0)        -> WR komplett aus
+                # - Dimmer 0 UND grid > 50W       -> WR an, PID regelt
+                # - Dimmer 0 UND grid in Deadband -> WR-Status unveraendert
+                if current > 0 and self._inverter_active:
+                    if self._inverter_switch:
+                        await self.hass.services.async_call(
+                            "switch", "turn_off",
+                            {"entity_id": self._inverter_switch},
+                        )
+                    await self._set_inverter_power(0)
+                    self._inverter_active = False
+                elif current <= 0 and grid > 50 and not self._inverter_active:
+                    if self._inverter_switch:
                         await self.hass.services.async_call(
                             "switch", "turn_on",
                             {"entity_id": self._inverter_switch},
