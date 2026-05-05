@@ -728,19 +728,19 @@ class DevicesMixin:
                     return False
 
                 current = self._chargers[idx].get("target_power") or 0.0
-                inverter_target = self._inverter_target_power or 0
 
-                # Dimmer nur regeln solange WR effektiv aus ist (sonst
-                # konkurrieren beide um dasselbe Grid-Signal). Zero-feed-step
-                # hat Deadband 0..25W -> kein Schwingen bei stabilem Grid.
-                if inverter_target <= 5:
-                    nt = self._dimmer_zero_feed_step(current, grid)
-                    if nt is not None:
-                        await self._set_dimmer_power(idx, nt)
-                        current = nt
+                # Dimmer hat Vorrang: pro Tick zero-feed-step ausfuehren,
+                # unabhaengig vom WR-Status. Bei Bezug regelt der Dimmer
+                # zuerst runter; WR springt nur an wenn Dimmer komplett aus
+                # ist und Bezug bestehen bleibt. Deadband 0..25W +
+                # Slew ±200W/Tick verhindern Schwingen.
+                nt = self._dimmer_zero_feed_step(current, grid)
+                if nt is not None:
+                    await self._set_dimmer_power(idx, nt)
+                    current = self._chargers[idx].get("target_power") or 0.0
 
                 # WR-Logik haengt am aktuellen Dimmer-Target:
-                # - Dimmer absorbiert (>0)        -> WR komplett aus
+                # - Dimmer absorbiert (>0)        -> WR aus (Dimmer reicht)
                 # - Dimmer 0 UND grid > 50W       -> WR an, PID regelt
                 # - Dimmer 0 UND grid in Deadband -> WR-Status unveraendert
                 if current > 0 and self._inverter_active:
