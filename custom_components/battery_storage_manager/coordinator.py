@@ -418,6 +418,7 @@ class BatteryStorageCoordinator(
         self._apply_intraday_solar_correction()
         await self._calibrate_solar_forecast()
         self._zero_solar_at_negative_prices()
+        self._apply_solar_terminal_value_discount()
         self._create_battery_plan()
 
         if self._strategy == STRATEGY_PRICE_OPTIMIZED:

@@ -197,6 +197,51 @@ class SolarMixin:
                 len(negative_keys), zeroed_wh / 1000,
             )
 
+    def _apply_solar_terminal_value_discount(self) -> None:
+        """Reduziere EPEX-Terminal-Value proportional zu erwartetem Solar.
+
+        Hintergrund: EPEX-TV bewertet Akku-Reserve gegen P75 zukuenftiger
+        Preise. Bei guter Solar-Erwartung morgen ist die Reserve weniger
+        wert, weil morgen kostenlos nachgeladen wird. Ohne Discount haelt
+        DP den SOC abends zu hoch, Solar morgen findet keinen Platz mehr
+        und wird exportiert.
+
+        Discount = min(1, expected_solar_36h_kwh / cap). Bei Solar >= cap
+        wird TV auf 0 gesetzt, DP entlaedt dann bis min_soc.
+        """
+        cap = self._battery_capacity
+        tv = getattr(self, "_epex_terminal_value_per_kwh", 0.0) or 0.0
+        if cap <= 0 or tv <= 0 or not self._solar_forecast:
+            return
+
+        now_local = dt_util.now()
+        naive_now = now_local.replace(tzinfo=None)
+        horizon_s = 36 * 3600
+        total_wh = 0.0
+        for key, wh in self._solar_forecast.items():
+            try:
+                dt = datetime.strptime(key, "%Y-%m-%dT%H")
+            except (ValueError, TypeError):
+                continue
+            delta = (dt - naive_now).total_seconds()
+            if delta < 0 or delta > horizon_s:
+                continue
+            total_wh += wh
+
+        next_solar_kwh = total_wh / 1000
+        if next_solar_kwh <= 0:
+            return
+
+        discount = min(1.0, next_solar_kwh / cap)
+        new_tv = tv * (1 - discount)
+        self._epex_terminal_value_per_kwh = new_tv
+        if discount > 0.05:
+            _LOGGER.info(
+                "Solar-Discount Terminal-Value: %.1f kWh in 36h -> -%.0f%% "
+                "(%.1f -> %.1f ct/kWh)",
+                next_solar_kwh, discount * 100, tv * 100, new_tv * 100,
+            )
+
     def _apply_intraday_solar_correction(self) -> None:
         """Adjust remaining solar forecast using a Kalman filter."""
         if not self._solar_energy_today_entity:
