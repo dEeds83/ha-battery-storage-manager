@@ -83,6 +83,47 @@ class BatteryStorageBaseSwitch(CoordinatorEntity, RestoreEntity, SwitchEntity):
         """Apply restored state to coordinator. Override in subclass."""
 
 
+class CoordinatorAttributeSwitch(BatteryStorageBaseSwitch):
+    """Generischer Switch der ein Coordinator-Attribute toggelt.
+
+    Spart die wiederholte is_on / turn_on / turn_off / restore-Boilerplate.
+    Subklassen setzen nur _attr_icon und rufen super().__init__ mit dem
+    Coordinator-Attribut-Namen.
+
+    Optionale Hooks:
+      _on_turn_off_extra(): zusaetzliche async-Aktion beim Off (z.B. stop_all)
+      _restore_via_action: bool — bei True wird Coordinator-Setter NICHT
+        aufgerufen, stattdessen das Attribut beim Restore ignoriert.
+    """
+
+    _coord_attr: str = ""
+    _restore_via_action: bool = True  # default: restore setzt das Attribut
+
+    def __init__(self, coordinator, entry, key: str, name: str, attr: str):
+        super().__init__(coordinator, entry, key, name)
+        self._coord_attr = attr
+
+    @property
+    def is_on(self) -> bool:
+        return bool(getattr(self.coordinator, self._coord_attr))
+
+    async def async_turn_on(self, **kwargs) -> None:
+        setattr(self.coordinator, self._coord_attr, True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        setattr(self.coordinator, self._coord_attr, False)
+        await self._on_turn_off_extra()
+        self.async_write_ha_state()
+
+    async def _on_turn_off_extra(self) -> None:
+        """Override fuer zusaetzliche Aktionen beim Off (z.B. stop_all)."""
+
+    def _apply_restored_state(self, is_on: bool) -> None:
+        if self._restore_via_action:
+            setattr(self.coordinator, self._coord_attr, is_on)
+
+
 class AutoModeSwitch(BatteryStorageBaseSwitch):
     """Switch to enable/disable automatic price optimization."""
 
@@ -136,113 +177,51 @@ class ForceChargeSwitch(BatteryStorageBaseSwitch):
             self.hass.async_create_task(self.coordinator.force_charge())
 
 
-class AllowGridChargingSwitch(BatteryStorageBaseSwitch):
+class AllowGridChargingSwitch(CoordinatorAttributeSwitch):
     """Switch to allow/disallow charging from grid."""
-
     _attr_icon = "mdi:transmission-tower-import"
 
     def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, "allow_grid_charging", "Netzladen erlauben")
-
-    @property
-    def is_on(self) -> bool:
-        return self.coordinator.allow_grid_charging
-
-    async def async_turn_on(self, **kwargs) -> None:
-        self.coordinator.allow_grid_charging = True
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs) -> None:
-        self.coordinator.allow_grid_charging = False
-        self.async_write_ha_state()
-
-    def _apply_restored_state(self, is_on: bool) -> None:
-        self.coordinator.allow_grid_charging = is_on
+        super().__init__(coordinator, entry, "allow_grid_charging",
+                         "Netzladen erlauben", "allow_grid_charging")
 
 
-class AllowDischargingSwitch(BatteryStorageBaseSwitch):
+class AllowDischargingSwitch(CoordinatorAttributeSwitch):
     """Switch to allow/disallow battery discharging."""
-
     _attr_icon = "mdi:battery-arrow-down-outline"
 
     def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, "allow_discharging", "Entladen erlauben")
-
-    @property
-    def is_on(self) -> bool:
-        return self.coordinator.allow_discharging
-
-    async def async_turn_on(self, **kwargs) -> None:
-        self.coordinator.allow_discharging = True
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs) -> None:
-        self.coordinator.allow_discharging = False
-        self.async_write_ha_state()
-
-    def _apply_restored_state(self, is_on: bool) -> None:
-        self.coordinator.allow_discharging = is_on
+        super().__init__(coordinator, entry, "allow_discharging",
+                         "Entladen erlauben", "allow_discharging")
 
 
-class AllowSolarChargingSwitch(BatteryStorageBaseSwitch):
+class AllowSolarChargingSwitch(CoordinatorAttributeSwitch):
     """Master switch for solar-surplus absorption (zero-export toggle).
 
-    When OFF: no opportunistic absorption, all excess solar is exported.
-    When ON (default): chargers/dimmer absorb surplus per existing logic.
+    OFF: keine opportunistic Absorption, alles ueberschuessige Solar wird
+    exportiert. ON (Default): Charger/Dimmer absorbieren Surplus.
     """
-
     _attr_icon = "mdi:solar-power"
 
     def __init__(self, coordinator, entry):
-        super().__init__(
-            coordinator, entry, "allow_solar_charging", "Solarladen erlauben"
-        )
+        super().__init__(coordinator, entry, "allow_solar_charging",
+                         "Solarladen erlauben", "allow_solar_charging")
 
-    @property
-    def is_on(self) -> bool:
-        return self.coordinator.allow_solar_charging
-
-    async def async_turn_on(self, **kwargs) -> None:
-        self.coordinator.allow_solar_charging = True
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs) -> None:
-        self.coordinator.allow_solar_charging = False
+    async def _on_turn_off_extra(self) -> None:
         # Immediately stop active solar absorption.
         await self.coordinator.stop_all()
-        self.async_write_ha_state()
-
-    def _apply_restored_state(self, is_on: bool) -> None:
-        self.coordinator.allow_solar_charging = is_on
 
 
-class UseSolarForecastSwitch(BatteryStorageBaseSwitch):
+class UseSolarForecastSwitch(CoordinatorAttributeSwitch):
     """Switch to enable/disable solar-aware planning."""
-
     _attr_icon = "mdi:solar-power-variant-outline"
 
     def __init__(self, coordinator, entry):
-        super().__init__(
-            coordinator, entry, "use_solar_forecast", "Solarprognose nutzen"
-        )
-
-    @property
-    def is_on(self) -> bool:
-        return self.coordinator.use_solar_forecast
-
-    async def async_turn_on(self, **kwargs) -> None:
-        self.coordinator.use_solar_forecast = True
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs) -> None:
-        self.coordinator.use_solar_forecast = False
-        self.async_write_ha_state()
-
-    def _apply_restored_state(self, is_on: bool) -> None:
-        self.coordinator.use_solar_forecast = is_on
+        super().__init__(coordinator, entry, "use_solar_forecast",
+                         "Solarprognose nutzen", "use_solar_forecast")
 
 
-class AllowSolarPvGateSwitch(BatteryStorageBaseSwitch):
+class AllowSolarPvGateSwitch(CoordinatorAttributeSwitch):
     """Toggle PV auto-disable at negative grid prices.
 
     ON (default): konfigurierte PV-Switches werden bei negativem
@@ -250,70 +229,47 @@ class AllowSolarPvGateSwitch(BatteryStorageBaseSwitch):
     OFF: keine automatische Steuerung; falls aktuell pausiert,
     werden Switches einmalig wieder eingeschaltet (kein Stranded-Off).
     """
-
     _attr_icon = "mdi:solar-panel-large"
 
     def __init__(self, coordinator, entry):
-        super().__init__(
-            coordinator, entry, "allow_solar_pv_gate",
-            "PV-Abschaltung bei Negativpreis",
-        )
-
-    @property
-    def is_on(self) -> bool:
-        return self.coordinator.allow_solar_pv_gate
+        super().__init__(coordinator, entry, "allow_solar_pv_gate",
+                         "PV-Abschaltung bei Negativpreis",
+                         "allow_solar_pv_gate")
 
     async def async_turn_on(self, **kwargs) -> None:
-        self.coordinator.allow_solar_pv_gate = True
-        self.async_write_ha_state()
+        await super().async_turn_on()
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
-        self.coordinator.allow_solar_pv_gate = False
-        self.async_write_ha_state()
+        await super().async_turn_off()
         await self.coordinator.async_request_refresh()
 
-    def _apply_restored_state(self, is_on: bool) -> None:
-        self.coordinator.allow_solar_pv_gate = is_on
 
-
-class ForceSolarOffSwitch(BatteryStorageBaseSwitch):
+class ForceSolarOffSwitch(CoordinatorAttributeSwitch):
     """Manueller Override: PV-Schalter zwangsweise aus.
 
     ON: alle konfigurierten PV-Switches werden ausgeschaltet, unabhängig
     vom Strompreis oder vom PV-Gate-Toggle. Speicherplan rechnet mit
     Solar=0 für die gesamte Forecast-Horizont.
     OFF (Default): normale Logik (Negativpreis-Gate falls aktiv).
-    """
 
+    Bewusst kein Restore (v2.41.11): manueller Override soll bei jedem
+    Restart/Reload auf False starten.
+    """
     _attr_icon = "mdi:solar-panel"
+    _restore_via_action = False  # kein Restore
 
     def __init__(self, coordinator, entry):
-        super().__init__(
-            coordinator, entry, "force_solar_off",
-            "Solaranlagen aus (manuell)",
-        )
-
-    @property
-    def is_on(self) -> bool:
-        return self.coordinator.force_solar_off
+        super().__init__(coordinator, entry, "force_solar_off",
+                         "Solaranlagen aus (manuell)", "force_solar_off")
 
     async def async_turn_on(self, **kwargs) -> None:
-        self.coordinator.force_solar_off = True
-        self.async_write_ha_state()
+        await super().async_turn_on()
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
-        self.coordinator.force_solar_off = False
-        self.async_write_ha_state()
+        await super().async_turn_off()
         await self.coordinator.async_request_refresh()
-
-    def _apply_restored_state(self, is_on: bool) -> None:
-        # Bewusst kein Restore: Force-Off ist ein manueller Override und
-        # soll bei jedem HA-Restart / Plugin-Reload auf False starten.
-        # User-Wunsch v2.41.11: nach Reaktivierung der Integration default
-        # OFF, sonst bleibt PV ungewollt deaktiviert.
-        return
 
 
 class ForceDischargeSwitch(BatteryStorageBaseSwitch):

@@ -493,6 +493,23 @@ class BatteryStorageCoordinator(
         """True if the configured charger is a single dimmer."""
         return any(c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers)
 
+    def _read_float_entity(
+        self, entity_id: str, fallback: float | None = None
+    ) -> float | None:
+        """Lese eine HA-Entity als float, fallback bei unknown/unavailable.
+
+        Spart das wiederholte states.get + state-check + try/except-Pattern.
+        """
+        if not entity_id:
+            return fallback
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ("unknown", "unavailable"):
+            return fallback
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return fallback
+
     def _read_sensor_states(self) -> None:
         """Read current sensor values from Home Assistant."""
         # Current electricity price
@@ -535,31 +552,12 @@ class BatteryStorageCoordinator(
             self._price_entity_seen = True
 
         # Battery SOC
-        soc_state = self.hass.states.get(self._battery_soc_entity)
-        if soc_state and soc_state.state not in ("unknown", "unavailable"):
-            try:
-                self._battery_soc = float(soc_state.state)
-            except (ValueError, TypeError):
-                self._battery_soc = None
+        self._battery_soc = self._read_float_entity(self._battery_soc_entity)
 
         # Grid power from Tibber Pulse: consumption - production = net grid power
         # positive = net import from grid, negative = net export to grid
-        consumption = None
-        production = None
-
-        cons_state = self.hass.states.get(self._pulse_consumption_entity)
-        if cons_state and cons_state.state not in ("unknown", "unavailable"):
-            try:
-                consumption = float(cons_state.state)
-            except (ValueError, TypeError):
-                pass
-
-        prod_state = self.hass.states.get(self._pulse_production_entity)
-        if prod_state and prod_state.state not in ("unknown", "unavailable"):
-            try:
-                production = float(prod_state.state)
-            except (ValueError, TypeError):
-                pass
+        consumption = self._read_float_entity(self._pulse_consumption_entity)
+        production = self._read_float_entity(self._pulse_production_entity)
 
         if consumption is not None and production is not None:
             self._grid_power = consumption - production
@@ -590,36 +588,17 @@ class BatteryStorageCoordinator(
 
         # Inverter actual power
         if self._inverter_actual_power_entity:
-            inv_state = self.hass.states.get(self._inverter_actual_power_entity)
-            if inv_state and inv_state.state not in ("unknown", "unavailable"):
-                try:
-                    self._inverter_actual_power = float(inv_state.state)
-                except (ValueError, TypeError):
-                    self._inverter_actual_power = None
-            else:
-                self._inverter_actual_power = None
+            self._inverter_actual_power = self._read_float_entity(
+                self._inverter_actual_power_entity
+            )
 
         # Current solar production (actual sensor, not forecast)
         if self._solar_power_entity:
-            solar_state = self.hass.states.get(self._solar_power_entity)
-            if solar_state and solar_state.state not in ("unknown", "unavailable"):
-                try:
-                    self._solar_power = float(solar_state.state)
-                except (ValueError, TypeError):
-                    self._solar_power = None
-            else:
-                self._solar_power = None
+            self._solar_power = self._read_float_entity(self._solar_power_entity)
 
         # Outside temperature (for consumption forecast)
         if self._outside_temp_entity:
-            temp_state = self.hass.states.get(self._outside_temp_entity)
-            if temp_state and temp_state.state not in ("unknown", "unavailable"):
-                try:
-                    self._outside_temp = float(temp_state.state)
-                except (ValueError, TypeError):
-                    self._outside_temp = None
-            else:
-                self._outside_temp = None
+            self._outside_temp = self._read_float_entity(self._outside_temp_entity)
 
         # Read measured charger power from per-charger power sensors.
         # For dimmer: prefer actual_power_entity (separate sensor); fall back
@@ -629,38 +608,15 @@ class BatteryStorageCoordinator(
                 read_entity = c.get("actual_power_entity", "") or c.get("power_entity", "")
             else:
                 read_entity = c.get("power_entity", "")
-            if read_entity:
-                cp_state = self.hass.states.get(read_entity)
-                if cp_state and cp_state.state not in ("unknown", "unavailable"):
-                    try:
-                        c["measured_power"] = abs(float(cp_state.state))
-                    except (ValueError, TypeError):
-                        c["measured_power"] = None
-                else:
-                    c["measured_power"] = None
-            else:
-                c["measured_power"] = None
+            value = self._read_float_entity(read_entity)
+            c["measured_power"] = abs(value) if value is not None else None
 
         # Smartshunt battery voltage + current -> real power
         if self._battery_voltage_entity:
-            v_state = self.hass.states.get(self._battery_voltage_entity)
-            if v_state and v_state.state not in ("unknown", "unavailable"):
-                try:
-                    self._battery_voltage = float(v_state.state)
-                except (ValueError, TypeError):
-                    self._battery_voltage = None
-            else:
-                self._battery_voltage = None
+            self._battery_voltage = self._read_float_entity(self._battery_voltage_entity)
 
         if self._battery_current_entity:
-            c_state = self.hass.states.get(self._battery_current_entity)
-            if c_state and c_state.state not in ("unknown", "unavailable"):
-                try:
-                    self._battery_current = float(c_state.state)
-                except (ValueError, TypeError):
-                    self._battery_current = None
-            else:
-                self._battery_current = None
+            self._battery_current = self._read_float_entity(self._battery_current_entity)
 
         if self._battery_voltage is not None and self._battery_current is not None:
             self._battery_real_power = abs(
