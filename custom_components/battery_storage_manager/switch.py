@@ -309,7 +309,11 @@ class ForceSolarOffSwitch(BatteryStorageBaseSwitch):
         await self.coordinator.async_request_refresh()
 
     def _apply_restored_state(self, is_on: bool) -> None:
-        self.coordinator.force_solar_off = is_on
+        # Bewusst kein Restore: Force-Off ist ein manueller Override und
+        # soll bei jedem HA-Restart / Plugin-Reload auf False starten.
+        # User-Wunsch v2.41.11: nach Reaktivierung der Integration default
+        # OFF, sonst bleibt PV ungewollt deaktiviert.
+        return
 
 
 class ForceDischargeSwitch(BatteryStorageBaseSwitch):
