@@ -529,14 +529,12 @@ class DevicesMixin:
         WR wird in diesem Modus garantiert ausgeschaltet — Dimmer absorbiert
         Solar exakt, keine WR-Kompensation nötig (kein Round-Trip).
         """
-        # WR muss aus sein. Schaltet ihn ab falls aus früherer Phase noch an.
-        if self._inverter_active or (self._inverter_target_power or 0) > 0:
-            if self._inverter_switch:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": self._inverter_switch}
-                )
+        # WR-Target auf 0 setzen — Switch NICHT abschalten weil Boot+Sync
+        # danach lang dauert und in der Zeit Solar exportiert wird (Toggle-
+        # Cycle). Standby-Verbrauch ist deutlich kleiner als Verlust durch
+        # Export. Bei target=0 geht WR meist von selbst in Idle.
+        if (self._inverter_target_power or 0) > 0:
             await self._set_inverter_power(0)
-            self._inverter_active = False
 
         # Find the (single) dimmer.
         idx = next(
@@ -594,12 +592,9 @@ class DevicesMixin:
             c = self._chargers[idx]
             target = max(0, min(c.get("power", 0), int(surplus_w)))
             await self._set_dimmer_power(idx, target)
-            # WR aus / 0 — Dimmer absorbiert exakt, kein Round-Trip.
-            if self._inverter_switch and self._inverter_active:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": self._inverter_switch}
-                )
-                self._inverter_active = False
+            # WR-Target 0 — Dimmer absorbiert exakt. Switch NICHT abschalten
+            # (Boot/Sync-Cycle bei naechstem Bedarf). Standby ist guenstiger
+            # als Solar-Export waehrend WR bootet.
             await self._set_inverter_power(0)
             self._operating_mode = MODE_SOLAR_CHARGING
             _LOGGER.info(
@@ -740,17 +735,12 @@ class DevicesMixin:
                     current = self._chargers[idx].get("target_power") or 0.0
 
                 # WR-Logik haengt am aktuellen Dimmer-Target:
-                # - Dimmer absorbiert (>0)        -> WR aus (Dimmer reicht)
-                # - Dimmer 0 UND grid > 50W       -> WR an, PID regelt
-                # - Dimmer 0 UND grid in Deadband -> WR-Status unveraendert
-                if current > 0 and self._inverter_active:
-                    if self._inverter_switch:
-                        await self.hass.services.async_call(
-                            "switch", "turn_off",
-                            {"entity_id": self._inverter_switch},
-                        )
-                    await self._set_inverter_power(0)
-                    self._inverter_active = False
+                # - Dimmer absorbiert (>0)  -> WR-Target 0 (Switch bleibt an,
+                #   sonst Boot/Sync-Cycle bei naechstem Hochregeln noetig)
+                # - Dimmer 0 UND grid > 50W -> WR an, PID regelt
+                if current > 0:
+                    if (self._inverter_target_power or 0) > 0:
+                        await self._set_inverter_power(0)
                 elif current <= 0 and grid > 50 and not self._inverter_active:
                     if self._inverter_switch:
                         await self.hass.services.async_call(
