@@ -1013,7 +1013,20 @@ class BatteryStorageCoordinator(
         # Use configured (nominal) power for DP planning — measured power
         # varies with SOC/voltage and would make the plan too pessimistic
         # at high SOC or too optimistic at low SOC.
-        charge_power_w = sum(c["power"] for c in self._chargers)
+        # Hybrid-Toggle: bei deaktivierten Switch-Ladern nur Dimmer-Power
+        # in DP einrechnen, sonst plant Optimizer mit ueberhoehter Leistung
+        # und waehlt zu kurze/zu wenige Lade-Slots.
+        allow_switch_grid = getattr(self, "_allow_grid_switch_chargers", True)
+        has_dimmer = any(
+            c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers
+        )
+        if has_dimmer and not allow_switch_grid:
+            charge_power_w = sum(
+                c["power"] for c in self._chargers
+                if c.get("type") == CHARGER_TYPE_DIMMER
+            )
+        else:
+            charge_power_w = sum(c["power"] for c in self._chargers)
         charge_kwh_slot = charge_power_w / 1000 * slot_h
         discharge_power_w = self._inverter_power or 800
         discharge_kwh_slot = discharge_power_w / 1000 * slot_h
