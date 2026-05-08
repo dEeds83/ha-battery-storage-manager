@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.42.4-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.43.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -41,7 +41,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Solarprognose-Integration** – Forecast.Solar, Solcast, mehrere Anlagen summierbar
 - **Eigenverbrauchsoptimierung** – Batterieentladung zur Deckung des Hausverbrauchs
 - **Manueller Modus** – Volle manuelle Kontrolle über Laden und Entladen
-- **Runtime-Toggles** – Netzladen, Entladen und Solarprognose jederzeit ein-/ausschaltbar
+- **Runtime-Toggles** – Netzladen, Entladen, Solarprognose und Hybrid-Modus (statische Lader fuers Netzladen mitnutzen ja/nein) jederzeit ein-/ausschaltbar
 - **Eingebaute Lovelace Cards** – Plan- und Status-Visualisierung ohne zusätzliche Frontend-Plugins
 - **Live-Konfiguration** – Alle Einstellungen nachträglich änderbar, ohne Neustart
 

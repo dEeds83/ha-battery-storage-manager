@@ -290,6 +290,11 @@ class BatteryStorageCoordinator(
         self._allow_grid_charging = True
         self._allow_discharging = True
         self._allow_solar_charging = True  # zero-export master switch
+        # Hybrid-Toggle: Switch-Type-Charger fuers Netzladen nutzen?
+        # True (Default): Dimmer + Switches laden ueber Netz (volle Power).
+        # False: nur Dimmer laedt aus dem Netz, Switches bleiben aus.
+        # Wirksam nur wenn beide Charger-Typen konfiguriert sind (Hybrid).
+        self._allow_grid_switch_chargers = True
         self._use_solar_forecast = bool(
             self._solar_forecast_entity or self._solar_forecast_entities
         )
@@ -2040,6 +2045,19 @@ class BatteryStorageCoordinator(
         self._allow_solar_pv_gate = value
         _LOGGER.info(
             "Solar PV negative-price gate %s",
+            "enabled" if value else "disabled",
+        )
+
+    @property
+    def allow_grid_switch_chargers(self) -> bool:
+        """Whether switch-type chargers participate in grid charging (hybrid)."""
+        return self._allow_grid_switch_chargers
+
+    @allow_grid_switch_chargers.setter
+    def allow_grid_switch_chargers(self, value: bool) -> None:
+        self._allow_grid_switch_chargers = value
+        _LOGGER.info(
+            "Hybrid grid switch-chargers %s",
             "enabled" if value else "disabled",
         )
 

@@ -40,6 +40,7 @@ async def async_setup_entry(
         UseSolarForecastSwitch(coordinator, entry),
         AllowSolarPvGateSwitch(coordinator, entry),
         ForceSolarOffSwitch(coordinator, entry),
+        AllowGridSwitchChargersSwitch(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -262,6 +263,30 @@ class ForceSolarOffSwitch(CoordinatorAttributeSwitch):
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry, "force_solar_off",
                          "Solaranlagen aus (manuell)", "force_solar_off")
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await super().async_turn_on()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await super().async_turn_off()
+        await self.coordinator.async_request_refresh()
+
+
+class AllowGridSwitchChargersSwitch(CoordinatorAttributeSwitch):
+    """Hybrid-Toggle: Switch-Type-Charger fuers Netzladen mitnutzen.
+
+    ON (Default): Dimmer + statische Switch-Lader laden parallel aus dem Netz
+    (volle Hybrid-Power).
+    OFF: nur der Dimmer laedt aus dem Netz, Switches bleiben aus.
+    Wirksam nur in Hybrid-Setups (Dimmer + Switch-Lader gemischt).
+    """
+    _attr_icon = "mdi:power-plug"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "allow_grid_switch_chargers",
+                         "Statische Lader fuers Netzladen",
+                         "allow_grid_switch_chargers")
 
     async def async_turn_on(self, **kwargs) -> None:
         await super().async_turn_on()

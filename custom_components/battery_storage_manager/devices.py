@@ -156,6 +156,25 @@ class DevicesMixin:
 
     async def _start_charging(self) -> None:
         """Activate chargers to charge the battery."""
+        # Hybrid-Toggle: Switch-Type-Charger nur einbeziehen, wenn erlaubt.
+        # Wirksam nur wenn auch ein Dimmer vorhanden ist (sonst blockierte
+        # man bei reinem Switch-Setup das komplette Netzladen).
+        # Vor Early-Return ausgewertet, damit Live-Toggle auch waehrend
+        # laufendem Charge-Mode greift (Tick ruft erneut _start_charging).
+        allow_switch = getattr(self, "_allow_grid_switch_chargers", True)
+        has_dimmer = any(
+            c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers
+        )
+        if has_dimmer and not allow_switch:
+            for charger in self._chargers:
+                if (charger.get("type", CHARGER_TYPE_SWITCH) == CHARGER_TYPE_SWITCH
+                        and charger.get("active") and charger.get("switch")):
+                    await self.hass.services.async_call(
+                        "switch", "turn_off",
+                        {"entity_id": charger["switch"]},
+                    )
+                    charger["active"] = False
+
         if self._operating_mode == MODE_CHARGING:
             return
 
@@ -166,6 +185,10 @@ class DevicesMixin:
         )
 
         for i, charger in enumerate(self._chargers):
+            ctype = charger.get("type", CHARGER_TYPE_SWITCH)
+            if (ctype == CHARGER_TYPE_SWITCH and has_dimmer
+                    and not allow_switch):
+                continue
             await self._set_charger(i, charger.get("power", 0), on=True)
 
         self._reset_pid()
