@@ -165,15 +165,20 @@ class DevicesMixin:
         has_dimmer = any(
             c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers
         )
-        if has_dimmer and not allow_switch:
-            for charger in self._chargers:
-                if (charger.get("type", CHARGER_TYPE_SWITCH) == CHARGER_TYPE_SWITCH
-                        and charger.get("active") and charger.get("switch")):
+        if has_dimmer and self._operating_mode == MODE_CHARGING:
+            for i, charger in enumerate(self._chargers):
+                if charger.get("type", CHARGER_TYPE_SWITCH) != CHARGER_TYPE_SWITCH:
+                    continue
+                if not charger.get("switch"):
+                    continue
+                if not allow_switch and charger.get("active"):
                     await self.hass.services.async_call(
                         "switch", "turn_off",
                         {"entity_id": charger["switch"]},
                     )
                     charger["active"] = False
+                elif allow_switch and not charger.get("active"):
+                    await self._set_charger(i, charger.get("power", 0), on=True)
 
         if self._operating_mode == MODE_CHARGING:
             return

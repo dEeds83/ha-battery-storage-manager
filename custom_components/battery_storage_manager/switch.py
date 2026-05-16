@@ -79,6 +79,11 @@ class BatteryStorageBaseSwitch(CoordinatorEntity, RestoreEntity, SwitchEntity):
             restored_on = last_state.state == "on"
             self._apply_restored_state(restored_on)
             _LOGGER.debug("Restored %s = %s", self._attr_name, last_state.state)
+        # UI-State zwingend aus is_on neu schreiben — sonst zeigt HA den
+        # last_state aus dem Recorder weiter (z.B. ForceSolarOff mit
+        # _restore_via_action=False: Coord-Attr bleibt False, aber Switch
+        # zeigt ohne expliziten Write den vorherigen ON-Zustand).
+        self.async_write_ha_state()
 
     def _apply_restored_state(self, is_on: bool) -> None:
         """Apply restored state to coordinator. Override in subclass."""
