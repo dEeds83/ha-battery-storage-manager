@@ -46,6 +46,7 @@ from .const import (
     CONF_SOLAR_ENERGY_TODAY_ENTITY,
     CONF_SOLAR_POWER_ENTITY,
     CONF_SOLAR_SWITCHES,
+    CONF_TIBBER_API_TOKEN,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
@@ -68,6 +69,9 @@ STEP_TIBBER_SCHEMA = vol.Schema(
         ),
         vol.Optional(CONF_TIBBER_PRICES_ENTITY, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_TIBBER_API_TOKEN, default=""): selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
         ),
         vol.Required(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
@@ -443,6 +447,12 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                         default=self._current(CONF_TIBBER_PRICES_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(
+                        CONF_TIBBER_API_TOKEN,
+                        default=self._current(CONF_TIBBER_API_TOKEN, ""),
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                     ),
                     vol.Required(
                         CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,

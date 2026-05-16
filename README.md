@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.44.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.45.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -15,7 +15,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Batterie-Zykluskosten** – Konfigurierbarer Degradationskostenparameter (ct/kWh) verhindert unprofitable Mini-Arbitrage
 - **Roundtrip-Effizienz** – Konfigurierbar (Standard 85%), wird automatisch aus Smartshunt V×I-Messdaten kalibriert wenn verfügbar
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
-- **Tibber-Tomorrow-Fallback** – Liefert die Tibber-Action nur Heute (15-Min) und keine Tomorrow-Preise, werden Morgen-Stundenpreise direkt aus dem pyTibber-Cache (`hass.data["tibber"]`) ergänzt. Kein API-Token nötig — Plan-Horizont bleibt >24h auch wenn die HA-Tibber-Action Tomorrow zurückhält
+- **Tibber-Tomorrow-Fallback** – Liefert die Tibber-Action nur Heute (15-Min) und keine Tomorrow-Preise, werden Morgen-Stundenpreise direkt aus dem pyTibber-Cache (`hass.data["tibber"]`) ergänzt. Wenn auch dort keine Daten: optionaler GraphQL-Direkt-Fallback gegen `api.tibber.com` mit User-API-Token (30-Min-Cache). Plan-Horizont bleibt >24h auch wenn die HA-Tibber-Integration Tomorrow zurückhält
 - **Voller Netzpreis für Lade-Entscheidung** – DP bewertet Laden zum vollen Netzpreis, nicht zum effektiven Preis. Solar-Überschuss wird in hold/idle automatisch opportunistisch geladen — kostenlos und ohne Netz-Risiko. So werden nur wirklich günstige Slots für Netz-Laden verwendet
 - **Solar-Headroom** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit genug Platz für erwarteten Solarüberschuss bleibt. Headroom wird nur bis zum nächsten Sonnenuntergang berechnet, damit morgige Prognosen günstiges Netz-Laden heute nicht blockieren
 - **6-Pass Smoothing Pipeline:**

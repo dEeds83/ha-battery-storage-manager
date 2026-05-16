@@ -64,9 +64,11 @@ from .const import (
     SOLAR_CALIBRATION_ROLLING_DAYS,
     STORAGE_KEY_SOLAR_CALIBRATION,
     STORAGE_VERSION_SOLAR_CALIBRATION,
+    CONF_TIBBER_API_TOKEN,
     CONF_TIBBER_PRICE_ENTITY,
     CONF_TIBBER_PRICES_ENTITY,
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
+    TIBBER_GRAPHQL_URL,
     CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_HOUSE_CONSUMPTION_W,
@@ -138,6 +140,10 @@ class BatteryStorageCoordinator(
         # Entity IDs from config
         self._tibber_price_entity = self._config.get(CONF_TIBBER_PRICE_ENTITY, "")
         self._tibber_prices_entity = self._config.get(CONF_TIBBER_PRICES_ENTITY, "")
+        self._tibber_api_token = self._config.get(CONF_TIBBER_API_TOKEN, "") or ""
+        # GraphQL-Tomorrow-Cache (TTL ~30 Min, reduziert API-Hits)
+        self._tibber_gql_cache: list[dict] = []
+        self._tibber_gql_cache_time: datetime | None = None
         self._pulse_consumption_entity = self._config.get(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, "")
         self._pulse_production_entity = self._config.get(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, "")
 
@@ -873,6 +879,8 @@ class BatteryStorageCoordinator(
             # nicht schon vorhanden. Verlaengert DP-Horizont auf >24h
             # und ermoeglicht morgen-bewusste Plan-Entscheidungen.
             await self._merge_tibber_tomorrow_hourly()
+            if not self._has_tomorrow_in_forecast():
+                await self._merge_tibber_graphql_tomorrow()
             _LOGGER.debug(
                 "Price forecast built with %d entries (via tibber.get_prices action)",
                 len(self._price_forecast),
@@ -883,6 +891,135 @@ class BatteryStorageCoordinator(
         self._fetch_prices_from_attributes()
         # Auch hier nachladen, falls Attribute Tomorrow nicht liefern.
         await self._merge_tibber_tomorrow_hourly()
+        if not self._has_tomorrow_in_forecast():
+            await self._merge_tibber_graphql_tomorrow()
+
+    def _has_tomorrow_in_forecast(self) -> bool:
+        """True wenn _price_forecast mindestens einen Slot fuer morgen enthaelt."""
+        tomorrow = (dt_util.now() + timedelta(days=1)).date()
+        for p in self._price_forecast:
+            start = p.get("start", "")
+            try:
+                dt = dt_util.parse_datetime(start)
+            except Exception:
+                dt = None
+            if dt and dt.date() == tomorrow:
+                return True
+        return False
+
+    async def _merge_tibber_graphql_tomorrow(self) -> None:
+        """Letzter Fallback: Tibber GraphQL direkt mit User-API-Token.
+
+        Greift nur wenn Token konfiguriert ist und weder Action noch
+        pyTibber-Cache Tomorrow-Preise lieferten. 30-Min-Cache reduziert
+        API-Hits, dedup-Logik nach Stunden-Key vermeidet Doppel-Slots.
+        """
+        if not self._tibber_api_token:
+            return
+
+        now = dt_util.now()
+        cache_age = (
+            (now - self._tibber_gql_cache_time).total_seconds()
+            if self._tibber_gql_cache_time else 9999
+        )
+        if self._tibber_gql_cache and cache_age < 1800:
+            entries = self._tibber_gql_cache
+        else:
+            entries = await self._fetch_tibber_graphql_prices()
+            if entries:
+                self._tibber_gql_cache = entries
+                self._tibber_gql_cache_time = now
+
+        if not entries:
+            return
+
+        existing_starts = {
+            str(p.get("start", ""))[:13] for p in self._price_forecast
+        }
+        added = 0
+        for entry in entries:
+            ts_str = entry.get("startsAt") or entry.get("start")
+            price = entry.get("total")
+            if ts_str is None or price is None:
+                continue
+            try:
+                dt = dt_util.parse_datetime(ts_str)
+            except Exception:
+                dt = None
+            if dt is None:
+                continue
+            key = dt.isoformat()[:13]
+            if key in existing_starts:
+                continue
+            self._price_forecast.append({
+                "start": dt.isoformat(),
+                "total": float(price),
+            })
+            existing_starts.add(key)
+            added += 1
+
+        if added:
+            self._price_forecast.sort(key=lambda e: e.get("start", ""))
+            _LOGGER.info(
+                "Tibber-GraphQL-Fallback: %d Preise direkt von api.tibber.com ergaenzt",
+                added,
+            )
+
+    async def _fetch_tibber_graphql_prices(self) -> list[dict]:
+        """GraphQL-Call: today + tomorrow Preise vom ersten Home holen."""
+        try:
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        except ImportError:
+            return []
+        session = async_get_clientsession(self.hass)
+        query = (
+            "{ viewer { homes { currentSubscription { priceInfo { "
+            "today { total startsAt } tomorrow { total startsAt } "
+            "} } } } }"
+        )
+        headers = {
+            "Authorization": f"Bearer {self._tibber_api_token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with session.post(
+                TIBBER_GRAPHQL_URL,
+                json={"query": query},
+                headers=headers,
+                timeout=15,
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    _LOGGER.warning(
+                        "Tibber GraphQL HTTP %d: %s", resp.status, body[:200],
+                    )
+                    return []
+                data = await resp.json()
+        except Exception:
+            _LOGGER.warning("Tibber GraphQL request failed", exc_info=True)
+            return []
+
+        if not isinstance(data, dict) or data.get("errors"):
+            _LOGGER.warning("Tibber GraphQL errors: %s", data.get("errors"))
+            return []
+
+        try:
+            homes = data["data"]["viewer"]["homes"]
+        except (KeyError, TypeError):
+            return []
+        if not homes:
+            return []
+        try:
+            info = homes[0]["currentSubscription"]["priceInfo"]
+        except (KeyError, TypeError):
+            return []
+
+        result: list[dict] = []
+        for bucket in ("today", "tomorrow"):
+            for entry in info.get(bucket, []) or []:
+                if isinstance(entry, dict):
+                    result.append(entry)
+        return result
 
     async def _merge_tibber_tomorrow_hourly(self) -> None:
         """Append tomorrow hourly prices from pyTibber if not yet in forecast.
@@ -1761,6 +1898,11 @@ class BatteryStorageCoordinator(
         self._tibber_prices_entity = options.get(
             CONF_TIBBER_PRICES_ENTITY, self._tibber_prices_entity
         )
+        new_token = options.get(CONF_TIBBER_API_TOKEN, self._tibber_api_token) or ""
+        if new_token != self._tibber_api_token:
+            self._tibber_api_token = new_token
+            self._tibber_gql_cache = []
+            self._tibber_gql_cache_time = None
         self._pulse_consumption_entity = options.get(
             CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, self._pulse_consumption_entity
         )

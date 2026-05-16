@@ -7,6 +7,7 @@
         "data": {
           "tibber_price_entity": "Tibber Strompreis-Sensor (aktueller Preis)",
           "tibber_prices_entity": "Tibber Preisübersicht-Sensor (optional, leer lassen um Preis-Sensor zu nutzen)",
+          "tibber_api_token": "Tibber API-Token (optional, GraphQL-Fallback für Morgen-Stundenpreise)",
           "tibber_pulse_consumption_entity": "Tibber Pulse Verbrauch (aktuelle bezogene Leistung)",
           "tibber_pulse_production_entity": "Tibber Pulse Einspeisung (aktuelle eingespeiste Leistung)",
           "solar_forecast_entity": "Solar-Prognose-Sensor (optional, z.B. Forecast.Solar oder Solcast)",
@@ -74,6 +75,7 @@
         "data": {
           "tibber_price_entity": "Tibber Strompreis-Sensor (aktueller Preis)",
           "tibber_prices_entity": "Tibber Preisübersicht-Sensor (optional)",
+          "tibber_api_token": "Tibber API-Token (optional, GraphQL-Fallback)",
           "tibber_pulse_consumption_entity": "Tibber Pulse Verbrauch",
           "tibber_pulse_production_entity": "Tibber Pulse Einspeisung",
           "solar_forecast_entity": "Solar-Prognose-Sensor (optional)",
