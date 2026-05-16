@@ -895,6 +895,57 @@ class BatteryStorageCoordinator(
         if not self._has_tomorrow_in_forecast():
             await self._merge_tibber_graphql_tomorrow()
 
+    def _base_slot_minutes(self) -> int:
+        """Detect base slot resolution of _price_forecast in minutes.
+
+        Berechnet den haeufigsten Delta zwischen aufeinanderfolgenden
+        Slots. Default 60 wenn unklar.
+        """
+        if len(self._price_forecast) < 2:
+            return 60
+        deltas: list[int] = []
+        prev = None
+        for p in self._price_forecast:
+            try:
+                dt = dt_util.parse_datetime(p.get("start", ""))
+            except Exception:
+                dt = None
+            if dt is None:
+                continue
+            if prev is not None:
+                d = int((dt - prev).total_seconds() / 60)
+                if 5 <= d <= 120:
+                    deltas.append(d)
+            prev = dt
+        if not deltas:
+            return 60
+        deltas.sort()
+        return deltas[len(deltas) // 2]
+
+    @staticmethod
+    def _expand_hourly_to_resolution(
+        ts_str: str, price: float, base_minutes: int
+    ) -> list[tuple[str, float]]:
+        """Stundenpreis in N Sub-Slots der Basis-Aufloesung aufteilen.
+
+        Beispiel base_minutes=15 -> 4 Slots zu je 15min mit gleichem Preis.
+        Bei base_minutes>=60 nur 1 Slot (kein Expand noetig).
+        """
+        if base_minutes >= 60:
+            return [(ts_str, price)]
+        try:
+            dt = dt_util.parse_datetime(ts_str)
+        except Exception:
+            dt = None
+        if dt is None:
+            return [(ts_str, price)]
+        count = max(1, 60 // base_minutes)
+        out: list[tuple[str, float]] = []
+        for i in range(count):
+            sub = dt + timedelta(minutes=i * base_minutes)
+            out.append((sub.isoformat(), price))
+        return out
+
     def _has_tomorrow_in_forecast(self) -> bool:
         """True wenn _price_forecast mindestens einen Slot fuer morgen enthaelt."""
         tomorrow = (dt_util.now() + timedelta(days=1)).date()
@@ -934,9 +985,18 @@ class BatteryStorageCoordinator(
         if not entries:
             return
 
-        existing_starts = {
-            str(p.get("start", ""))[:13] for p in self._price_forecast
-        }
+        base_minutes = self._base_slot_minutes()
+        def _key(dt_obj):
+            return dt_obj.strftime("%Y-%m-%dT%H:%M")
+        existing_starts = set()
+        for p in self._price_forecast:
+            try:
+                dtp = dt_util.parse_datetime(p.get("start", ""))
+            except Exception:
+                dtp = None
+            if dtp is not None:
+                existing_starts.add(_key(dtp))
+
         added = 0
         for entry in entries:
             ts_str = entry.get("startsAt") or entry.get("start")
@@ -949,15 +1009,25 @@ class BatteryStorageCoordinator(
                 dt = None
             if dt is None:
                 continue
-            key = dt.isoformat()[:13]
-            if key in existing_starts:
-                continue
-            self._price_forecast.append({
-                "start": dt.isoformat(),
-                "total": float(price),
-            })
-            existing_starts.add(key)
-            added += 1
+            expanded = self._expand_hourly_to_resolution(
+                dt.isoformat(), float(price), base_minutes,
+            )
+            for sub_ts, sub_p in expanded:
+                try:
+                    sub_dt = dt_util.parse_datetime(sub_ts)
+                except Exception:
+                    sub_dt = None
+                if sub_dt is None:
+                    continue
+                k = _key(sub_dt)
+                if k in existing_starts:
+                    continue
+                self._price_forecast.append({
+                    "start": sub_dt.isoformat(),
+                    "total": float(sub_p),
+                })
+                existing_starts.add(k)
+                added += 1
 
         if added:
             self._price_forecast.sort(key=lambda e: e.get("start", ""))
@@ -1051,9 +1121,21 @@ class BatteryStorageCoordinator(
         end_of_tomorrow = (now + timedelta(days=1)).replace(
             hour=23, minute=59, second=59, microsecond=0,
         )
-        existing_starts = {
-            str(p.get("start", ""))[:13] for p in self._price_forecast
-        }
+        # Sub-Hourly-Aufloesung der bestehenden Slots, damit Stunden-
+        # Preise auf gleiche Granularitaet expandiert werden (sonst rechnet
+        # DP mit 15min-Slots aber Stundenpreise ergeben 4x weniger kWh).
+        base_minutes = self._base_slot_minutes()
+        # Dedup-Key auf Basis-Aufloesung (z.B. 'YYYY-MM-DDTHH:MM')
+        def _key(dt_obj):
+            return dt_obj.strftime("%Y-%m-%dT%H:%M")
+        existing_starts = set()
+        for p in self._price_forecast:
+            try:
+                dtp = dt_util.parse_datetime(p.get("start", ""))
+            except Exception:
+                dtp = None
+            if dtp is not None:
+                existing_starts.add(_key(dtp))
 
         added = 0
         for home in homes:
@@ -1071,15 +1153,26 @@ class BatteryStorageCoordinator(
                     continue
                 if ts > end_of_tomorrow:
                     continue
-                key = ts.isoformat()[:13]
-                if key in existing_starts:
-                    continue
-                self._price_forecast.append({
-                    "start": ts.isoformat(),
-                    "total": float(price),
-                })
-                existing_starts.add(key)
-                added += 1
+                # In Basis-Aufloesung expandieren (Stundenpreis -> N Sub-Slots)
+                expanded = self._expand_hourly_to_resolution(
+                    ts.isoformat(), float(price), base_minutes,
+                )
+                for sub_ts, sub_p in expanded:
+                    try:
+                        sub_dt = dt_util.parse_datetime(sub_ts)
+                    except Exception:
+                        sub_dt = None
+                    if sub_dt is None:
+                        continue
+                    k = _key(sub_dt)
+                    if k in existing_starts:
+                        continue
+                    self._price_forecast.append({
+                        "start": sub_dt.isoformat(),
+                        "total": float(sub_p),
+                    })
+                    existing_starts.add(k)
+                    added += 1
             break
 
         if added:
