@@ -867,6 +867,12 @@ class BatteryStorageCoordinator(
         # Try the tibber.get_prices action first (HA 2024.8+)
         if await self._fetch_prices_via_action():
             self._fallback_price_range = None
+            # Tibber liefert haeufig nur Today (15-Min) per Action,
+            # Tomorrow (stuendlich, sobald verfuegbar) fehlt. pyTibber-
+            # Direktzugriff merged Tomorrow-Stundenpreise dazu, sofern
+            # nicht schon vorhanden. Verlaengert DP-Horizont auf >24h
+            # und ermoeglicht morgen-bewusste Plan-Entscheidungen.
+            await self._merge_tibber_tomorrow_hourly()
             _LOGGER.debug(
                 "Price forecast built with %d entries (via tibber.get_prices action)",
                 len(self._price_forecast),
@@ -875,6 +881,73 @@ class BatteryStorageCoordinator(
 
         # Fallback: read from entity attributes (older Tibber integration)
         self._fetch_prices_from_attributes()
+        # Auch hier nachladen, falls Attribute Tomorrow nicht liefern.
+        await self._merge_tibber_tomorrow_hourly()
+
+    async def _merge_tibber_tomorrow_hourly(self) -> None:
+        """Append tomorrow hourly prices from pyTibber if not yet in forecast.
+
+        Tibber publishes tomorrow prices around 13:00 CET. Action +
+        Entity-Attribute liefern oft nur Today. pyTibber-Instanz im
+        hass.data['tibber'] kennt den vollen Preiscache (home.price_total),
+        inkl. Tomorrow-Stundenpreisen. Wir nutzen ihn als Fallback,
+        ohne API-Token-Konfiguration.
+        """
+        tibber_data = self.hass.data.get("tibber")
+        if tibber_data is None:
+            return
+        homes_fn = getattr(tibber_data, "get_homes", None)
+        if homes_fn is None:
+            return
+        try:
+            homes = homes_fn(only_active=True) or []
+        except Exception:
+            _LOGGER.debug("pyTibber get_homes failed", exc_info=True)
+            return
+
+        now = dt_util.now()
+        end_of_tomorrow = (now + timedelta(days=1)).replace(
+            hour=23, minute=59, second=59, microsecond=0,
+        )
+        existing_starts = {
+            str(p.get("start", ""))[:13]  # 'YYYY-MM-DDTHH' Praefix
+            for p in self._price_forecast
+        }
+
+        added = 0
+        for home in homes:
+            price_total = getattr(home, "price_total", None) or {}
+            if not isinstance(price_total, dict):
+                continue
+            for ts_str, price in price_total.items():
+                try:
+                    ts = dt_util.parse_datetime(ts_str)
+                except Exception:
+                    ts = None
+                if ts is None:
+                    continue
+                if ts < now.replace(minute=0, second=0, microsecond=0):
+                    continue
+                if ts > end_of_tomorrow:
+                    continue
+                key = ts.isoformat()[:13]
+                if key in existing_starts:
+                    continue
+                self._price_forecast.append({
+                    "start": ts.isoformat(),
+                    "total": float(price),
+                })
+                existing_starts.add(key)
+                added += 1
+            # one home suffices
+            break
+
+        if added:
+            self._price_forecast.sort(key=lambda e: e.get("start", ""))
+            _LOGGER.info(
+                "Tibber-Tomorrow-Fallback: %d Stundenpreise aus pyTibber ergaenzt",
+                added,
+            )
 
     async def _fetch_prices_via_action(self) -> bool:
         """Fetch prices using the tibber.get_prices action. Returns True on success."""
