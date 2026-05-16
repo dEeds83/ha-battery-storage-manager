@@ -144,6 +144,7 @@ class BatteryStorageCoordinator(
         # GraphQL-Tomorrow-Cache (TTL ~30 Min, reduziert API-Hits)
         self._tibber_gql_cache: list[dict] = []
         self._tibber_gql_cache_time: datetime | None = None
+        self._tibber_fallback_warned: bool = False
         self._pulse_consumption_entity = self._config.get(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, "")
         self._pulse_production_entity = self._config.get(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, "")
 
@@ -1026,20 +1027,24 @@ class BatteryStorageCoordinator(
 
         Tibber publishes tomorrow prices around 13:00 CET. Action +
         Entity-Attribute liefern oft nur Today. pyTibber-Instanz im
-        hass.data['tibber'] kennt den vollen Preiscache (home.price_total),
-        inkl. Tomorrow-Stundenpreisen. Wir nutzen ihn als Fallback,
-        ohne API-Token-Konfiguration.
+        hass.data['tibber'] kennt den vollen Preiscache, inkl. Tomorrow-
+        Stundenpreisen. Wir nutzen ihn als Fallback ohne API-Token.
+
+        Robust gegen unterschiedliche HA-Tibber-Versionen: probiert
+        mehrere Attribut-Pfade (price_total dict, current_subscription
+        price_info, hass.data-Dict-Strukturen) und loggt einmalig
+        verbose warum welche Variante gewaehlt wurde.
         """
-        tibber_data = self.hass.data.get("tibber")
-        if tibber_data is None:
-            return
-        homes_fn = getattr(tibber_data, "get_homes", None)
-        if homes_fn is None:
-            return
-        try:
-            homes = homes_fn(only_active=True) or []
-        except Exception:
-            _LOGGER.debug("pyTibber get_homes failed", exc_info=True)
+        homes = self._collect_pytibber_homes()
+        if not homes:
+            if not getattr(self, "_tibber_fallback_warned", False):
+                _LOGGER.warning(
+                    "Tibber-Tomorrow-Fallback: keine pyTibber-Homes in "
+                    "hass.data['tibber'] gefunden. Strukturtyp=%s. "
+                    "GraphQL-Token-Fallback empfohlen.",
+                    type(self.hass.data.get("tibber")).__name__,
+                )
+                self._tibber_fallback_warned = True
             return
 
         now = dt_util.now()
@@ -1047,16 +1052,15 @@ class BatteryStorageCoordinator(
             hour=23, minute=59, second=59, microsecond=0,
         )
         existing_starts = {
-            str(p.get("start", ""))[:13]  # 'YYYY-MM-DDTHH' Praefix
-            for p in self._price_forecast
+            str(p.get("start", ""))[:13] for p in self._price_forecast
         }
 
         added = 0
         for home in homes:
-            price_total = getattr(home, "price_total", None) or {}
-            if not isinstance(price_total, dict):
+            entries = self._extract_price_entries(home)
+            if not entries:
                 continue
-            for ts_str, price in price_total.items():
+            for ts_str, price in entries:
                 try:
                     ts = dt_util.parse_datetime(ts_str)
                 except Exception:
@@ -1076,7 +1080,6 @@ class BatteryStorageCoordinator(
                 })
                 existing_starts.add(key)
                 added += 1
-            # one home suffices
             break
 
         if added:
@@ -1085,6 +1088,123 @@ class BatteryStorageCoordinator(
                 "Tibber-Tomorrow-Fallback: %d Stundenpreise aus pyTibber ergaenzt",
                 added,
             )
+        else:
+            if not getattr(self, "_tibber_fallback_warned", False):
+                home = homes[0]
+                _LOGGER.warning(
+                    "Tibber-Tomorrow-Fallback: pyTibber-Home gefunden "
+                    "(type=%s) aber keine Tomorrow-Preise extrahierbar. "
+                    "Attribute: %s",
+                    type(home).__name__,
+                    [a for a in dir(home) if not a.startswith("_")][:30],
+                )
+                self._tibber_fallback_warned = True
+
+    def _collect_pytibber_homes(self) -> list:
+        """Suche pyTibber Home-Objekte in hass.data['tibber'].
+
+        Unterstuetzt mehrere HA-Tibber-Storage-Layouts:
+        - Tibber-Object direkt (.get_homes())
+        - Dict {entry_id: Tibber-Object}
+        - Dict mit 'coordinator' oder 'tibber' Key
+        """
+        tibber_data = self.hass.data.get("tibber")
+        if tibber_data is None:
+            return []
+
+        candidates = [tibber_data]
+        if isinstance(tibber_data, dict):
+            candidates.extend(tibber_data.values())
+
+        for cand in candidates:
+            if cand is None:
+                continue
+            # Tibber-Object: get_homes()
+            get_homes = getattr(cand, "get_homes", None)
+            if callable(get_homes):
+                try:
+                    homes = get_homes(only_active=True)
+                except TypeError:
+                    try:
+                        homes = get_homes()
+                    except Exception:
+                        homes = None
+                except Exception:
+                    homes = None
+                if homes:
+                    return list(homes)
+            # Coordinator-Wrapper: .tibber_data
+            inner = getattr(cand, "tibber_data", None)
+            if inner is not None and callable(getattr(inner, "get_homes", None)):
+                try:
+                    homes = inner.get_homes(only_active=True)
+                    if homes:
+                        return list(homes)
+                except Exception:
+                    pass
+            # Direkte homes-Liste/Property
+            homes_attr = getattr(cand, "homes", None)
+            if isinstance(homes_attr, (list, tuple)) and homes_attr:
+                return list(homes_attr)
+        return []
+
+    def _extract_price_entries(self, home) -> list[tuple[str, float]]:
+        """Hole (timestamp, price)-Paare aus pyTibber Home-Objekt.
+
+        Versucht mehrere Quellen: price_total dict, current_subscription
+        priceInfo today/tomorrow Listen, info dict.
+        """
+        result: list[tuple[str, float]] = []
+
+        # 1. home.price_total (dict {iso_ts: price})
+        price_total = getattr(home, "price_total", None)
+        if isinstance(price_total, dict) and price_total:
+            for ts, p in price_total.items():
+                try:
+                    result.append((str(ts), float(p)))
+                except (TypeError, ValueError):
+                    continue
+            if result:
+                return result
+
+        # 2. home.current_subscription.price_info today/tomorrow
+        sub = getattr(home, "current_subscription", None)
+        if sub is not None:
+            info = getattr(sub, "price_info", None) or getattr(sub, "priceInfo", None)
+            if isinstance(info, dict):
+                for bucket in ("today", "tomorrow"):
+                    items = info.get(bucket) or []
+                    for entry in items:
+                        if isinstance(entry, dict):
+                            ts = entry.get("startsAt") or entry.get("start_time")
+                            p = entry.get("total")
+                            if ts and p is not None:
+                                try:
+                                    result.append((str(ts), float(p)))
+                                except (TypeError, ValueError):
+                                    continue
+                if result:
+                    return result
+
+        # 3. home.info (nested dict, aelter)
+        info_attr = getattr(home, "info", None)
+        if isinstance(info_attr, dict):
+            try:
+                buckets = (info_attr["viewer"]["home"]["currentSubscription"]
+                           ["priceInfo"])
+                for bucket in ("today", "tomorrow"):
+                    for entry in buckets.get(bucket, []) or []:
+                        ts = entry.get("startsAt")
+                        p = entry.get("total")
+                        if ts and p is not None:
+                            try:
+                                result.append((str(ts), float(p)))
+                            except (TypeError, ValueError):
+                                continue
+            except (KeyError, TypeError):
+                pass
+
+        return result
 
     async def _fetch_prices_via_action(self) -> bool:
         """Fetch prices using the tibber.get_prices action. Returns True on success."""
