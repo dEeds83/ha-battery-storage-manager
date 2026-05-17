@@ -33,6 +33,8 @@ async def async_setup_entry(
         PriceLowThresholdNumber(coordinator, entry),
         PriceHighThresholdNumber(coordinator, entry),
         InverterSettleSecondsNumber(coordinator, entry),
+        BatteryCycleCostNumber(coordinator, entry),
+        SolarHeadroomFloorNumber(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -212,3 +214,70 @@ class InverterSettleSecondsNumber(BatteryStorageBaseNumber):
 
     def _apply_restored_value(self, value: float) -> None:
         self.coordinator._inverter_settle_seconds = float(value)
+
+
+class BatteryCycleCostNumber(BatteryStorageBaseNumber):
+    """Zykluskosten in ct/kWh (Degradation pro Lade-/Entladezyklus).
+
+    Hebt die Break-Even-Schwelle fuer Arbitrage: hoeher = nur fette
+    Spreads werden geplant, niedriger = auch marginale Spreads.
+    """
+
+    _attr_icon = "mdi:battery-clock"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 30
+    _attr_native_step = 0.5
+    _attr_native_unit_of_measurement = "ct/kWh"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry,
+            "battery_cycle_cost", "Batterie-Zykluskosten",
+        )
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator._cycle_cost
+
+    async def async_set_native_value(self, value: float) -> None:
+        self.coordinator._cycle_cost = float(value)
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    def _apply_restored_value(self, value: float) -> None:
+        self.coordinator._cycle_cost = float(value)
+
+
+class SolarHeadroomFloorNumber(BatteryStorageBaseNumber):
+    """Solar-Headroom-Floor als Anteil des Solar-Forecasts (0..1).
+
+    0 = kein Mindest-Headroom (Plan rechnet nur mit Forecast-Surplus
+    nach Hausverbrauch). 0.5 = sicherheitshalber 50% der Solar-Prognose
+    als Reserve. Hoher Floor = mehr Pre-Discharge ("Platz schaffen"),
+    schuetzt gegen Solar-Export bei Haus-Ueberschaetzung.
+    """
+
+    _attr_icon = "mdi:solar-power"
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 1.0
+    _attr_native_step = 0.05
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry,
+            "solar_headroom_floor", "Solar-Headroom-Floor",
+        )
+
+    @property
+    def native_value(self) -> float:
+        return getattr(self.coordinator, "_solar_headroom_floor", 0.5)
+
+    async def async_set_native_value(self, value: float) -> None:
+        self.coordinator._solar_headroom_floor = float(value)
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    def _apply_restored_value(self, value: float) -> None:
+        self.coordinator._solar_headroom_floor = float(value)

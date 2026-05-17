@@ -268,6 +268,9 @@ class BatteryStorageCoordinator(
 
         # Optimization log (recent decisions for UI)
         self._solar_headroom_pct: float = 0.0
+        # Floor-Faktor: mind. X * solar_total_kwh als Headroom reservieren.
+        # Live ueber Number-Entity tunbar. Default 0.5 (Memory v2.42.2).
+        self._solar_headroom_floor: float = 0.5
         self._dp_max_soc: float = self._max_soc
         self._optimization_log: list[str] = []
         self._max_log_entries = 50
@@ -1522,7 +1525,8 @@ class BatteryStorageCoordinator(
         # diesen Floor lieferte surplus oft 0 (house >= solar im Forecast),
         # DP lud bis grid_max_soc voll, Solar uebertraf realen Verbrauch
         # und Battery erreichte 100% -> Export.
-        expected_surplus_kwh = max(expected_surplus_kwh, solar_total_kwh * 0.5)
+        floor_factor = max(0.0, min(1.0, getattr(self, "_solar_headroom_floor", 0.5)))
+        expected_surplus_kwh = max(expected_surplus_kwh, solar_total_kwh * floor_factor)
         if cap > 0 and expected_surplus_kwh > 0:
             headroom_pct = min(
                 expected_surplus_kwh / cap * 100,
