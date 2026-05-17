@@ -1693,6 +1693,15 @@ class BatteryStorageCoordinator(
                 estimated_soc -= delta_kwh / cap * 100
                 discharge_count += 1
 
+            # Solar-Surplus opportunistisch in Akku (idle/hold/discharge).
+            # Bei Plan-Charge nicht extra, der Lader laeuft eh am Max.
+            if action != "charge":
+                solar_in = min(
+                    max(0.0, h.get("solar_surplus_kwh", 0) or 0.0),
+                    max(0.0, self._max_soc - estimated_soc) / 100 * cap,
+                )
+                estimated_soc += solar_in / cap * 100
+
             if action == "idle":
                 has_future_discharge = any(
                     actions[j] == "discharge" for j in range(i + 1, n)

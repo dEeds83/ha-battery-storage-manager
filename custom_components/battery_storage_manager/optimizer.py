@@ -120,12 +120,20 @@ def solve_dp(
         # auf globalen Wert.
         slot_dis_kwh = h.get("discharge_kwh", discharge_kwh_slot)
 
+        # Solar-Surplus pro Slot: wird in idle/hold + discharge opportunistisch
+        # in den Akku absorbiert (Dimmer / Switch-Charger). Hebt SOC.
+        slot_solar_kwh = max(0.0, h.get("solar_surplus_kwh", 0) or 0.0)
+
         for si in range(num_soc):
             soc = soc_levels[si]
             best_val = INF
             best_act = "idle"
 
-            val = dp[t + 1][si]
+            # Idle-Transition: Solar-Surplus geht in Akku (capped an max_soc).
+            solar_to_batt = min(slot_solar_kwh, (max_soc - soc) / 100 * cap)
+            new_soc_idle = soc + solar_to_batt / cap * 100
+            new_si_idle = soc_to_idx(new_soc_idle)
+            val = dp[t + 1][new_si_idle]
             if val > best_val:
                 best_val = val
                 best_act = "idle"
@@ -151,7 +159,13 @@ def solve_dp(
             if soc > min_soc and slot_dis_kwh > 0:
                 delta = min(slot_dis_kwh, (soc - min_soc) / 100 * cap)
                 delivered = delta * efficiency
-                new_soc = soc - delta / cap * 100
+                # Netto-SOC-Aenderung: Discharge raus, Solar-Surplus rein
+                # (Dimmer/Charger absorbieren waehrend Entladen).
+                soc_after_dis = soc - delta / cap * 100
+                solar_to_batt_d = min(
+                    slot_solar_kwh, (max_soc - soc_after_dis) / 100 * cap,
+                )
+                new_soc = soc_after_dis + solar_to_batt_d / cap * 100
                 new_si = soc_to_idx(new_soc)
                 if new_si < si:
                     revenue = delivered * price - delta * half_cycle_eur
@@ -173,15 +187,19 @@ def solve_dp(
         soc = soc_levels[current_si]
         h = hourly_data[t]
         slot_dis_kwh = h.get("discharge_kwh", discharge_kwh_slot)
+        slot_solar_kwh = max(0.0, h.get("solar_surplus_kwh", 0) or 0.0)
 
         if act == "charge":
             delta = min(charge_kwh_slot, (max_soc - soc) / 100 * cap)
             new_soc = soc + delta / cap * 100
         elif act == "discharge":
             delta = min(slot_dis_kwh, (soc - min_soc) / 100 * cap)
-            new_soc = soc - delta / cap * 100
+            soc_after = soc - delta / cap * 100
+            solar_in = min(slot_solar_kwh, (max_soc - soc_after) / 100 * cap)
+            new_soc = soc_after + solar_in / cap * 100
         else:
-            new_soc = soc
+            solar_in = min(slot_solar_kwh, (max_soc - soc) / 100 * cap)
+            new_soc = soc + solar_in / cap * 100
         current_si = soc_to_idx(new_soc)
 
     # Profit = DP value - terminal value of starting energy
