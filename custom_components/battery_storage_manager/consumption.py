@@ -61,8 +61,48 @@ class ConsumptionMixin:
         now = dt_util.now()
         current_hour = now.hour
 
-        charger_draw = sum(c["power"] for c in self._chargers if c["active"])
-        inverter_feed = self._inverter_target_power if self._inverter_active else 0
+        # Realer Charger-Draw:
+        # - Dimmer: target_power (regelt stufenlos), Nominal-Power waere
+        #   ueberschaetzt -> house_w faellt negativ und wird auf 0 geclamped.
+        # - Switch: Nominal-Power (zieht voll wenn aktiv).
+        # - Wenn Power-Sensor (power_entity) konfiguriert: Messung bevorzugen.
+        def _read_w(entity: str) -> float | None:
+            if not entity:
+                return None
+            st = self.hass.states.get(entity)
+            if not st or st.state in ("unknown", "unavailable", None):
+                return None
+            try:
+                return float(st.state)
+            except (ValueError, TypeError):
+                return None
+
+        charger_draw = 0.0
+        for c in self._chargers:
+            if not c.get("active"):
+                continue
+            # 1. Echte Messung wenn vorhanden (actual_power_entity).
+            # 2. Switch-Lader: power_entity ist Sensor (W) -> direkt.
+            # 3. Dimmer: target_power (Setpoint, deckt sich mit Ist).
+            # 4. Fallback: Nominal-Power.
+            measured = _read_w(c.get("actual_power_entity", ""))
+            if measured is None and c.get("type") != "dimmer":
+                measured = _read_w(c.get("power_entity", ""))
+            if measured is not None:
+                charger_draw += measured
+            elif c.get("type") == "dimmer":
+                charger_draw += float(c.get("target_power") or 0)
+            else:
+                charger_draw += float(c.get("power") or 0)
+        # WR-Speisung: Messung bevorzugen, sonst Target.
+        if self._inverter_active:
+            inverter_feed = (
+                self._inverter_actual_power
+                if self._inverter_actual_power is not None
+                else self._inverter_target_power
+            )
+        else:
+            inverter_feed = 0
 
         solar_w = 0.0
         if self._solar_power is not None:
