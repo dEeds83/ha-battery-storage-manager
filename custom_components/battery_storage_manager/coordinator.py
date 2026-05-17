@@ -1481,6 +1481,17 @@ class BatteryStorageCoordinator(
             h["solar_wh_hour_raw"] = solar_wh_hour
             h["solar_surplus_kwh"] = max(0, h["solar_kwh"] - house_kwh_slot)
 
+            # Realistische Discharge-Kapazitaet pro Slot: zero-feed-geregelter
+            # WR speist nur was das Haus zieht (Surplus waere unverguetete
+            # Einspeisung, also nutzlos). solar-Deckung zieht den Bedarf,
+            # Akku liefert nur die Restdeckung. Vorher wurde discharge_kwh_slot
+            # = inverter_max * slot_h verwendet (ueberschaetzt) -> SOC-Drop
+            # im Plan zu schnell, Optimizer reduziert Discharge-Slots,
+            # Arbitrage verschenkt.
+            house_minus_solar_w = max(0.0, h["house_w"] - (h["solar_kwh"] * 1000 / slot_h))
+            real_discharge_w = min(discharge_power_w, house_minus_solar_w)
+            h["discharge_kwh"] = real_discharge_w / 1000 * slot_h
+
             if charge_kwh_slot > 0:
                 grid_fraction = max(0, charge_kwh_slot - h["solar_surplus_kwh"]) / charge_kwh_slot
             else:
@@ -1672,7 +1683,8 @@ class BatteryStorageCoordinator(
                 if estimated_soc <= self._min_soc:
                     action = "idle"
                 else:
-                    delta_kwh = min(discharge_kwh_slot, (estimated_soc - self._min_soc) / 100 * cap)
+                    slot_dis_kwh = h.get("discharge_kwh", discharge_kwh_slot)
+                    delta_kwh = min(slot_dis_kwh, (estimated_soc - self._min_soc) / 100 * cap)
 
             if action == "charge":
                 estimated_soc += delta_kwh / cap * 100

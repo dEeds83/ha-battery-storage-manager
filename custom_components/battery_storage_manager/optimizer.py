@@ -115,6 +115,10 @@ def solve_dp(
         h = hourly_data[t]
         price = h["price"]
         grid_frac = h.get("_scn_grid_frac", h["grid_fraction"])
+        # Pro-Slot Discharge-Kapazitaet, falls vom Coordinator gesetzt
+        # (zero-feed-begrenzt auf Hausverbrauch minus Solar). Fallback
+        # auf globalen Wert.
+        slot_dis_kwh = h.get("discharge_kwh", discharge_kwh_slot)
 
         for si in range(num_soc):
             soc = soc_levels[si]
@@ -144,8 +148,8 @@ def solve_dp(
                         best_act = "charge"
 
             # Discharge: keep strict >
-            if soc > min_soc and discharge_kwh_slot > 0:
-                delta = min(discharge_kwh_slot, (soc - min_soc) / 100 * cap)
+            if soc > min_soc and slot_dis_kwh > 0:
+                delta = min(slot_dis_kwh, (soc - min_soc) / 100 * cap)
                 delivered = delta * efficiency
                 new_soc = soc - delta / cap * 100
                 new_si = soc_to_idx(new_soc)
@@ -167,12 +171,14 @@ def solve_dp(
         act = action_dp[t][current_si]
         actions.append(act)
         soc = soc_levels[current_si]
+        h = hourly_data[t]
+        slot_dis_kwh = h.get("discharge_kwh", discharge_kwh_slot)
 
         if act == "charge":
             delta = min(charge_kwh_slot, (max_soc - soc) / 100 * cap)
             new_soc = soc + delta / cap * 100
         elif act == "discharge":
-            delta = min(discharge_kwh_slot, (soc - min_soc) / 100 * cap)
+            delta = min(slot_dis_kwh, (soc - min_soc) / 100 * cap)
             new_soc = soc - delta / cap * 100
         else:
             new_soc = soc
@@ -469,7 +475,7 @@ def smooth_plan(
                 delta = min(charge_kwh_slot, (max_soc - sim_soc) / 100 * cap)
                 sim_soc = min(max_soc, sim_soc + delta / cap * 100)
             elif actions[i] == "discharge":
-                delta = min(discharge_kwh_slot, (sim_soc - min_soc) / 100 * cap)
+                delta = min(hourly_data[i].get("discharge_kwh", discharge_kwh_slot), (sim_soc - min_soc) / 100 * cap)
                 sim_soc = max(min_soc, sim_soc - delta / cap * 100)
         if current_block_start is not None:
             discharge_block_info[-1] = (
@@ -604,7 +610,7 @@ def smooth_plan(
             delta = min(charge_kwh_slot, (max_soc - soc_sim) / 100 * cap)
             soc_sim = min(max_soc, soc_sim + delta / cap * 100)
         elif actions[i] == "discharge":
-            delta = min(discharge_kwh_slot, (soc_sim - min_soc) / 100 * cap)
+            delta = min(hourly_data[i].get("discharge_kwh", discharge_kwh_slot) if i < len(hourly_data) else discharge_kwh_slot, (soc_sim - min_soc) / 100 * cap)
             soc_sim = max(min_soc, soc_sim - delta / cap * 100)
 
     soc_swaps = 0
@@ -637,7 +643,7 @@ def smooth_plan(
                             delta = min(charge_kwh_slot, (max_soc - soc_sim) / 100 * cap)
                             soc_sim = min(max_soc, soc_sim + delta / cap * 100)
                         elif actions[j] == "discharge":
-                            delta = min(discharge_kwh_slot, (soc_sim - min_soc) / 100 * cap)
+                            delta = min(hourly_data[i].get("discharge_kwh", discharge_kwh_slot) if i < len(hourly_data) else discharge_kwh_slot, (soc_sim - min_soc) / 100 * cap)
                             soc_sim = max(min_soc, soc_sim - delta / cap * 100)
                     break  # restart scan with updated SOC
 
@@ -658,7 +664,7 @@ def smooth_plan(
                 d = min(charge_kwh_slot, (max_soc - s) / 100 * cap)
                 s = min(max_soc, s + d / cap * 100)
             elif acts[i] == "discharge":
-                d = min(discharge_kwh_slot, (s - min_soc) / 100 * cap)
+                d = min(hourly_data[i].get("discharge_kwh", discharge_kwh_slot) if i < len(hourly_data) else discharge_kwh_slot, (s - min_soc) / 100 * cap)
                 s = max(min_soc, s - d / cap * 100)
         return track
 
@@ -729,7 +735,8 @@ def smooth_plan(
                 else:
                     sim_soc = min(max_soc, sim_soc + charge_kwh_slot / cap * 100)
             elif actions[i] == "discharge":
-                sim_soc = max(min_soc, sim_soc - discharge_kwh_slot / cap * 100)
+                _d = hourly_data[i].get("discharge_kwh", discharge_kwh_slot)
+                sim_soc = max(min_soc, sim_soc - _d / cap * 100)
         if cleaned:
             smoothed += cleaned
             _LOGGER.info(
