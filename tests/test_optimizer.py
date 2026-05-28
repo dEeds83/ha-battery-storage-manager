@@ -20,6 +20,7 @@ _spec.loader.exec_module(optimizer)
 solve_dp = optimizer.solve_dp
 smooth_plan = optimizer.smooth_plan
 force_pre_solar_discharge = optimizer.force_pre_solar_discharge
+remove_dp_discharge_enclaves = optimizer.remove_dp_discharge_enclaves
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -463,7 +464,7 @@ class TestForcePreSolarDischarge:
         # SOC startet niedrig, wenig Solar, kein Overflow zu erwarten.
         slots = _make_slots([0.20] * 8, solar_surplus_kwh=0.05)
         actions = ["idle"] * len(slots)
-        forced, kwh = force_pre_solar_discharge(
+        forced, kwh, _idx = force_pre_solar_discharge(
             actions, slots, current_soc=30.0, **self._params()
         )
         assert forced == 0
@@ -483,7 +484,7 @@ class TestForcePreSolarDischarge:
         )
         slots = _make_slots_detailed(entries)
         actions = ["idle"] * len(slots)
-        forced, kwh = force_pre_solar_discharge(
+        forced, kwh, _idx = force_pre_solar_discharge(
             actions, slots, current_soc=85.0, **self._params()
         )
         assert forced > 0, "Bei Solar-Overflow muss mind. 1 Slot forciert werden"
@@ -505,7 +506,7 @@ class TestForcePreSolarDischarge:
         )
         slots = _make_slots_detailed(entries)
         actions = ["idle"] * len(slots)
-        forced, _ = force_pre_solar_discharge(
+        forced, _, _idx = force_pre_solar_discharge(
             actions, slots, current_soc=87.0, **self._params()
         )
         if forced > 0:
@@ -549,7 +550,7 @@ class TestForcePreSolarDischarge:
         )
         slots = _make_slots_detailed(entries)
         actions = ["charge", "charge", "charge", "idle", "idle", "idle"]
-        forced, _ = force_pre_solar_discharge(
+        forced, _, _idx = force_pre_solar_discharge(
             actions, slots, current_soc=85.0, **self._params()
         )
         # Kein idle vor Overflow -> kein Eingriff
@@ -564,7 +565,7 @@ class TestForcePreSolarDischarge:
         )
         slots = _make_slots_detailed(entries)
         actions = ["hold"] * 3 + ["idle"] * 3
-        forced, _ = force_pre_solar_discharge(
+        forced, _, _idx = force_pre_solar_discharge(
             actions, slots, current_soc=87.0, **self._params()
         )
         assert forced > 0
@@ -572,3 +573,64 @@ class TestForcePreSolarDischarge:
             1 for i in range(3) if actions[i] == "discharge"
         )
         assert discharge_in_hold_range > 0, "Hold-Slots muessen umwandelbar sein"
+
+    def test_returns_forced_indices(self):
+        """v2.50.1: force_pre_solar_discharge gibt die promovierten Indices zurueck."""
+        entries = (
+            [{"price": 0.30}] * 4
+            + [{"price": 0.20, "solar_surplus_kwh": 1.0}] * 4
+        )
+        slots = _make_slots_detailed(entries)
+        actions = ["idle"] * len(slots)
+        forced, _kwh, indices = force_pre_solar_discharge(
+            actions, slots, current_soc=87.0, **self._params()
+        )
+        assert forced > 0
+        assert isinstance(indices, set)
+        # Jede Promotion muss als Index erscheinen
+        assert len(indices) == forced
+        # Alle Indices liegen vor den Solar-Slots
+        assert all(i < 4 for i in indices)
+        # Genau diese Slots sind jetzt discharge
+        for i in indices:
+            assert actions[i] == "discharge"
+
+
+# ── remove_dp_discharge_enclaves tests (v2.50.1) ────────────────────
+
+
+class TestRemoveDPDischargeEnclaves:
+    """Tests fuer das Post-Force-Enclave-Cleanup."""
+
+    def test_removes_isolated_dp_discharge(self):
+        """Einzelner Discharge zwischen Hold-Slots wird zu idle."""
+        actions = ["hold", "hold", "discharge", "hold", "hold"]
+        slots = _make_slots([0.20] * 5)
+        demoted = remove_dp_discharge_enclaves(actions, slots, protect_indices=set())
+        assert demoted == 1
+        assert actions[2] == "idle"
+
+    def test_protects_force_promoted_slot(self):
+        """Slots in protect_indices bleiben unangetastet."""
+        actions = ["hold", "hold", "discharge", "hold", "hold"]
+        slots = _make_slots([0.20] * 5)
+        demoted = remove_dp_discharge_enclaves(actions, slots, protect_indices={2})
+        assert demoted == 0
+        assert actions[2] == "discharge"
+
+    def test_keeps_real_discharge_block(self):
+        """Block aus mehreren Discharges bleibt komplett erhalten."""
+        actions = ["hold", "discharge", "discharge", "discharge", "hold"]
+        slots = _make_slots([0.20] * 5)
+        demoted = remove_dp_discharge_enclaves(actions, slots, protect_indices=set())
+        assert demoted == 0
+        assert actions == ["hold", "discharge", "discharge", "discharge", "hold"]
+
+    def test_keeps_block_with_one_slot_gap(self):
+        """Discharge + 1-Slot-Lueck + Discharge gilt als Block (nicht entfernen)."""
+        actions = ["hold", "discharge", "hold", "discharge", "hold"]
+        slots = _make_slots([0.20] * 5)
+        demoted = remove_dp_discharge_enclaves(actions, slots, protect_indices=set())
+        # has_nearby greift (Index 2 hat Discharge bei i-1 und i+1, also direkt;
+        # Index 1 hat Discharge bei i+2; Index 3 hat Discharge bei i-2)
+        assert demoted == 0

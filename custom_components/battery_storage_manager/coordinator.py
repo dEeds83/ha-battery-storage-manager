@@ -1710,7 +1710,7 @@ class BatteryStorageCoordinator(
         # Projektion zeigt, dass wir trotzdem ueberlaufen, konvertieren
         # wir die teuersten idle/hold-Slots vor dem Overflow aktiv zu
         # Discharge — gegen das Wegwerfen von Solarenergie.
-        forced_count, forced_kwh = optimizer.force_pre_solar_discharge(
+        forced_count, forced_kwh, forced_indices = optimizer.force_pre_solar_discharge(
             actions, hourly_data, current_soc,
             charge_kwh_slot, discharge_kwh_slot, cap,
             min_soc=self._min_soc,
@@ -1724,6 +1724,21 @@ class BatteryStorageCoordinator(
             )
             _LOGGER.info(forced_msg)
             self._log_optimization(forced_msg)
+
+        # v2.50.1: Smoothing Pass 1 (Enclave-Removal) lief vor
+        # force_pre_solar_discharge. Falls der DP-Solver selbst noch
+        # isolierte Discharge-Slots produziert hat (Diskretisierungs-
+        # Artefakt bei flacher Preiskurve), entfernen wir die jetzt —
+        # ohne die vom Pre-Solar-Pass absichtlich erzeugten Single-
+        # Slot-Discharges zu zerstoeren.
+        demoted = optimizer.remove_dp_discharge_enclaves(
+            actions, hourly_data, protect_indices=forced_indices,
+        )
+        if demoted:
+            _LOGGER.info(
+                "Post-Force Cleanup: %d isolierte DP-Discharge-Slots zu idle",
+                demoted,
+            )
 
         # Log DP result (only when plan changes)
         charge_slots = sum(1 for a in actions if a == "charge")
@@ -1762,6 +1777,10 @@ class BatteryStorageCoordinator(
                 )
                 if later_solar:
                     presolar_discharge_hours.add(i)
+        # v2.50.1: Vom force_pre_solar_discharge promotete Slots ebenfalls
+        # als "Platz fuer Solar" markieren — sonst zeigt die Reason-Logik
+        # faelschlich Verlust-Spread an (weil der Slot kein DP-Discharge ist).
+        presolar_discharge_hours.update(forced_indices)
 
         # ── Build plan with SOC simulation and reasons ───────────
         self._battery_plan = []

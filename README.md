@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.50.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.50.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -329,6 +329,7 @@ TV = max(Basis, EPEX)  →  DP bevorzugt hohen End-SOC wenn morgen teuer
 - **SOC-aware Reorder:** Benachbarte Discharge→Idle-Paare werden getauscht wenn der Idle-Slot teurer ist und SOC > min_soc
 - **Charge Gap Fill:** Idle-Lücken innerhalb von Lade-Blöcken werden geschlossen wenn Preis ≤ Nachbar-Preis
 - **Pre-Solar-Discharge (v2.49.0):** Nach dem gesamten Smoothing wird die SOC-Projektion gegen `max_soc` geprüft. Würde der Akku vor Sonnenende voll laufen und danach noch Solar-Surplus kommen, werden die teuersten `idle`/`hold`-Slots vor dem Overflow zu Discharge promoted (nur Slots ohne eigenes Solar). Verhindert verschenkten Solar-Strom auch wenn DP konservativ plant
+- **Post-Force Enclave-Cleanup (v2.50.1):** Da der Pre-Solar-Pass nach dem regulären Pass 1 läuft, könnte der DP-Solver bei flacher Preiskurve einen einzelnen Discharge-Slot zwischen lauter Hold/Idle erzeugen (Diskretisierungs-Artefakt). Dieser Cleanup-Pass demotet solche isolierten Discharge-Slots wieder zu Idle — ohne die vom Pre-Solar-Pass absichtlich erzeugten Single-Slot-Promotions zu zerstören (diese werden als „Platz für Solar schaffen" markiert und sind vor dem Cleanup geschützt)
 
 Zusätzlich wird bei idle/hold zur Laufzeit **Grid-Export automatisch durch Charger-Zuschalten absorbiert**.
 

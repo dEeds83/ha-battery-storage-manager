@@ -380,7 +380,7 @@ def main():
         sim_actions = [e["action"] for e in plan]
 
         before = [a for a in sim_actions]
-        forced, kwh = _opt.force_pre_solar_discharge(
+        forced, kwh, _indices = _opt.force_pre_solar_discharge(
             sim_actions, sim_slots, soc,
             charge_kwh_slot=0.220, discharge_kwh_slot=0.175, cap=7.5,
             min_soc=12.0, max_soc=90.0,

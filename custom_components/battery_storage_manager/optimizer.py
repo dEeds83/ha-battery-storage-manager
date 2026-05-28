@@ -909,7 +909,7 @@ def force_pre_solar_discharge(
     cap: float,
     min_soc: float,
     max_soc: float,
-) -> tuple[int, float]:
+) -> tuple[int, float, set[int]]:
     """Convert idle/hold slots before solar overflow into discharge.
 
     The DP solver and smoothing pipeline frequently leave the morning
@@ -937,11 +937,14 @@ def force_pre_solar_discharge(
             DP-headroom-reduced).
 
     Returns:
-        Tuple ``(forced_count, excess_addressed_kwh)``.
+        Tuple ``(forced_count, excess_addressed_kwh, forced_indices)``.
+        ``forced_indices`` lists the slot indices that were promoted, so
+        callers can mark them in their plan-reason set (otherwise they
+        would later look like degenerate single-slot discharges).
     """
     n = len(hourly_data)
     if n == 0:
-        return 0, 0.0
+        return 0, 0.0, set()
 
     # Simulate baseline SOC trajectory.
     proj = _simulate_soc(
@@ -976,12 +979,13 @@ def force_pre_solar_discharge(
         soc_walk = max(min_soc, min(max_soc, soc_walk))
 
     if overflow_start_idx is None or excess_kwh < 0.05:
-        return 0, 0.0
+        return 0, 0.0, set()
 
     # Promote the most expensive idle/hold slots before overflow to
     # discharge. Each iteration: pick best candidate, re-simulate to
     # check whether overflow is now resolved.
     forced = 0
+    forced_indices: set[int] = set()
     excess_addressed = 0.0
     guard = 0
     while excess_kwh - excess_addressed > 0.05 and guard < n:
@@ -1050,7 +1054,56 @@ def force_pre_solar_discharge(
             break
 
         actions[idx] = "discharge"
+        forced_indices.add(idx)
         forced += 1
         excess_addressed += delta
 
-    return forced, excess_addressed
+    return forced, excess_addressed, forced_indices
+
+
+def remove_dp_discharge_enclaves(
+    actions: list[str],
+    hourly_data: list[dict],
+    protect_indices: set[int],
+) -> int:
+    """Demote isolated discharge slots that aren't part of a real block.
+
+    Runs after ``force_pre_solar_discharge``. A single discharge slot
+    surrounded by non-discharge actions, with no same-action slot within
+    two positions, is treated as a DP discretisation artefact and
+    converted back to ``idle``.
+
+    Slots in ``protect_indices`` are never touched — those were
+    deliberately promoted by ``force_pre_solar_discharge`` and may
+    legitimately stand alone.
+
+    Args:
+        actions: Plan actions, modified in place.
+        hourly_data: Per-slot dicts (unused beyond length; kept for symmetry).
+        protect_indices: Slot indices that must not be demoted.
+
+    Returns:
+        Number of slots demoted.
+    """
+    n = len(actions)
+    if n < 3:
+        return 0
+    demoted = 0
+    for i in range(1, n - 1):
+        if actions[i] != "discharge":
+            continue
+        if i in protect_indices:
+            continue
+        prev_same = actions[i - 1] == "discharge"
+        next_same = actions[i + 1] == "discharge"
+        if prev_same or next_same:
+            continue
+        nearby = (
+            (i >= 2 and actions[i - 2] == "discharge")
+            or (i + 2 < n and actions[i + 2] == "discharge")
+        )
+        if nearby:
+            continue
+        actions[i] = "idle"
+        demoted += 1
+    return demoted
