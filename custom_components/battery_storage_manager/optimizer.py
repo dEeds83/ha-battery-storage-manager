@@ -155,19 +155,25 @@ def solve_dp(
                         best_val = val
                         best_act = "charge"
 
-            # Discharge: keep strict >
+            # Discharge: valid if net energy actually leaves the battery.
+            # v2.50.0: Frueher wurde `new_si < si` verlangt — das verwarf
+            # profitable Discharges, wenn paralleler Solar-Surplus den
+            # SOC wieder hochzog (Plan zeigte fälschlich hold). Neuer
+            # Check: Netto-Abgabe > 0, also delta abzueglich gleichzeitig
+            # absorbiertem Solar muss echte Energie liefern. So bleiben
+            # degenerierte Idle/Discharge-Ties ausgeschlossen, ohne
+            # legitime Arbitrage zu blockieren.
             if soc > min_soc and slot_dis_kwh > 0:
                 delta = min(slot_dis_kwh, (soc - min_soc) / 100 * cap)
                 delivered = delta * efficiency
-                # Netto-SOC-Aenderung: Discharge raus, Solar-Surplus rein
-                # (Dimmer/Charger absorbieren waehrend Entladen).
                 soc_after_dis = soc - delta / cap * 100
                 solar_to_batt_d = min(
                     slot_solar_kwh, (max_soc - soc_after_dis) / 100 * cap,
                 )
-                new_soc = soc_after_dis + solar_to_batt_d / cap * 100
-                new_si = soc_to_idx(new_soc)
-                if new_si < si:
+                net_export_kwh = delta - solar_to_batt_d
+                if net_export_kwh > 0.001:
+                    new_soc = soc_after_dis + solar_to_batt_d / cap * 100
+                    new_si = soc_to_idx(new_soc)
                     revenue = delivered * price - delta * half_cycle_eur
                     val = revenue + dp[t + 1][new_si]
                     if val > best_val:

@@ -1507,8 +1507,17 @@ class BatteryStorageCoordinator(
             # = inverter_max * slot_h verwendet (ueberschaetzt) -> SOC-Drop
             # im Plan zu schnell, Optimizer reduziert Discharge-Slots,
             # Arbitrage verschenkt.
+            # v2.50.0: Soft-Floor von 20 % der WR-Nennleistung. Bei
+            # Solar >= Hausverbrauch wuerde der Hard-Cap auf 0 fallen
+            # und teure Slots zwingend als hold markieren — selbst wenn
+            # der Solar-Forecast 30 % nach unten abweicht und Discharge
+            # wirtschaftlich waere. zero-export im Coordinator regelt in
+            # Realtime ohnehin runter, wenn Solar tatsaechlich überwiegt.
             house_minus_solar_w = max(0.0, h["house_w"] - (h["solar_kwh"] * 1000 / slot_h))
-            real_discharge_w = min(discharge_power_w, house_minus_solar_w)
+            soft_floor_w = discharge_power_w * 0.20
+            real_discharge_w = min(
+                discharge_power_w, max(soft_floor_w, house_minus_solar_w)
+            )
             h["discharge_kwh"] = real_discharge_w / 1000 * slot_h
 
             if charge_kwh_slot > 0:

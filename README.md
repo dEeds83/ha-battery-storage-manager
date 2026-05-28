@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.49.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.50.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -19,6 +19,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Voller Netzpreis für Lade-Entscheidung** – DP bewertet Laden zum vollen Netzpreis, nicht zum effektiven Preis. Solar-Überschuss wird in hold/idle automatisch opportunistisch geladen — kostenlos und ohne Netz-Risiko. So werden nur wirklich günstige Slots für Netz-Laden verwendet
 - **Dynamischer Solar-Headroom (v2.49.0)** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit Platz für erwarteten Solarüberschuss bleibt. Der Headroom-Floor (Mindest-Reservierung als Anteil der Solar-Tagessumme) wird zur Laufzeit nach unten korrigiert wenn (a) der aktuelle SOC schon hoch ist und das Akku-Volumen nicht reicht oder (b) der Curtailment-Tracker zeigt, dass in den letzten 24h bei vollem Akku Solar verschenkt wurde. Headroom wird nur bis zum nächsten Sonnenuntergang berechnet, damit morgige Prognosen günstiges Netz-Laden heute nicht blockieren
 - **Aktive Pre-Solar-Discharge (v2.49.0)** – Nach DP + Smoothing wird die SOC-Projektion gegen `max_soc` geprüft; droht der Akku vor Sonnenende voll zu werden, werden die teuersten `idle`/`hold`-Slots vor dem ersten Overflow-Slot zu Discharge promoted. So wird verschenkter Solar-Strom zusätzlich verhindert, selbst wenn DP und Smoothing zu konservativ planen
+- **Discharge in Solar-Slots (v2.50.0)** – Der Per-Slot-Discharge-Cap (Inverter-Leistung minus Solar) hat einen Soft-Floor von 20 % der WR-Nennleistung: Slots, in denen Solar leicht über dem Hausverbrauch liegt, sind nicht mehr zwangsläufig `hold`. Zusätzlich entscheidet der DP-Solver Discharge anhand der **Netto-Energie-Abgabe** statt nach SOC-Indexsenkung — profitable Slots werden auch dann als Discharge gewählt, wenn paralleler Solar-Surplus den SOC im selben Slot wieder hochzieht (das passt zur Realität: zero-export-Regelung im Coordinator schaltet bei Solar-Überschuss automatisch um)
 - **Solar-Curtailment-Tracker (v2.49.0)** – Misst die Zeit, in der SOC≥99% UND Solar>200 W gleichzeitig vorlagen (Indikator für verschenkte Energie). Hybrid: Der **24h-Wert** kommt aus der internen Action-History (schnell, 10-Min-Snapshots). Zusätzlich liest der Tracker einmal pro Stunde aus dem HA-Statistics-Modul (`statistics_during_period`) den **7-Tage-Durchschnitt** der stündlichen Mittelwerte vom konfigurierten SOC- und Solar-Power-Sensor. Beide Werte füttern die Headroom-Floor-Adaption (24h wirkt stark/kurzfristig, 7d wirkt schwächer/strukturell) und sind als Diagnose-Sensor sichtbar
 - **6-Pass Smoothing Pipeline:**
   - Pass 1: Enclave-Entfernung (einzelne Aktions-Slots ohne Nachbarn entfernen, Proximity-Check ±2 Slots)
@@ -311,7 +312,7 @@ dp[t][soc] = maximaler Profit erreichbar ab Zeitpunkt t mit Ladezustand soc
 Für jeden Slot werden drei Optionen bewertet:
 - **Idle**: Nichts tun (kein Gewinn/Verlust)
 - **Laden** (≥ bei Gleichstand): Strom kaufen (Kosten = voller Netzpreis × kWh + ½ Zykluskosten). Solar-Überschuss wird separat in hold/idle durch opportunistisches Laden eingefangen — kostenlos und ohne Prognoserisiko
-- **Entladen** (> strikt): Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − ½ Zykluskosten)
+- **Entladen** (> strikt): Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − ½ Zykluskosten). Seit v2.50.0 entscheidet der Solver anhand der **Netto-Energie-Abgabe** (delta − gleichzeitig absorbierter Solar) statt nach SOC-Indexsenkung — verhindert, dass profitable Discharges in Solar-Slots fälschlich verworfen werden
 
 **Szenario-DP:** Das DP wird 3× ausgeführt (Solar ×0.6/×1.0/×1.2, Verbrauch ×1.2/×1.0/×0.8). Seit v2.49.0 symmetrischer Vote: Expected-Szenario bestimmt sowohl **Laden** als auch **Entladen**. Discharge wird nur dann nicht ausgeführt, wenn das pessimistische Szenario aktiv `charge` will (echtes Veto). Vorher: Discharge brauchte 2/3-Mehrheit, was vor allem an Sonnentagen Vor-Solar-Entladungen blockiert hat.
 

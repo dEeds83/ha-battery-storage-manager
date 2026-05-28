@@ -88,6 +88,49 @@ class TestSolveDP:
         assert "discharge" in actions[8:], "Should discharge during expensive slots"
         assert profit > 0, "Plan should be profitable"
 
+    def test_discharge_chosen_despite_solar_absorption(self):
+        """v2.50.0: Discharge muss gewaehlt werden, auch wenn paralleler
+        Solar-Surplus den SOC im selben Slot wieder hochzieht — solange
+        der Slot profitabel ist (Netto-Abgabe > 0)."""
+        # Szenario: 6 Slots mit moderatem Solar (0.10 kWh = SOC +1.3%)
+        # und steigenden Preisen. Davor sollte DP ohne Solar-Filter
+        # mind. einen Discharge in den teuren Solar-Slots waehlen.
+        entries = [
+            {"price": 0.30, "solar_surplus_kwh": 0.10, "discharge_kwh": 0.150},
+            {"price": 0.32, "solar_surplus_kwh": 0.10, "discharge_kwh": 0.150},
+            {"price": 0.35, "solar_surplus_kwh": 0.10, "discharge_kwh": 0.150},
+            {"price": 0.38, "solar_surplus_kwh": 0.10, "discharge_kwh": 0.150},
+            # Spaeter ohne Solar — Vergleichsfaelle
+            {"price": 0.20, "solar_surplus_kwh": 0.0, "discharge_kwh": 0.200},
+            {"price": 0.18, "solar_surplus_kwh": 0.0, "discharge_kwh": 0.200},
+        ]
+        # _make_slots_detailed kennt discharge_kwh nicht; selbst bauen
+        slots = []
+        for e in entries:
+            slots.append({
+                "price": e["price"],
+                "grid_fraction": 1.0,
+                "solar_wh_hour": 100,
+                "solar_surplus_kwh": e["solar_surplus_kwh"],
+                "discharge_kwh": e["discharge_kwh"],
+            })
+        # Hoher Start-SOC (80%) damit Discharge problemlos moeglich
+        actions, _ = solve_dp(
+            slots, len(slots), 80.0,
+            charge_kwh_slot=0.0,  # kein laden, nur entladen erlaubt
+            discharge_kwh_slot=0.200,
+            cap=DEFAULT["cap"], efficiency=DEFAULT["efficiency"],
+            cycle_cost_eur=DEFAULT["cycle_cost_eur"],
+            slot_h=DEFAULT["slot_h"],
+            min_soc=DEFAULT["min_soc"], max_soc=DEFAULT["max_soc"],
+        )
+        # Mindestens ein Discharge in den teuren Slots (0..3, mit Solar)
+        discharges_in_solar = sum(1 for a in actions[:4] if a == "discharge")
+        assert discharges_in_solar >= 1, (
+            f"DP haette Discharge waehlen muessen trotz Solar-Surplus, "
+            f"actions={actions}"
+        )
+
     def test_flat_prices_no_cycling(self):
         """With flat prices, DP should not cycle the battery (no profit)."""
         prices = [0.25] * 16
