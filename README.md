@@ -1,14 +1,14 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.48.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.49.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
 ## Features
 
 ### Optimierung
-- **Szenario-DP Optimierung** – Dynamic Programming über 3 Szenarien (erwartet/pessimistisch/optimistisch), asymmetrischer Vote: Expected bestimmt Laden, Majority bestimmt Entladen
+- **Szenario-DP Optimierung** – Dynamic Programming über 3 Szenarien (erwartet/pessimistisch/optimistisch). v2.49.0: Symmetrisches Vote — sowohl Laden als auch Entladen folgen dem Expected-Szenario; nur ein aktives Charge-Votum aus dem pessimistischen Szenario verhindert Discharge (echtes Veto). Vorher: Discharge brauchte 2/3-Mehrheit, was bei Solar-Unsicherheit Vor-Solar-Entladungen blockierte
 - **Kalman-Filter Solar-Korrektur** – Kombiniert Forecast mit Ist-Messung: reagiert schnell auf Wetteränderungen ohne Überschwingen
 - **Exponentielle Verbrauchsprognose** – Gewichteter Durchschnitt (α=0,85) bevorzugt aktuelle Tage, erkennt Trends
 - **EPEX Predictor Terminal-Value** – Bestimmt ob Akku am Tibber-Ende voll oder leer sein soll (keine falschen Aktionen)
@@ -17,7 +17,9 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **15-Minuten-Preisauflösung** – Volle Granularität dynamischer Tibber-Tarife (15/30/60 Min, auto-erkannt)
 - **Tibber-Tomorrow-Fallback** – Liefert die Tibber-Action nur Heute (15-Min) und keine Tomorrow-Preise, werden Morgen-Stundenpreise direkt aus dem pyTibber-Cache (`hass.data["tibber"]`) ergänzt. Wenn auch dort keine Daten: optionaler GraphQL-Direkt-Fallback gegen `api.tibber.com` mit User-API-Token (30-Min-Cache). Plan-Horizont bleibt >24h auch wenn die HA-Tibber-Integration Tomorrow zurückhält
 - **Voller Netzpreis für Lade-Entscheidung** – DP bewertet Laden zum vollen Netzpreis, nicht zum effektiven Preis. Solar-Überschuss wird in hold/idle automatisch opportunistisch geladen — kostenlos und ohne Netz-Risiko. So werden nur wirklich günstige Slots für Netz-Laden verwendet
-- **Solar-Headroom** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit genug Platz für erwarteten Solarüberschuss bleibt. Headroom wird nur bis zum nächsten Sonnenuntergang berechnet, damit morgige Prognosen günstiges Netz-Laden heute nicht blockieren
+- **Dynamischer Solar-Headroom (v2.49.0)** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit Platz für erwarteten Solarüberschuss bleibt. Der Headroom-Floor (Mindest-Reservierung als Anteil der Solar-Tagessumme) wird zur Laufzeit nach unten korrigiert wenn (a) der aktuelle SOC schon hoch ist und das Akku-Volumen nicht reicht oder (b) der Curtailment-Tracker zeigt, dass in den letzten 24h bei vollem Akku Solar verschenkt wurde. Headroom wird nur bis zum nächsten Sonnenuntergang berechnet, damit morgige Prognosen günstiges Netz-Laden heute nicht blockieren
+- **Aktive Pre-Solar-Discharge (v2.49.0)** – Nach DP + Smoothing wird die SOC-Projektion gegen `max_soc` geprüft; droht der Akku vor Sonnenende voll zu werden, werden die teuersten `idle`/`hold`-Slots vor dem ersten Overflow-Slot zu Discharge promoted. So wird verschenkter Solar-Strom zusätzlich verhindert, selbst wenn DP und Smoothing zu konservativ planen
+- **Solar-Curtailment-Tracker (v2.49.0)** – Misst die Zeit, in der SOC≥99% UND Solar>200 W gleichzeitig vorlagen (Indikator für verschenkte Energie). Hybrid: Der **24h-Wert** kommt aus der internen Action-History (schnell, 10-Min-Snapshots). Zusätzlich liest der Tracker einmal pro Stunde aus dem HA-Statistics-Modul (`statistics_during_period`) den **7-Tage-Durchschnitt** der stündlichen Mittelwerte vom konfigurierten SOC- und Solar-Power-Sensor. Beide Werte füttern die Headroom-Floor-Adaption (24h wirkt stark/kurzfristig, 7d wirkt schwächer/strukturell) und sind als Diagnose-Sensor sichtbar
 - **6-Pass Smoothing Pipeline:**
   - Pass 1: Enclave-Entfernung (einzelne Aktions-Slots ohne Nachbarn entfernen, Proximity-Check ±2 Slots)
   - Pass 2: Alternations-Dämpfung (Lade↔Entlade-Paare unter Break-Even-Spread → idle)
@@ -194,6 +196,7 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Aktionshistorie | Tatsächlich ausgeführte Aktionen (48h, 10-Min-Intervalle, persistent) |
 | Gemessene Effizienz | Roundtrip-Effizienz aus Smartshunt V×I vs. Charger/Inverter-Leistung (Lade-/Entlade-/Roundtrip als Attribute) |
 | Speicher Durchschnittspreis | Volumengewichteter Durchschnittspreis (ct/kWh) der aktuell im Speicher liegenden Energie. Solar = 0 ct, Netzladen = aktueller Tibber-Preis. Persistent über Restart. Attribute: stored_kwh, stored_cost_eur |
+| Solar-Curtailment 24h (Diagnose) | Stunden in den letzten 24h mit SOC≥99% und Solar>200 W (verschenkter Solarstrom). Attribute: lost_kwh_24h, avg_hours_per_day_7d (HA-Statistics, 7-Tage-Schnitt), headroom_floor_base/effective, pre_solar_forced_slots |
 
 ### Schalter
 
@@ -218,6 +221,10 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Preisschwelle niedrig | 0–50 ct/kWh | 1 ct |
 | Preisschwelle hoch | 0–100 ct/kWh | 1 ct |
 | Wechselrichter Settle-Zeit | 0–60 s | 1 s |
+| Batterie-Zykluskosten | 0–30 ct/kWh | 0,5 ct |
+| Solar-Headroom-Floor | 0,0–1,0 | 0,05 |
+
+> **Solar-Headroom-Floor:** Mindestanteil der prognostizierten Solar-Tagessumme, der als Akku-Reserve eingeplant wird. 0 = nur reiner Forecast-Surplus, 1 = volle Solar-Erwartung als Reserve. Höher schützt vor Solar-Export bei Hausverbrauchs-Überschätzung, niedriger erlaubt aggressiveres Netz-Laden. Seit v2.49.0 wird der Wert zur Laufzeit nach SOC und Curtailment-Tracker zusätzlich nach unten korrigiert (nie nach oben — der Nutzer-Wert ist Obergrenze).
 
 ## Eingebaute Dashboard-Cards
 
@@ -306,7 +313,7 @@ Für jeden Slot werden drei Optionen bewertet:
 - **Laden** (≥ bei Gleichstand): Strom kaufen (Kosten = voller Netzpreis × kWh + ½ Zykluskosten). Solar-Überschuss wird separat in hold/idle durch opportunistisches Laden eingefangen — kostenlos und ohne Prognoserisiko
 - **Entladen** (> strikt): Strom zurückspeisen (Erlös = Preis × kWh × Effizienz − ½ Zykluskosten)
 
-**Szenario-DP:** Das DP wird 3× ausgeführt (Solar ×0.6/×1.0/×1.2, Verbrauch ×1.2/×1.0/×0.8). Asymmetrischer Vote: Expected-Szenario bestimmt **Laden**, Mehrheit bestimmt **Entladen** (konservativ).
+**Szenario-DP:** Das DP wird 3× ausgeführt (Solar ×0.6/×1.0/×1.2, Verbrauch ×1.2/×1.0/×0.8). Seit v2.49.0 symmetrischer Vote: Expected-Szenario bestimmt sowohl **Laden** als auch **Entladen**. Discharge wird nur dann nicht ausgeführt, wenn das pessimistische Szenario aktiv `charge` will (echtes Veto). Vorher: Discharge brauchte 2/3-Mehrheit, was vor allem an Sonnentagen Vor-Solar-Entladungen blockiert hat.
 
 **Terminal-Value:** Am Planende hat gespeicherte Energie einen Wert:
 ```
@@ -320,6 +327,7 @@ TV = max(Basis, EPEX)  →  DP bevorzugt hohen End-SOC wenn morgen teuer
 - **Final Pass 3:** Re-run nach SOC-Cleanup, verschiebt günstige Entladungen in teure freigewordene Slots
 - **SOC-aware Reorder:** Benachbarte Discharge→Idle-Paare werden getauscht wenn der Idle-Slot teurer ist und SOC > min_soc
 - **Charge Gap Fill:** Idle-Lücken innerhalb von Lade-Blöcken werden geschlossen wenn Preis ≤ Nachbar-Preis
+- **Pre-Solar-Discharge (v2.49.0):** Nach dem gesamten Smoothing wird die SOC-Projektion gegen `max_soc` geprüft. Würde der Akku vor Sonnenende voll laufen und danach noch Solar-Surplus kommen, werden die teuersten `idle`/`hold`-Slots vor dem Overflow zu Discharge promoted (nur Slots ohne eigenes Solar). Verhindert verschenkten Solar-Strom auch wenn DP konservativ plant
 
 Zusätzlich wird bei idle/hold zur Laufzeit **Grid-Export automatisch durch Charger-Zuschalten absorbiert**.
 

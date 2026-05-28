@@ -10,6 +10,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -46,6 +47,7 @@ async def async_setup_entry(
         ActionHistorySensor(coordinator, entry),
         MeasuredEfficiencySensor(coordinator, entry),
         StoredEnergyAvgPriceSensor(coordinator, entry),
+        SolarCurtailmentSensor(coordinator, entry),
     ]
 
     # Dynamic charger status sensors
@@ -856,4 +858,41 @@ class StoredEnergyAvgPriceSensor(BatteryStorageBaseSensor):
         return {
             "stored_kwh": d.get("stored_kwh"),
             "stored_cost_eur": d.get("stored_cost_eur"),
+        }
+
+
+class SolarCurtailmentSensor(BatteryStorageBaseSensor):
+    """Diagnose-Sensor: Stunden in den letzten 24h, in denen Solar bei
+    vollem Akku verschenkt wurde (Indikator fuer zu konservativen Plan).
+    """
+
+    _attr_icon = "mdi:solar-power-variant-outline"
+    _attr_native_unit_of_measurement = "h"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "solar_curtailment_24h",
+            "Solar-Curtailment 24h",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("curtailment_hours_24h")
+
+    @property
+    def extra_state_attributes(self):
+        if not self.coordinator.data:
+            return {}
+        d = self.coordinator.data
+        return {
+            "lost_kwh_24h": d.get("curtailment_lost_kwh_24h"),
+            "avg_hours_per_day_7d": d.get("curtailment_7day_avg_hours_per_day"),
+            "headroom_floor_base": d.get("solar_headroom_floor_base"),
+            "headroom_floor_effective": d.get("solar_headroom_floor_effective"),
+            "headroom_pct": d.get("solar_headroom_pct"),
+            "pre_solar_forced_slots": d.get("pre_solar_forced_slots"),
         }

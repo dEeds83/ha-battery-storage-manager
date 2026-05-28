@@ -19,6 +19,7 @@ _spec.loader.exec_module(optimizer)
 
 solve_dp = optimizer.solve_dp
 smooth_plan = optimizer.smooth_plan
+force_pre_solar_discharge = optimizer.force_pre_solar_discharge
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -395,3 +396,136 @@ class TestDPWithSmoothing:
                 f"Discharge price ({avg_discharge_price:.3f}) should exceed "
                 f"charge price ({avg_charge_price:.3f})"
             )
+
+
+# ── force_pre_solar_discharge tests (v2.49.0) ───────────────────────
+
+
+class TestForcePreSolarDischarge:
+    """Tests fuer den aktiven Pre-Solar-Discharge-Pass."""
+
+    def _params(self, **overrides) -> dict:
+        params = dict(
+            charge_kwh_slot=DEFAULT["charge_kwh_slot"],
+            discharge_kwh_slot=DEFAULT["discharge_kwh_slot"],
+            cap=DEFAULT["cap"],
+            min_soc=DEFAULT["min_soc"],
+            max_soc=DEFAULT["max_soc"],
+        )
+        params.update(overrides)
+        return params
+
+    def test_no_force_when_no_overflow(self):
+        """Kein Eingriff wenn SOC nie max_soc trifft."""
+        # SOC startet niedrig, wenig Solar, kein Overflow zu erwarten.
+        slots = _make_slots([0.20] * 8, solar_surplus_kwh=0.05)
+        actions = ["idle"] * len(slots)
+        forced, kwh = force_pre_solar_discharge(
+            actions, slots, current_soc=30.0, **self._params()
+        )
+        assert forced == 0
+        assert kwh == 0.0
+        assert all(a == "idle" for a in actions)
+
+    def test_forces_when_battery_would_overflow(self):
+        """Hoher SOC + viel Solar -> Pass muss Idle zu Discharge konvertieren."""
+        # 6 Slots Idle (verschiedene Preise) + danach 4 Slots mit dickem
+        # Solar-Surplus. SOC startet bei 85% (nur 5% Headroom = 0.375 kWh)
+        # -> bei jeweils 1.0 kWh Solar-Surplus fliegen viele kWh als Export.
+        entries = (
+            [{"price": 0.10}] * 2
+            + [{"price": 0.30}] * 2  # teuerste Idle-Slots, sollen zuerst dran
+            + [{"price": 0.15}] * 2
+            + [{"price": 0.20, "solar_surplus_kwh": 1.0}] * 4
+        )
+        slots = _make_slots_detailed(entries)
+        actions = ["idle"] * len(slots)
+        forced, kwh = force_pre_solar_discharge(
+            actions, slots, current_soc=85.0, **self._params()
+        )
+        assert forced > 0, "Bei Solar-Overflow muss mind. 1 Slot forciert werden"
+        assert kwh > 0.0
+        # Hauptkriterium: Mind. eine Discharge-Aktion existiert vor den Solar-Slots
+        discharge_indices = [i for i, a in enumerate(actions) if a == "discharge"]
+        assert discharge_indices, "Pass muss Discharge erzeugen"
+        assert all(i < 6 for i in discharge_indices), (
+            "Discharge muss vor den Solar-Slots liegen"
+        )
+
+    def test_prefers_expensive_slots(self):
+        """Bei mehreren Kandidaten wird der teuerste Idle-Slot bevorzugt."""
+        entries = (
+            [{"price": 0.10}] * 2  # billig
+            + [{"price": 0.30}] * 1  # teuer (bevorzugen!)
+            + [{"price": 0.12}] * 2  # billig
+            + [{"price": 0.20, "solar_surplus_kwh": 0.5}] * 3
+        )
+        slots = _make_slots_detailed(entries)
+        actions = ["idle"] * len(slots)
+        forced, _ = force_pre_solar_discharge(
+            actions, slots, current_soc=87.0, **self._params()
+        )
+        if forced > 0:
+            # Der teuerste Slot (index 2, Preis 0.30) muss zu Discharge geworden sein
+            assert actions[2] == "discharge", (
+                f"Teuerster Idle-Slot sollte zuerst forciert werden, "
+                f"got actions={actions}"
+            )
+
+    def test_respects_min_soc(self):
+        """Forced Discharge darf nicht unter min_soc treiben."""
+        # SOC startet knapp ueber min_soc (12%), viel Solar erwartet.
+        entries = (
+            [{"price": 0.30}] * 4  # viele teure Idle-Slots
+            + [{"price": 0.20, "solar_surplus_kwh": 2.0}] * 2
+        )
+        slots = _make_slots_detailed(entries)
+        actions = ["idle"] * len(slots)
+        force_pre_solar_discharge(
+            actions, slots, current_soc=12.0, **self._params()
+        )
+        # Simuliere SOC und pruefe min_soc-Bound
+        soc = 12.0
+        for i, act in enumerate(actions):
+            if act == "discharge":
+                slot_dis = slots[i].get("discharge_kwh", DEFAULT["discharge_kwh_slot"])
+                delta = min(slot_dis, max(0.0, (soc - DEFAULT["min_soc"]) / 100 * DEFAULT["cap"]))
+                soc -= delta / DEFAULT["cap"] * 100
+            # Solar-Absorption (nur bis max_soc)
+            surplus = slots[i].get("solar_surplus_kwh", 0)
+            soc = min(DEFAULT["max_soc"], soc + surplus / DEFAULT["cap"] * 100)
+            assert soc >= DEFAULT["min_soc"] - 0.5, (
+                f"SOC unter min_soc: {soc:.1f} an Slot {i}"
+            )
+
+    def test_skips_when_no_idle_candidates(self):
+        """Wenn alle Slots vor Overflow charge/discharge sind, kein Eingriff."""
+        entries = (
+            [{"price": 0.10}] * 3  # charge wird's
+            + [{"price": 0.20, "solar_surplus_kwh": 1.0}] * 3
+        )
+        slots = _make_slots_detailed(entries)
+        actions = ["charge", "charge", "charge", "idle", "idle", "idle"]
+        forced, _ = force_pre_solar_discharge(
+            actions, slots, current_soc=85.0, **self._params()
+        )
+        # Kein idle vor Overflow -> kein Eingriff
+        assert forced == 0
+        assert actions[:3] == ["charge", "charge", "charge"]
+
+    def test_promotes_hold_too(self):
+        """Hold-Slots sind ebenfalls Kandidaten (wie idle)."""
+        entries = (
+            [{"price": 0.25}] * 3  # hold-Slots
+            + [{"price": 0.15, "solar_surplus_kwh": 1.5}] * 3
+        )
+        slots = _make_slots_detailed(entries)
+        actions = ["hold"] * 3 + ["idle"] * 3
+        forced, _ = force_pre_solar_discharge(
+            actions, slots, current_soc=87.0, **self._params()
+        )
+        assert forced > 0
+        discharge_in_hold_range = sum(
+            1 for i in range(3) if actions[i] == "discharge"
+        )
+        assert discharge_in_hold_range > 0, "Hold-Slots muessen umwandelbar sein"

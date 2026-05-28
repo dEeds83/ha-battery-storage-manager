@@ -354,6 +354,58 @@ def main():
     print(f"  Total: {tc} charge, {td} discharge slots")
     print(f"  Max SOC: {max_soc:.1f}%")
 
+    # ── v2.49.0: Trockenlauf der neuen Pre-Solar-Discharge ──
+    # Replay der echten force_pre_solar_discharge gegen den Live-Plan,
+    # damit wir vor dem Release sehen, wie sich der Plan veraendern WUERDE.
+    print("\nv2.49.0 dry-run (force_pre_solar_discharge against live plan):")
+    try:
+        import importlib.util as _ilu
+        _opt_path = os.path.join(os.path.dirname(__file__),
+            "custom_components", "battery_storage_manager", "optimizer.py")
+        _spec = _ilu.spec_from_file_location("optimizer_v249", _opt_path)
+        _opt = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_opt)
+
+        # Slot-Daten aus dem Live-Plan rekonstruieren. Wir brauchen nur
+        # price + solar_surplus_kwh; discharge_kwh wird aus Default
+        # abgeleitet (Sim verwendet 0.175 kWh/slot).
+        sim_slots = []
+        for e in plan:
+            sim_slots.append({
+                "price": e["price"],
+                "solar_surplus_kwh": float(e.get("solar_surplus_kwh") or 0.0),
+                "grid_fraction": 1.0,
+                "solar_wh_hour": e.get("solar_wh_hour", 0),
+            })
+        sim_actions = [e["action"] for e in plan]
+
+        before = [a for a in sim_actions]
+        forced, kwh = _opt.force_pre_solar_discharge(
+            sim_actions, sim_slots, soc,
+            charge_kwh_slot=0.220, discharge_kwh_slot=0.175, cap=7.5,
+            min_soc=12.0, max_soc=90.0,
+        )
+
+        changes = [
+            (i, before[i], sim_actions[i])
+            for i in range(len(plan))
+            if before[i] != sim_actions[i]
+        ]
+        print(f"  Pre-solar Discharge: {forced} Slot(s) erzwungen "
+              f"(~{kwh:.2f} kWh absorbiert).")
+        if changes:
+            print("  Veraenderungen gegen Live-Plan:")
+            for i, b, a in changes[:10]:
+                print(f"    {plan[i]['hour'][:16]} {b} -> {a} "
+                      f"@ {plan[i]['price']*100:.1f}ct, "
+                      f"solar_surplus={sim_slots[i]['solar_surplus_kwh']:.2f}kWh")
+            if len(changes) > 10:
+                print(f"    ... und {len(changes) - 10} weitere")
+        else:
+            print("  Keine Veraenderungen (Plan deckt Solar bereits ab).")
+    except Exception as e:
+        print(f"  ⚠️  v2.49.0 dry-run failed: {e}")
+
     if issues:
         for issue in issues:
             print(f"  {issue}")

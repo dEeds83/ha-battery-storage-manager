@@ -270,8 +270,21 @@ class BatteryStorageCoordinator(
         self._solar_headroom_pct: float = 0.0
         # Floor-Faktor: mind. X * solar_total_kwh als Headroom reservieren.
         # Live ueber Number-Entity tunbar. Default 0.5 (Memory v2.42.2).
+        # v2.49.0: Floor wird SOC- und Curtailment-bewusst dynamisch reduziert.
         self._solar_headroom_floor: float = 0.5
+        self._solar_headroom_floor_effective: float = 0.5  # nach SOC/Curtailment-Adaption
         self._dp_max_soc: float = self._max_soc
+        # Solar-Curtailment-Tracker (v2.49.0): Stunden mit SOC>=99% + Solar
+        # in den letzten 24h aus der Action-History. Hoch -> Plan war zu
+        # konservativ, Headroom-Floor wird automatisch gesenkt.
+        self._curtailment_hours_24h: float = 0.0
+        self._curtailment_lost_kwh_24h: float = 0.0
+        self._pre_solar_forced_slots: int = 0  # Anzahl forcierter Discharges
+        # Langzeit-Curtailment via HA-Statistics (7 Tage, stuendliche
+        # Mittel von SOC + Solar-Power). Wird einmal pro Stunde im
+        # Hintergrund aktualisiert.
+        self._curtailment_7day_avg_hours_per_day: float = 0.0
+        self._curtailment_7day_last_fetch: datetime | None = None
         self._optimization_log: list[str] = []
         self._max_log_entries = 50
         self._last_dp_signature: str = ""  # to avoid re-logging identical plans
@@ -470,6 +483,9 @@ class BatteryStorageCoordinator(
 
         # Record action history (every 10 min, 48h retention, persistent)
         await self._record_action_history()
+        # 7-Tage-Curtailment aus HA-Statistics (intern auf 1h Refresh
+        # begrenzt, also billig im Coordinator-Tick).
+        await self._async_fetch_7day_curtailment()
 
         return self._build_data()
 
@@ -1520,12 +1536,57 @@ class BatteryStorageCoordinator(
             elif seen_solar:
                 # Sun has set — stop counting
                 break
-        # Sicherheits-Floor: selbst bei ueberschaetzem House-Forecast soll
-        # mind. 50% des erwarteten Solar als Headroom reserviert sein. Ohne
-        # diesen Floor lieferte surplus oft 0 (house >= solar im Forecast),
-        # DP lud bis grid_max_soc voll, Solar uebertraf realen Verbrauch
-        # und Battery erreichte 100% -> Export.
-        floor_factor = max(0.0, min(1.0, getattr(self, "_solar_headroom_floor", 0.5)))
+
+        # v2.49.0: Dynamische Floor-Adaption.
+        # Statischer Basis-Floor (vom Nutzer einstellbar). Wird je nach
+        #  - aktuellem SOC ("habe ich noch Platz?")
+        #  - Curtailment-History (verschenkten wir gestern Solar?)
+        # nach unten korrigiert. Senken nur, nie anheben: konservatives
+        # Setting des Nutzers wird respektiert.
+        base_floor = max(0.0, min(1.0, getattr(self, "_solar_headroom_floor", 0.5)))
+        floor_factor = base_floor
+
+        # 1) SOC-Awareness: wenn der freie Platz im Akku eh schon kleiner
+        # ist als das prognostizierte Solar-Total, bringt ein hoher Floor
+        # nichts — der Akku ueberlaeuft so oder so. Wir schenken dem Plan
+        # in dem Fall mehr Spielraum, um aktiv zu entladen.
+        free_space_kwh = max(0.0, (self._max_soc - current_soc) / 100 * cap)
+        if solar_total_kwh > 0:
+            # Verhaeltnis "wie viel kommt rein vs. wie viel passt noch":
+            # >=1 = Akku passt nicht alles auf, Curtailment wahrscheinlich.
+            #  <1 = locker, Floor kann hoch bleiben.
+            pressure = solar_total_kwh / max(0.1, free_space_kwh)
+            if pressure >= 1.5:
+                floor_factor = max(0.0, floor_factor - 0.30)
+            elif pressure >= 1.0:
+                floor_factor = max(0.0, floor_factor - 0.15)
+            elif pressure >= 0.7:
+                floor_factor = max(0.0, floor_factor - 0.05)
+
+        # 2) Curtailment-Feedback: wenn die letzten 24h schon viel Zeit
+        # bei SOC>=99% mit aktiver Solar lagen (= Energie verschenkt),
+        # ist der Floor empirisch zu hoch.
+        curtail_h = float(getattr(self, "_curtailment_hours_24h", 0.0) or 0.0)
+        if curtail_h >= 4.0:
+            floor_factor = max(0.0, floor_factor - 0.25)
+        elif curtail_h >= 2.0:
+            floor_factor = max(0.0, floor_factor - 0.15)
+        elif curtail_h >= 1.0:
+            floor_factor = max(0.0, floor_factor - 0.08)
+
+        # 3) Langzeit-Curtailment (7d via HA-Statistics): wenn auch im
+        # Wochenmittel taeglich >1h Solar verschenkt wurde, ist der
+        # Floor strukturell zu konservativ. Kleinerer Hebel als 24h,
+        # weil der 7d-Trend traeger reagiert.
+        curtail_7d = float(getattr(self, "_curtailment_7day_avg_hours_per_day", 0.0) or 0.0)
+        if curtail_7d >= 3.0:
+            floor_factor = max(0.0, floor_factor - 0.15)
+        elif curtail_7d >= 1.5:
+            floor_factor = max(0.0, floor_factor - 0.08)
+        elif curtail_7d >= 0.5:
+            floor_factor = max(0.0, floor_factor - 0.04)
+
+        self._solar_headroom_floor_effective = round(floor_factor, 3)
         expected_surplus_kwh = max(expected_surplus_kwh, solar_total_kwh * floor_factor)
         if cap > 0 and expected_surplus_kwh > 0:
             headroom_pct = min(
@@ -1537,9 +1598,11 @@ class BatteryStorageCoordinator(
                 dp_max_soc = round(self._max_soc - headroom_pct, 1)
                 _LOGGER.info(
                     "Solar headroom: %.1f kWh surplus expected -> "
-                    "grid max_soc %.1f%% (real max_soc %.1f%%, headroom %.1f%%)",
+                    "grid max_soc %.1f%% (real max_soc %.1f%%, headroom %.1f%%, "
+                    "floor base %.2f -> eff %.2f, curtail24h %.1fh, curtail7d %.2fh/d)",
                     expected_surplus_kwh, dp_max_soc,
                     self._max_soc, headroom_pct,
+                    base_floor, floor_factor, curtail_h, curtail_7d,
                 )
             else:
                 dp_max_soc = self._max_soc
@@ -1592,20 +1655,26 @@ class BatteryStorageCoordinator(
         for h in hourly_data:
             h["_scn_grid_frac"] = h["grid_fraction"]
 
-        # Asymmetric vote: charge follows expected scenario (index 0),
-        # discharge requires majority (>=2 of 3 scenarios).
+        # v2.49.0: Symmetrisches Voting. Charge folgt expected; Discharge
+        # ebenfalls expected, ausser pessimistic widerspricht AKTIV mit
+        # "charge" (echtes Veto). Vorher: Discharge brauchte 2/3-Mehrheit,
+        # was bei "pessimistic = idle/hold" Discharges gestrichen hat —
+        # an sonnigen Tagen Hauptgrund fuer ausbleibende Vor-Solar-Entladung.
         expected = scenario_actions[0]
+        pessimistic = scenario_actions[1]
         actions = []
         for t in range(n):
             exp_act = expected[t]
             if exp_act == "charge":
                 actions.append("charge")
             elif exp_act == "discharge":
-                votes = [sa[t] for sa in scenario_actions]
-                if votes.count("discharge") >= 2:
-                    actions.append("discharge")
-                else:
+                # Nur ablehnen wenn pessimistic AKTIV laden will — also
+                # rechnet das schlechte Szenario erwartet eine Knappheit,
+                # die Discharge unwirtschaftlich macht.
+                if pessimistic[t] == "charge":
                     actions.append("idle")
+                else:
+                    actions.append("discharge")
             else:
                 actions.append(exp_act if exp_act in ("idle", "hold") else "idle")
 
@@ -1625,6 +1694,27 @@ class BatteryStorageCoordinator(
             max_soc=dp_max_soc,
             slot_h=slot_h,
         )
+
+        # v2.49.0: Aktive Pre-Solar-Discharge.
+        # DP+Smoothing wissen zwar von Solar-Surplus, halten sich aber
+        # durch das Voting + Floor regelmaessig zurueck. Wenn die
+        # Projektion zeigt, dass wir trotzdem ueberlaufen, konvertieren
+        # wir die teuersten idle/hold-Slots vor dem Overflow aktiv zu
+        # Discharge — gegen das Wegwerfen von Solarenergie.
+        forced_count, forced_kwh = optimizer.force_pre_solar_discharge(
+            actions, hourly_data, current_soc,
+            charge_kwh_slot, discharge_kwh_slot, cap,
+            min_soc=self._min_soc,
+            max_soc=self._max_soc,  # echtes Limit, nicht dp_max_soc
+        )
+        self._pre_solar_forced_slots = forced_count
+        if forced_count > 0:
+            forced_msg = (
+                f"Pre-Solar Discharge: {forced_count} Slot(s) erzwungen "
+                f"(~{forced_kwh:.2f} kWh, sonst Solar-Export)"
+            )
+            _LOGGER.info(forced_msg)
+            self._log_optimization(forced_msg)
 
         # Log DP result (only when plan changes)
         charge_slots = sum(1 for a in actions if a == "charge")
@@ -2341,6 +2431,12 @@ class BatteryStorageCoordinator(
             "max_soc": self._max_soc,
             "grid_max_soc": self._dp_max_soc,
             "solar_headroom_pct": self._solar_headroom_pct,
+            "solar_headroom_floor_base": self._solar_headroom_floor,
+            "solar_headroom_floor_effective": self._solar_headroom_floor_effective,
+            "curtailment_hours_24h": self._curtailment_hours_24h,
+            "curtailment_lost_kwh_24h": self._curtailment_lost_kwh_24h,
+            "curtailment_7day_avg_hours_per_day": self._curtailment_7day_avg_hours_per_day,
+            "pre_solar_forced_slots": self._pre_solar_forced_slots,
             "solar_power_w": self._solar_power,
             "solar_surplus_w": self._calculate_true_solar_surplus(),
             "solar_forecast_keys": dict(sorted(
