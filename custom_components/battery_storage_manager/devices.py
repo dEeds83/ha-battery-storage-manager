@@ -366,6 +366,23 @@ class DevicesMixin:
 
         max_power = self._inverter_power or 800
 
+        # Target-Self-Correct: WR hat Setpoint nicht uebernommen (z.B. Soyosource
+        # ignoriert temporaer). Internal target bleibt hoch, PID startet jede
+        # Reduktion vom Max-Wert -> langsame Konvergenz, scheint "haengen zu
+        # bleiben". Wenn Settle abgelaufen UND actual deutlich < target,
+        # clamp target auf actual + kleine Reserve. PID-Integral resetten.
+        actual = self._inverter_actual_power
+        if (actual is not None
+                and self._inverter_target_power - actual > 150):
+            _LOGGER.info(
+                "Zero-feed self-correct: target %.0fW > actual %.0fW (Delta>150W) "
+                "-> clamp target auf %.0fW",
+                self._inverter_target_power, actual, actual + 50,
+            )
+            self._inverter_target_power = actual + 50
+            self._pid_integral = 0.0
+            self._pid_last_error = None
+
         if grid < -10:
             # Exporting to grid — reduce inverter proportionally.
             # Use the PID setpoint approach instead of subtracting raw
