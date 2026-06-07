@@ -171,10 +171,15 @@ def solve_dp(
                     slot_solar_kwh, (max_soc - soc_after_dis) / 100 * cap,
                 )
                 net_export_kwh = delta - solar_to_batt_d
-                if net_export_kwh > 0.001:
+                # v2.51.0: Slot-eigener Revenue muss positiv ueber einer
+                # Mindestmarge liegen. Ohne diesen Threshold konnte DP
+                # einen Slot mit revenue ≈ -0.1 ct waehlen, wenn der
+                # Folge-Zustand dp[t+1] minimal besser war — verschenkter
+                # Wechselrichter-Zyklus ohne wirtschaftlichen Nutzen.
+                revenue = delivered * price - delta * half_cycle_eur
+                if net_export_kwh > 0.001 and revenue > 0.0005:  # >= 0.05 ct
                     new_soc = soc_after_dis + solar_to_batt_d / cap * 100
                     new_si = soc_to_idx(new_soc)
-                    revenue = delivered * price - delta * half_cycle_eur
                     val = revenue + dp[t + 1][new_si]
                     if val > best_val:
                         best_val = val
