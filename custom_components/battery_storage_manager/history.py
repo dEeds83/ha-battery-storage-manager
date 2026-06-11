@@ -20,6 +20,62 @@ _CURTAIL_SOLAR_W_MIN = 200.0
 _HISTORY_SLOT_HOURS = 10.0 / 60.0
 
 
+def _stat_key(s):
+    """Map a statistics row's ``start`` to a hashable slot key.
+
+    HA delivers ``start`` either as an ms/seconds timestamp (int/float) or as
+    a datetime-like object; absorb both.
+    """
+    v = s.get("start")
+    if isinstance(v, (int, float)):
+        return int(v)
+    if hasattr(v, "timestamp"):
+        return int(v.timestamp())
+    return v
+
+
+def summarize_7day_curtailment(
+    soc_stats: list[dict],
+    solar_stats: list[dict],
+    soc_threshold: float,
+    solar_w_min: float,
+) -> tuple[float, bool, int]:
+    """Reduce hourly SOC/solar statistics to a 7-day curtailment average.
+
+    A slot counts as curtailment when both the mean SOC and the mean solar
+    power are at or above their thresholds (inclusive, matching the 24h
+    tracker). The two series are joined on their slot start key.
+
+    Returns ``(avg_hours_per_day, available, common_slots)``. ``available`` is
+    ``False`` when the series do not overlap at all — which happens when the
+    chosen SOC/solar entities carry no long-term statistics (no numeric
+    ``state_class``). In that case callers must NOT treat the 0.0 as "no
+    curtailment"; the lever is simply blind and should say so.
+    """
+    soc_by: dict = {}
+    for s in soc_stats:
+        mean = s.get("mean")
+        if mean is None:
+            continue
+        soc_by[_stat_key(s)] = float(mean)
+    solar_by: dict = {}
+    for s in solar_stats:
+        mean = s.get("mean")
+        if mean is None:
+            continue
+        solar_by[_stat_key(s)] = float(mean)
+
+    common = soc_by.keys() & solar_by.keys()
+    if not common:
+        return 0.0, False, 0
+
+    curtail_hours = sum(
+        1 for k in common
+        if soc_by[k] >= soc_threshold and solar_by[k] >= solar_w_min
+    )
+    return round(curtail_hours / 7.0, 2), True, len(common)
+
+
 class HistoryMixin:
     """Mixin providing action history and optimization log methods."""
 
@@ -170,40 +226,34 @@ class HistoryMixin:
         soc_stats = stats.get(self._battery_soc_entity, []) if stats else []
         solar_stats = stats.get(self._solar_power_entity, []) if stats else []
 
-        # Index nach Slot-Start zusammenfuehren. HA liefert "start" als
-        # ms-Timestamp oder datetime — beides absorbieren.
-        def _to_key(s):
-            v = s.get("start")
-            if isinstance(v, (int, float)):
-                return int(v)
-            if hasattr(v, "timestamp"):
-                return int(v.timestamp())
-            return v
-
-        soc_by = {}
-        for s in soc_stats:
-            mean = s.get("mean")
-            if mean is None:
-                continue
-            soc_by[_to_key(s)] = float(mean)
-        solar_by = {}
-        for s in solar_stats:
-            mean = s.get("mean")
-            if mean is None:
-                continue
-            solar_by[_to_key(s)] = float(mean)
-
-        common = soc_by.keys() & solar_by.keys()
-        curtail_hours = sum(
-            1 for k in common
-            if soc_by[k] >= _CURTAIL_SOC_THRESHOLD and solar_by[k] >= _CURTAIL_SOLAR_W_MIN
+        avg, available, common = summarize_7day_curtailment(
+            soc_stats, solar_stats,
+            _CURTAIL_SOC_THRESHOLD, _CURTAIL_SOLAR_W_MIN,
         )
-        # Durchschnitt pro Tag (1.0 == eine ganze Stunde Curtailment / Tag)
-        self._curtailment_7day_avg_hours_per_day = round(curtail_hours / 7.0, 2)
+        self._curtailment_7day_avg_hours_per_day = avg
+        self._curtailment_7day_available = available
         self._curtailment_7day_last_fetch = now
+
+        if not available:
+            # Kein gemeinsamer Statistics-Slot -> die gewaehlten SOC/Solar-
+            # Entities fuehren keine Long-Term-Statistics (kein numerischer
+            # state_class). Der 7d-Hebel ist damit blind. Einmalig warnen,
+            # statt still 0 als "kein Curtailment" zu interpretieren.
+            if not self._curtailment_7day_warned:
+                self._curtailment_7day_warned = True
+                _LOGGER.warning(
+                    "7day-Curtailment nicht verfuegbar: Entities %s / %s liefern "
+                    "keine Long-Term-Statistics (state_class fehlt?). Der 7-Tage-"
+                    "Floor-Hebel bleibt inaktiv; der 24h-Tracker laeuft weiter.",
+                    self._battery_soc_entity, self._solar_power_entity,
+                )
+            return
+
+        # Verfuegbar -> evtl. Warn-Flag zuruecksetzen (Statistics wieder da).
+        self._curtailment_7day_warned = False
         _LOGGER.debug(
-            "7day-Curtailment: %d Stunden ueber 7 Tage = %.2f h/Tag (von %d gemeinsamen Slots)",
-            curtail_hours, self._curtailment_7day_avg_hours_per_day, len(common),
+            "7day-Curtailment: %.2f h/Tag (von %d gemeinsamen Slots)",
+            avg, common,
         )
 
     def _log_optimization(self, message: str) -> None:

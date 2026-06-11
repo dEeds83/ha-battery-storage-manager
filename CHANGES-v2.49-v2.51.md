@@ -271,3 +271,55 @@ Bitte folgende Punkte prüfen:
 5. **Symmetrisches Voting:** Ist „nur aktives `charge`-Votum des pessimistischen Szenarios vetoed" zu permissiv? Sollte auch `idle`-Votum dagegen zählen?
 6. **Headroom-Floor-Adaption-Stufen:** SOC-Pressure-Stufen (0,7 / 1,0 / 1,5) und Curtailment-Stufen empirisch sinnvoll? Sollten sie konfigurierbar sein?
 7. **Charge-Branch Solar-Awareness:** Lohnt DP-Erweiterung damit Charge-Branch parallele Solar-Absorption modelliert? (offenes Thema)
+
+---
+
+## Korrekturen an obiger Doku (nach Code-Review festgestellt)
+
+Die Code-Snippets/Schwellen oben stimmen verbatim mit dem Quelltext; **die Zeilennummern sind jedoch veraltet** (Drift ~6–50 Zeilen, nicht vertrauen). Außerdem:
+
+- **„Pass 5 swap würde scheitern weil SOC = 90 %"** (Abschnitt *Offene Themen*) ist mechanisch falsch: Pass 5 ist rein **preisbasiert** ohne SOC-Simulation und würde blind ausführen. Die SOC-bewusste Logik liegt in **Pass 6**.
+- **Curtailment-Schwelle:** Code ist inklusiv `Solar >= 200 W` (nicht `> 200 W`); SOC `>= 99 %` stimmt.
+- **`lost_kwh_24h` füttert den Floor NICHT** — nur die Curtailment-**Stunden** (24h-Count + 7d-Schnitt) gehen in die Floor-Adaption; `lost_kwh_24h` ist reine Diagnose.
+
+---
+
+## v2.52.0 — Fixes aus externer Prüfung
+
+Antworten/Fixes zu den obigen Prüfpunkten und der Live-Verifikation (HA lief v2.50.0; Repo-HEAD = die geprüften Changes):
+
+### Fix A — Roundtrip-Verlust-Discharges (Hauptbefund)
+[optimizer.py `remove_unprofitable_predischarge`](custom_components/battery_storage_manager/optimizer.py), verdrahtet im Coordinator nach `remove_dp_discharge_enclaves`.
+
+Das v2.51.0-Gate (`revenue > 0.0005`) prüft nur den **Discharge-Leg** (`η·price − ½ Zyklus`) und ist blind dafür, dass dieselbe Energie später teuer zurückgekauft wird. Bei kleinem `discharge_kwh`-Cap entlädt der DP morgens Überschuss-Energie, die der Abend-Peak nicht aufnimmt; `smooth_plan` Pass 6 lädt mittags wieder auf → _sell-high/buy-low_-Zyklus mit negativem Roundtrip („netto −X ct"-Slots). Neuer Final-Pass demotet jeden Discharge vor einem späteren Charge mit `price·η − günstigster_späterer_Ladepreis − Zyklus ≤ 0`. `force_pre_solar`-Slots geschützt. Repro: 114 → 0 Verlust-Paare.
+
+### Fix B — 7-Tage-Curtailment-Hebel war still tot (Prüfpunkt 4)
+[history.py `summarize_7day_curtailment`](custom_components/battery_storage_manager/history.py)
+
+Live verifiziert: `avg_hours_per_day_7d = 0` bei gleichzeitig 24h = 3,5 h. Ursache: SOC/Solar-Entities ohne `state_class` führen keine Long-Term-Statistics → leere Listen → still 0. Fix: Verfügbarkeit wird erkannt (`curtailment_7day_available`), einmalig als Warnung geloggt und als Sensor-Attribut `avg_hours_per_day_7d_available` ausgewiesen.
+
+### Fix C — Reason „Platz für Solar schaffen" überzeichnet (Prüfpunkt 1)
+[optimizer.py `compute_presolar_discharge_hours`](custom_components/battery_storage_manager/optimizer.py)
+
+Live: 7 Slots als „Platz für Solar schaffen" gelabelt bei `pre_solar_forced_slots = 0` und nur ~0,07 kWh späterem Surplus. Das Label braucht jetzt **kumulierten** späteren Surplus ≥ 0,1 kWh; `force_pre_solar`-Slots bleiben immer markiert.
+
+### Fix D — `force_pre_solar_discharge` Early-Exit (Prüfpunkt 2)
+Guard hing am veralteten `excess_kwh`-Einmal-Estimate (1:1-Proxy je Discharge-Delta). Bei zwischengeschaltetem Charge, der freigewordenen Headroom frisst, brach die Schleife zu früh ab, während echter Overflow + freie Kandidaten blieben. Jetzt terminiert sie am re-simulierten `new_overflow`/Kandidaten-Exhaust.
+
+### Fix E — WR-Ist-Sensor Staleness-Watchdog (v2.50.2-Folgefix)
+[helpers.py `should_self_correct_target`](custom_components/battery_storage_manager/helpers.py)
+
+Ein eingefrorener/alter Ist-Wert konnte Self-Correct fehlauslösen und einen nötigen Discharge drosseln. Jetzt nur bei `last_changed ≤ 120 s` vertraut (Self-Correct + Charger-Abschalt-Heuristik).
+
+### Test-Qualität
+- `test_discharge_chosen_despite_solar_absorption` testet jetzt wirklich den net-export-Fix (Solar ≈ Discharge → `new_si == si`; alte `new_si<si`-Regel würde scheitern — verifiziert).
+- Neuer Test für die `solar_surplus > 0.05`-Exclusion in `force_pre_solar_discharge` (Prüfpunkt 1, vorher ungetestet).
+- `test_prefers_expensive_slots`: vacuous `if forced > 0`-Guard entfernt → unbedingte Assertion.
+
+**Test-Status:** 82/82 grün (vorher 56). Neue Dateien: `tests/test_history.py`, `tests/test_helpers.py`.
+
+### Noch offen (bewusst nicht geändert)
+- **Prüfpunkt 5 (Voting-Permissivität):** unverändert — dokumentierte Design-Entscheidung, min_soc schützt hart. Nur zur Diskussion markiert.
+- **Prüfpunkt 7 (Charge-Branch Solar-Awareness):** unverändert (Fix A entschärft das Symptom; die DP-Asymmetrie bleibt als Modellierungs-Nuance).
+- **Prüfpunkt 3 (0,0005-EUR-Threshold):** sinnvoll bestätigt; Hinweis: absolut statt energie-normiert → effektiv strenger bei sehr kleinen Slots.
+- **Prüfpunkt 6 (Floor-Stufen konfigurierbar):** offen.

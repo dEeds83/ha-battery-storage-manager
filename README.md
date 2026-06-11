@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.51.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.52.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -20,7 +20,8 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **Dynamischer Solar-Headroom (v2.49.0)** – Netz-Laden wird auf `grid_max_soc` begrenzt, damit Platz für erwarteten Solarüberschuss bleibt. Der Headroom-Floor (Mindest-Reservierung als Anteil der Solar-Tagessumme) wird zur Laufzeit nach unten korrigiert wenn (a) der aktuelle SOC schon hoch ist und das Akku-Volumen nicht reicht oder (b) der Curtailment-Tracker zeigt, dass in den letzten 24h bei vollem Akku Solar verschenkt wurde. Headroom wird nur bis zum nächsten Sonnenuntergang berechnet, damit morgige Prognosen günstiges Netz-Laden heute nicht blockieren
 - **Aktive Pre-Solar-Discharge (v2.49.0)** – Nach DP + Smoothing wird die SOC-Projektion gegen `max_soc` geprüft; droht der Akku vor Sonnenende voll zu werden, werden die teuersten `idle`/`hold`-Slots vor dem ersten Overflow-Slot zu Discharge promoted. So wird verschenkter Solar-Strom zusätzlich verhindert, selbst wenn DP und Smoothing zu konservativ planen
 - **Discharge in Solar-Slots (v2.50.0)** – Der Per-Slot-Discharge-Cap (Inverter-Leistung minus Solar) hat einen Soft-Floor von 20 % der WR-Nennleistung: Slots, in denen Solar leicht über dem Hausverbrauch liegt, sind nicht mehr zwangsläufig `hold`. Zusätzlich entscheidet der DP-Solver Discharge anhand der **Netto-Energie-Abgabe** statt nach SOC-Indexsenkung — profitable Slots werden auch dann als Discharge gewählt, wenn paralleler Solar-Surplus den SOC im selben Slot wieder hochzieht (das passt zur Realität: zero-export-Regelung im Coordinator schaltet bei Solar-Überschuss automatisch um)
-- **Solar-Curtailment-Tracker (v2.49.0)** – Misst die Zeit, in der SOC≥99% UND Solar>200 W gleichzeitig vorlagen (Indikator für verschenkte Energie). Hybrid: Der **24h-Wert** kommt aus der internen Action-History (schnell, 10-Min-Snapshots). Zusätzlich liest der Tracker einmal pro Stunde aus dem HA-Statistics-Modul (`statistics_during_period`) den **7-Tage-Durchschnitt** der stündlichen Mittelwerte vom konfigurierten SOC- und Solar-Power-Sensor. Beide Werte füttern die Headroom-Floor-Adaption (24h wirkt stark/kurzfristig, 7d wirkt schwächer/strukturell) und sind als Diagnose-Sensor sichtbar
+- **Roundtrip-Verlust-Cleanup (v2.52.0)** – Ist der Per-Slot-Discharge-Cap klein (geringer Hausverbrauch), kann der Abend-Peak nicht die ganze Akku-Energie aufnehmen; der DP entlädt dann morgens Überschuss-Energie, die `smooth_plan` Pass 6 mittags wieder auflädt — ein _sell-high/buy-low_-Intraday-Zyklus, der round-trip Geld verliert (sichtbar als „netto −X ct"-Slots an bewölkten Tagen). Ein abschließender Pass demotet jeden Discharge vor einem späteren Charge, dessen Roundtrip (`Preis × η − günstigster späterer Ladepreis − Zykluskosten`) nicht positiv ist. Bewusst per `force_pre_solar` erzwungene Slots bleiben geschützt
+- **Solar-Curtailment-Tracker (v2.49.0)** – Misst die Zeit, in der SOC≥99% UND Solar≥200 W gleichzeitig vorlagen (Indikator für verschenkte Energie). Hybrid: Der **24h-Wert** kommt aus der internen Action-History (schnell, 10-Min-Snapshots). Zusätzlich liest der Tracker einmal pro Stunde aus dem HA-Statistics-Modul (`statistics_during_period`) den **7-Tage-Durchschnitt** der stündlichen Mittelwerte vom konfigurierten SOC- und Solar-Power-Sensor. Beide Werte füttern die Headroom-Floor-Adaption (24h wirkt stark/kurzfristig, 7d wirkt schwächer/strukturell) und sind als Diagnose-Sensor sichtbar. **v2.52.0:** Liefern die gewählten SOC/Solar-Entities keine Long-Term-Statistics (kein `state_class`), bleibt der 7d-Wert 0 — das wird jetzt als `avg_hours_per_day_7d_available: false` ausgewiesen und einmalig als Warnung geloggt, statt still als „kein Curtailment" gewertet zu werden (der 24h-Tracker läuft unabhängig weiter)
 - **6-Pass Smoothing Pipeline:**
   - Pass 1: Enclave-Entfernung (einzelne Aktions-Slots ohne Nachbarn entfernen, Proximity-Check ±2 Slots)
   - Pass 2: Alternations-Dämpfung (Lade↔Entlade-Paare unter Break-Even-Spread → idle)
@@ -197,7 +198,7 @@ Die Integration unterstützt beliebig viele Solarprognose-Sensoren. Alle Prognos
 | Aktionshistorie | Tatsächlich ausgeführte Aktionen (48h, 10-Min-Intervalle, persistent) |
 | Gemessene Effizienz | Roundtrip-Effizienz aus Smartshunt V×I vs. Charger/Inverter-Leistung (Lade-/Entlade-/Roundtrip als Attribute) |
 | Speicher Durchschnittspreis | Volumengewichteter Durchschnittspreis (ct/kWh) der aktuell im Speicher liegenden Energie. Solar = 0 ct, Netzladen = aktueller Tibber-Preis. Persistent über Restart. Attribute: stored_kwh, stored_cost_eur |
-| Solar-Curtailment 24h (Diagnose) | Stunden in den letzten 24h mit SOC≥99% und Solar>200 W (verschenkter Solarstrom). Attribute: lost_kwh_24h, avg_hours_per_day_7d (HA-Statistics, 7-Tage-Schnitt), headroom_floor_base/effective, pre_solar_forced_slots |
+| Solar-Curtailment 24h (Diagnose) | Stunden in den letzten 24h mit SOC≥99% und Solar≥200 W (verschenkter Solarstrom). Attribute: lost_kwh_24h, avg_hours_per_day_7d (HA-Statistics, 7-Tage-Schnitt), avg_hours_per_day_7d_available (false wenn Entities keine Long-Term-Statistics führen), headroom_floor_base/effective, pre_solar_forced_slots |
 
 ### Schalter
 
@@ -330,6 +331,8 @@ TV = max(Basis, EPEX)  →  DP bevorzugt hohen End-SOC wenn morgen teuer
 - **Charge Gap Fill:** Idle-Lücken innerhalb von Lade-Blöcken werden geschlossen wenn Preis ≤ Nachbar-Preis
 - **Pre-Solar-Discharge (v2.49.0):** Nach dem gesamten Smoothing wird die SOC-Projektion gegen `max_soc` geprüft. Würde der Akku vor Sonnenende voll laufen und danach noch Solar-Surplus kommen, werden die teuersten `idle`/`hold`-Slots vor dem Overflow zu Discharge promoted (nur Slots ohne eigenes Solar). Verhindert verschenkten Solar-Strom auch wenn DP konservativ plant
 - **Post-Force Enclave-Cleanup (v2.50.1):** Da der Pre-Solar-Pass nach dem regulären Pass 1 läuft, könnte der DP-Solver bei flacher Preiskurve einen einzelnen Discharge-Slot zwischen lauter Hold/Idle erzeugen (Diskretisierungs-Artefakt). Dieser Cleanup-Pass demotet solche isolierten Discharge-Slots wieder zu Idle — ohne die vom Pre-Solar-Pass absichtlich erzeugten Single-Slot-Promotions zu zerstören (diese werden als „Platz für Solar schaffen" markiert und sind vor dem Cleanup geschützt)
+- **Roundtrip-Verlust-Cleanup (v2.52.0):** Demotet jeden Discharge-Slot vor einem späteren Charge-Slot, dessen Roundtrip gegen den günstigsten späteren Ladepreis nicht profitabel ist (`Preis × η − günstigster späterer Ladepreis − Zykluskosten ≤ 0`). Entfernt die _sell-high/buy-low_-Intraday-Zyklen, die bei kleinem Discharge-Cap entstehen. `force_pre_solar`-Slots sind geschützt
+- **Reason-Markierung „Platz für Solar schaffen" (v2.52.0):** Ein Pre-Solar-Discharge erhält dieses Label nur noch, wenn der **kumulierte** spätere Solar-Surplus relevant ist (≥ 0,1 kWh) — nicht mehr bei jedem Discharge vor trivialem Surplus (z. B. 0,07 kWh an bewölkten Tagen). Erzwungene `force_pre_solar`-Slots bleiben immer markiert
 
 Zusätzlich wird bei idle/hold zur Laufzeit **Grid-Export automatisch durch Charger-Zuschalten absorbiert**.
 
@@ -410,6 +413,8 @@ Statt einfacher additiver Anpassung nutzt der Wechselrichter einen PID-Regler (n
 - **Asymmetrische Regelung**: Export sofort korrigieren, 0-50W Import tolerieren
 - **Setpoint**: 25W Netzbezug (Mitte der 0-50W Toleranzzone)
 - **min_target = 0**: Kein Mindest-Export erzwungen (Einspeisung ohne Vergütung wäre Verlust). Bei vollem Solar geht WR auf 0.
+- **Target-Self-Correct (v2.50.2)**: Übernimmt der WR den Setpoint nicht (z. B. Soyosource ignoriert temporär), bleibt das interne Target hoch und der PID startet jede Reduktion vom Max-Wert — wirkt wie „hängengeblieben". Liegt die gemessene Ist-Leistung nach Ablauf der Settle-Zeit deutlich (>150 W) unter dem Target, wird das Target auf Ist + 50 W geklemmt und das PID-Integral zurückgesetzt. Setzt einen konfigurierten Ist-Leistungs-Sensor voraus.
+- **Staleness-Watchdog (v2.52.0)**: Der Self-Correct (und die Charger-Abschalt-Heuristik) vertrauen dem Ist-Leistungs-Sensor nur, wenn er frisch ist (`last_changed` ≤ 120 s) — ein eingefrorener/alter Low-Wert kann das Target nicht mehr fälschlich kappen und einen nötigen Discharge drosseln.
 
 Im **Dimmer-Modus** kommt kein PID zum Einsatz — der Dimmer ist eine kontinuierliche Last und konvergiert in 1-2 Ticks per einstufiger Regelung mit EMA-geglättetem Grid-Signal.
 

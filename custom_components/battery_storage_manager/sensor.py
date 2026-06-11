@@ -891,6 +891,7 @@ class SolarCurtailmentSensor(BatteryStorageBaseSensor):
         return {
             "lost_kwh_24h": d.get("curtailment_lost_kwh_24h"),
             "avg_hours_per_day_7d": d.get("curtailment_7day_avg_hours_per_day"),
+            "avg_hours_per_day_7d_available": d.get("curtailment_7day_available"),
             "headroom_floor_base": d.get("solar_headroom_floor_base"),
             "headroom_floor_effective": d.get("solar_headroom_floor_effective"),
             "headroom_pct": d.get("solar_headroom_pct"),

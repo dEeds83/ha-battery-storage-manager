@@ -285,6 +285,11 @@ class BatteryStorageCoordinator(
         # Hintergrund aktualisiert.
         self._curtailment_7day_avg_hours_per_day: float = 0.0
         self._curtailment_7day_last_fetch: datetime | None = None
+        # v2.52.0: False, wenn die SOC/Solar-Entities keine Long-Term-
+        # Statistics fuehren -> der 7d-Hebel ist blind (nicht "kein
+        # Curtailment"). _warned entprellt die Warnung.
+        self._curtailment_7day_available: bool = True
+        self._curtailment_7day_warned: bool = False
         self._optimization_log: list[str] = []
         self._max_log_entries = 50
         self._last_dp_signature: str = ""  # to avoid re-logging identical plans
@@ -308,6 +313,7 @@ class BatteryStorageCoordinator(
         self._inverter_active = False
         self._inverter_target_power: float = 0  # current target power for zero-feed
         self._inverter_actual_power: float | None = None  # actual power from sensor
+        self._inverter_actual_power_ts: datetime | None = None  # last_changed (staleness)
 
         # Runtime toggles
         self._allow_grid_charging = True
@@ -617,10 +623,14 @@ class BatteryStorageCoordinator(
                     + (1 - alpha) * self._grid_power_ema
                 )
 
-        # Inverter actual power
+        # Inverter actual power (+ last_changed fuer Staleness-Watchdog, v2.52.0)
         if self._inverter_actual_power_entity:
             self._inverter_actual_power = self._read_float_entity(
                 self._inverter_actual_power_entity
+            )
+            _inv_state = self.hass.states.get(self._inverter_actual_power_entity)
+            self._inverter_actual_power_ts = (
+                _inv_state.last_changed if _inv_state else None
             )
 
         # Current solar production (actual sensor, not forecast)
@@ -1740,6 +1750,23 @@ class BatteryStorageCoordinator(
                 demoted,
             )
 
+        # v2.52.0: Verlust-Roundtrip-Discharges entfernen. Der DP entlaedt
+        # bei kleinem discharge_kwh-Cap morgens Ueberschuss-Energie, die der
+        # Abend-Peak nicht aufnehmen kann; Pass 6 fuellt mittags wieder auf
+        # -> Sell-high/buy-low-Zyklus, der round-trip Geld verliert
+        # ("netto -X ct"-Slots). Demoten, wenn der Roundtrip gegen den
+        # guenstigsten spaeteren Charge nicht profitabel ist. force_pre_solar-
+        # Slots bleiben geschuetzt (bewusst gegen Solar-Export erzwungen).
+        predis_demoted = optimizer.remove_unprofitable_predischarge(
+            actions, hourly_data, efficiency, cycle_cost_eur,
+            protect_indices=forced_indices,
+        )
+        if predis_demoted:
+            _LOGGER.info(
+                "Roundtrip-Cleanup: %d Verlust-Discharge-Slots vor Charge zu idle",
+                predis_demoted,
+            )
+
         # Log DP result (only when plan changes)
         charge_slots = sum(1 for a in actions if a == "charge")
         discharge_slots = sum(1 for a in actions if a == "discharge")
@@ -1763,24 +1790,15 @@ class BatteryStorageCoordinator(
             self._log_optimization(dp_msg)
             self._last_dp_signature = dp_signature
 
-        # ── Pre-solar discharge enhancement ──────────────────────
-        presolar_discharge_hours: set[int] = set()
-        first_solar_idx = next(
-            (i for i, h in enumerate(hourly_data) if h["solar_surplus_kwh"] > 0.05),
-            n,
+        # ── Pre-solar discharge reason marking ───────────────────
+        # v2.52.0: Nur markieren, wenn der kumulierte spaetere Solar-Surplus
+        # wirklich relevant ist (sonst wurden an bewoelkten Tagen mit ~0.07
+        # kWh Surplus normale Arbitrage-Discharges faelschlich als "Platz
+        # fuer Solar schaffen" gelabelt). force_pre_solar-Slots bleiben immer
+        # markiert.
+        presolar_discharge_hours = optimizer.compute_presolar_discharge_hours(
+            actions, hourly_data, forced_indices,
         )
-        for i in range(first_solar_idx):
-            if actions[i] == "discharge":
-                later_solar = any(
-                    hourly_data[j]["solar_surplus_kwh"] > 0.05
-                    for j in range(i + 1, n)
-                )
-                if later_solar:
-                    presolar_discharge_hours.add(i)
-        # v2.50.1: Vom force_pre_solar_discharge promotete Slots ebenfalls
-        # als "Platz fuer Solar" markieren — sonst zeigt die Reason-Logik
-        # faelschlich Verlust-Spread an (weil der Slot kein DP-Discharge ist).
-        presolar_discharge_hours.update(forced_indices)
 
         # ── Build plan with SOC simulation and reasons ───────────
         self._battery_plan = []
@@ -2464,6 +2482,7 @@ class BatteryStorageCoordinator(
             "curtailment_hours_24h": self._curtailment_hours_24h,
             "curtailment_lost_kwh_24h": self._curtailment_lost_kwh_24h,
             "curtailment_7day_avg_hours_per_day": self._curtailment_7day_avg_hours_per_day,
+            "curtailment_7day_available": self._curtailment_7day_available,
             "pre_solar_forced_slots": self._pre_solar_forced_slots,
             "solar_power_w": self._solar_power,
             "solar_surplus_w": self._calculate_true_solar_surplus(),

@@ -14,6 +14,7 @@ from .const import (
     MODE_IDLE,
     MODE_SOLAR_CHARGING,
 )
+from .helpers import should_self_correct_target
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -314,6 +315,21 @@ class DevicesMixin:
         if self._inverter_power_entity:
             await self._regulate_zero_feed()
 
+    def _inverter_actual_power_age_s(self) -> float | None:
+        """Seconds since the inverter actual-power sensor last changed.
+
+        Returns ``None`` if no timestamp is known (then the reading is trusted,
+        preserving pre-watchdog behaviour). Used by the self-correct staleness
+        guard so a frozen sensor cannot spuriously clamp the target.
+        """
+        ts = getattr(self, "_inverter_actual_power_ts", None)
+        if ts is None:
+            return None
+        try:
+            return (dt_util.utcnow() - ts).total_seconds()
+        except (TypeError, ValueError):
+            return None
+
     async def _regulate_zero_feed(self) -> None:
         """PID-regulated zero-feed control for the inverter.
 
@@ -371,9 +387,15 @@ class DevicesMixin:
         # Reduktion vom Max-Wert -> langsame Konvergenz, scheint "haengen zu
         # bleiben". Wenn Settle abgelaufen UND actual deutlich < target,
         # clamp target auf actual + kleine Reserve. PID-Integral resetten.
+        # v2.52.0: Staleness-Watchdog — ein eingefrorener/alter actual-Wert
+        # darf den Self-Correct NICHT ausloesen (sonst wuerde ein veralteter
+        # Low-Wert das Target faelschlich kappen und einen noetigen Discharge
+        # drosseln).
         actual = self._inverter_actual_power
-        if (actual is not None
-                and self._inverter_target_power - actual > 150):
+        actual_age = self._inverter_actual_power_age_s()
+        if should_self_correct_target(
+            self._inverter_target_power, actual, actual_age,
+        ):
             _LOGGER.info(
                 "Zero-feed self-correct: target %.0fW > actual %.0fW (Delta>150W) "
                 "-> clamp target auf %.0fW",
@@ -927,8 +949,12 @@ class DevicesMixin:
             # Sustained grid-import while WR is also discharging from battery
             # → Round-Trip-Verlust: WR pumpt aus Batterie, Charger zahlt Netz,
             # Solar reicht nicht für Charger + Haus. Letzten Charger weg.
+            # v2.52.0: nur bei frischer WR-Messung — ein eingefrorener Wert
+            # darf keinen Charger faelschlich abschalten.
+            _inv_age = self._inverter_actual_power_age_s()
+            inverter_fresh = _inv_age is None or _inv_age <= 120.0
             inverter_actual = self._inverter_actual_power or 0
-            if self._grid_power > 100 and inverter_actual > 50:
+            if self._grid_power > 100 and inverter_actual > 50 and inverter_fresh:
                 _LOGGER.info(
                     "Grid import %.0fW + inverter %.0fW (battery discharge) "
                     "→ round-trip loss, turning off C%d",

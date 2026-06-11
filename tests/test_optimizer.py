@@ -21,6 +21,8 @@ solve_dp = optimizer.solve_dp
 smooth_plan = optimizer.smooth_plan
 force_pre_solar_discharge = optimizer.force_pre_solar_discharge
 remove_dp_discharge_enclaves = optimizer.remove_dp_discharge_enclaves
+remove_unprofitable_predischarge = optimizer.remove_unprofitable_predischarge
+compute_presolar_discharge_hours = optimizer.compute_presolar_discharge_hours
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -91,16 +93,22 @@ class TestSolveDP:
 
     def test_discharge_chosen_despite_solar_absorption(self):
         """v2.50.0: Discharge muss gewaehlt werden, auch wenn paralleler
-        Solar-Surplus den SOC im selben Slot wieder hochzieht — solange
-        der Slot profitabel ist (Netto-Abgabe > 0)."""
-        # Szenario: 6 Slots mit moderatem Solar (0.10 kWh = SOC +1.3%)
-        # und steigenden Preisen. Davor sollte DP ohne Solar-Filter
-        # mind. einen Discharge in den teuren Solar-Slots waehlen.
+        Solar-Surplus den SOC im selben Slot quasi vollstaendig wieder
+        hochzieht — solange echte Netto-Abgabe bleibt (net_export > 0).
+
+        Diskriminierung: Solar-Absorption (0.145 kWh) liegt knapp unter
+        dem Discharge-Delta (0.150 kWh). Die Netto-SOC-Aenderung
+        (-0.150 + 0.145 = -0.005 kWh) ist kleiner als ein
+        Diskretisierungs-Schritt -> ``new_si == si``. Die ALTE Regel
+        ``new_si < si`` haette den Discharge daher verworfen; nur der
+        net-export-Check (v2.50.0) akzeptiert ihn. So testet der Fall
+        wirklich den Fix und nicht nur eine ohnehin sinkende SOC-Kurve.
+        """
         entries = [
-            {"price": 0.30, "solar_surplus_kwh": 0.10, "discharge_kwh": 0.150},
-            {"price": 0.32, "solar_surplus_kwh": 0.10, "discharge_kwh": 0.150},
-            {"price": 0.35, "solar_surplus_kwh": 0.10, "discharge_kwh": 0.150},
-            {"price": 0.38, "solar_surplus_kwh": 0.10, "discharge_kwh": 0.150},
+            {"price": 0.30, "solar_surplus_kwh": 0.145, "discharge_kwh": 0.150},
+            {"price": 0.32, "solar_surplus_kwh": 0.145, "discharge_kwh": 0.150},
+            {"price": 0.35, "solar_surplus_kwh": 0.145, "discharge_kwh": 0.150},
+            {"price": 0.38, "solar_surplus_kwh": 0.145, "discharge_kwh": 0.150},
             # Spaeter ohne Solar — Vergleichsfaelle
             {"price": 0.20, "solar_surplus_kwh": 0.0, "discharge_kwh": 0.200},
             {"price": 0.18, "solar_surplus_kwh": 0.0, "discharge_kwh": 0.200},
@@ -509,12 +517,14 @@ class TestForcePreSolarDischarge:
         forced, _, _idx = force_pre_solar_discharge(
             actions, slots, current_soc=87.0, **self._params()
         )
-        if forced > 0:
-            # Der teuerste Slot (index 2, Preis 0.30) muss zu Discharge geworden sein
-            assert actions[2] == "discharge", (
-                f"Teuerster Idle-Slot sollte zuerst forciert werden, "
-                f"got actions={actions}"
-            )
+        # Unbedingt: der Pass MUSS hier forcieren (sonst testet die
+        # Slot-Assertion nichts — vacuous pass).
+        assert forced > 0, "Bei Solar-Overflow muss mind. 1 Slot forciert werden"
+        # Der teuerste Slot (index 2, Preis 0.30) muss zu Discharge geworden sein
+        assert actions[2] == "discharge", (
+            f"Teuerster Idle-Slot sollte zuerst forciert werden, "
+            f"got actions={actions}"
+        )
 
     def test_respects_min_soc(self):
         """Forced Discharge darf nicht unter min_soc treiben."""
@@ -574,6 +584,36 @@ class TestForcePreSolarDischarge:
         )
         assert discharge_in_hold_range > 0, "Hold-Slots muessen umwandelbar sein"
 
+    def test_excludes_candidate_with_own_solar_surplus(self):
+        """Idle/Hold-Kandidaten mit eigenem Solar-Surplus > 0.05 kWh werden
+        NICHT promotet (zero-export verbietet Entladen waehrend PV einspeist).
+
+        Der teuerste Kandidat (Slot 0, 0.30) traegt Surplus 0.07 und muss
+        uebersprungen werden; stattdessen wird der naechstteure Surplus-freie
+        Slot (Slot 1, 0.25) forciert.
+        """
+        entries = (
+            [{"price": 0.30, "solar_surplus_kwh": 0.07}]   # teuer, ABER Surplus -> exclude
+            + [{"price": 0.25}]                            # eligible
+            + [{"price": 0.20}]                            # eligible
+            + [{"price": 0.18, "solar_surplus_kwh": 1.0}] * 3  # Overflow
+        )
+        slots = _make_slots_detailed(entries)
+        actions = ["idle"] * len(slots)
+        forced, _kwh, indices = force_pre_solar_discharge(
+            actions, slots, current_soc=87.0, **self._params()
+        )
+        assert forced > 0
+        # Slot 0 trotz hoechstem Preis NICHT promotet (Solar-Surplus).
+        assert actions[0] != "discharge", (
+            f"Slot mit eigenem Solar-Surplus darf nicht entladen, got {actions}"
+        )
+        assert 0 not in indices
+        # Naechstteurer Surplus-freier Slot wurde forciert.
+        assert actions[1] == "discharge", (
+            f"Surplus-freier Kandidat sollte forciert werden, got {actions}"
+        )
+
     def test_returns_forced_indices(self):
         """v2.50.1: force_pre_solar_discharge gibt die promovierten Indices zurueck."""
         entries = (
@@ -594,6 +634,56 @@ class TestForcePreSolarDischarge:
         # Genau diese Slots sind jetzt discharge
         for i in indices:
             assert actions[i] == "discharge"
+
+    def test_resolves_overflow_when_candidates_remain(self):
+        """v2.52.0: Loop darf nicht via veraltetem excess_kwh-Accounting
+        abbrechen, solange echtes Clipping bleibt UND Kandidaten frei sind.
+
+        Szenario: 3 teure Idle-Kandidaten, 1 Charge-Slot (verbraucht
+        freigewordenen Headroom), dann anhaltender Solar-Overflow.
+        Jeder Discharge gibt 0.20 kWh frei (excess_addressed += 0.20),
+        aber der Charge frisst einen Teil — die 1:1-Schaetzung
+        ueberschaetzt die Entlastung und der alte Guard stoppt zu frueh
+        (forced=2, Restclipping 0.15). Korrekt: weiter bis Overflow weg.
+        """
+        entries = (
+            [{"price": 0.30}] * 3       # teure Idle-Kandidaten
+            + [{"price": 0.05}]          # Charge frisst Headroom
+            + [{"price": 0.20, "solar_surplus_kwh": 0.10}] * 4  # Overflow
+        )
+        slots = _make_slots_detailed(entries)
+        # discharge_kwh klein (0.20) damit Entlastung < freigegebenes delta
+        for s in slots:
+            s["discharge_kwh"] = 0.20
+        actions = ["idle"] * 3 + ["charge"] + ["idle"] * 4
+        params = self._params()
+        params["charge_kwh_slot"] = 0.30
+        params["discharge_kwh_slot"] = 0.20
+        forced, _kwh, _idx = force_pre_solar_discharge(
+            actions, slots, current_soc=88.0, **params
+        )
+
+        # Restclipping nach dem Pass simulieren.
+        soc = 88.0
+        cap = DEFAULT["cap"]
+        residual_clip = 0.0
+        for i, a in enumerate(actions):
+            if a == "charge":
+                soc += min(0.30, max(0.0, (90.0 - soc) / 100 * cap)) / cap * 100
+            elif a == "discharge":
+                sd = slots[i]["discharge_kwh"]
+                soc -= min(sd, max(0.0, (soc - 10.0) / 100 * cap)) / cap * 100
+            if a != "charge":
+                sp = slots[i]["solar_surplus_kwh"]
+                free = max(0.0, (90.0 - soc) / 100 * cap)
+                residual_clip += max(0.0, sp - min(sp, free))
+                soc += min(sp, free) / cap * 100
+            soc = max(10.0, min(90.0, soc))
+
+        assert residual_clip < 0.01, (
+            f"Overflow nicht aufgeloest trotz freier Kandidaten: "
+            f"Restclipping {residual_clip:.3f}, forced={forced}, actions={actions}"
+        )
 
 
 # ── remove_dp_discharge_enclaves tests (v2.50.1) ────────────────────
@@ -634,3 +724,227 @@ class TestRemoveDPDischargeEnclaves:
         # has_nearby greift (Index 2 hat Discharge bei i-1 und i+1, also direkt;
         # Index 1 hat Discharge bei i+2; Index 3 hat Discharge bei i-2)
         assert demoted == 0
+
+
+# ── remove_unprofitable_predischarge tests (v2.52.0) ────────────────
+
+
+class TestRemoveUnprofitablePredischarge:
+    """Tests fuer das Entfernen von Verlust-Roundtrip-Discharges.
+
+    Pathologie (live beobachtet, v2.50.0): Der DP entlaedt morgens
+    Ueberschuss-Energie (Preis > Terminal-Value), die der Abend-Peak
+    wegen discharge_kwh-Cap nicht aufnehmen kann; smooth_plan Pass 6
+    fuellt mittags wieder auf -> Sell-high/buy-low-Zyklus der
+    round-trip Geld verliert. Dieser Pass demotet solche Pre-Charge-
+    Discharges zu idle, wenn der Roundtrip nicht profitabel ist.
+    """
+
+    def test_demotes_discharge_before_cheaper_charge(self):
+        """Discharge vor spaeterem guenstigeren Charge -> demote.
+
+        Verkauf 17 ct (x0.85 = 14.45 ct geliefert), Rueckkauf 12.5 ct
+        + 4 ct Zyklus = 16.5 ct -> Roundtrip -2.05 ct/kWh -> Verlust.
+        """
+        prices = [0.17, 0.17, 0.16, 0.125, 0.125, 0.35, 0.35]
+        slots = _make_slots(prices)
+        actions = [
+            "discharge", "discharge", "idle",
+            "charge", "charge", "discharge", "discharge",
+        ]
+        demoted = remove_unprofitable_predischarge(
+            actions, slots, efficiency=0.85, cycle_cost_eur=0.04,
+            protect_indices=set(),
+        )
+        assert demoted == 2, f"Beide Morgen-Discharges demoten, got {actions}"
+        assert actions[0] == "idle"
+        assert actions[1] == "idle"
+        # Abend-Discharges ohne spaeteren Charge bleiben.
+        assert actions[5] == "discharge"
+        assert actions[6] == "discharge"
+
+    def test_keeps_profitable_multipeak_predischarge(self):
+        """Discharge im teuren Peak vor billigem Charge bleibt.
+
+        Verkauf 40 ct (x0.85 = 34 ct), Rueckkauf 10 ct + 4 ct = 14 ct
+        -> Roundtrip +20 ct/kWh -> profitabel, NICHT demoten.
+        """
+        prices = [0.40, 0.40, 0.10, 0.10, 0.40, 0.40]
+        slots = _make_slots(prices)
+        actions = [
+            "discharge", "discharge", "charge",
+            "charge", "discharge", "discharge",
+        ]
+        demoted = remove_unprofitable_predischarge(
+            actions, slots, efficiency=0.85, cycle_cost_eur=0.04,
+            protect_indices=set(),
+        )
+        assert demoted == 0
+        assert actions[0] == "discharge"
+        assert actions[1] == "discharge"
+
+    def test_protects_force_promoted_slots(self):
+        """force_pre_solar-Indizes (protect) werden nie demotet."""
+        prices = [0.17, 0.17, 0.16, 0.125, 0.125, 0.35]
+        slots = _make_slots(prices)
+        actions = [
+            "discharge", "discharge", "idle",
+            "charge", "charge", "discharge",
+        ]
+        demoted = remove_unprofitable_predischarge(
+            actions, slots, efficiency=0.85, cycle_cost_eur=0.04,
+            protect_indices={0},
+        )
+        # Slot 0 geschuetzt, nur Slot 1 demotet.
+        assert demoted == 1
+        assert actions[0] == "discharge"
+        assert actions[1] == "idle"
+
+    def test_keeps_normal_charge_then_discharge(self):
+        """Normaler Plan (erst laden, dann entladen) bleibt unangetastet."""
+        prices = [0.10, 0.10, 0.35, 0.35]
+        slots = _make_slots(prices)
+        actions = ["charge", "charge", "discharge", "discharge"]
+        demoted = remove_unprofitable_predischarge(
+            actions, slots, efficiency=0.85, cycle_cost_eur=0.04,
+            protect_indices=set(),
+        )
+        assert demoted == 0
+        assert actions == ["charge", "charge", "discharge", "discharge"]
+
+    def test_no_charge_at_all_keeps_discharges(self):
+        """Ohne jeden Charge-Slot gibt es keinen Roundtrip -> nichts demoten."""
+        prices = [0.30, 0.20, 0.25, 0.28]
+        slots = _make_slots(prices)
+        actions = ["discharge", "idle", "discharge", "discharge"]
+        demoted = remove_unprofitable_predischarge(
+            actions, slots, efficiency=0.85, cycle_cost_eur=0.04,
+            protect_indices=set(),
+        )
+        assert demoted == 0
+
+    def test_pipeline_no_roundtrip_negative_discharge(self):
+        """Integration: today-like Kurve darf nach voller Pipeline keinen
+        Discharge mehr enthalten, der vor einem Charge mit Verlust-Roundtrip
+        liegt."""
+        # Morgen 16-17 ct, Mittag-Dip 11.7-15.5 ct, Abend-Peak ->35 ct.
+        prices = (
+            [0.173, 0.171, 0.165, 0.171, 0.165, 0.163]      # 0-5  Morgen
+            + [0.159, 0.155, 0.153, 0.149]                  # 6-9  spaeter Vormittag
+            + [0.141, 0.129, 0.117, 0.125, 0.123]           # 10-14 Mittag-Dip
+            + [0.144, 0.156, 0.171, 0.177, 0.177]           # 15-19 Nachmittag
+            + [0.202, 0.269, 0.315, 0.305, 0.327]           # 20-24 Abend-Peak
+            + [0.331, 0.338, 0.343, 0.351, 0.343]           # 25-29 Abend-Peak
+        )
+        n = len(prices)
+        slots = []
+        for i, p in enumerate(prices):
+            slots.append({
+                "price": p, "grid_fraction": 1.0,
+                "solar_wh_hour": 500 if i < 20 else 0,
+                "solar_surplus_kwh": 0.0,
+                "discharge_kwh": 0.10,  # zero-feed-gedrosselt, kleiner Cap
+                "house_w": 500,
+            })
+        start = 65.0
+        actions, _ = solve_dp(
+            slots, n, start, 0.220, 0.200, DEFAULT["cap"], 0.85, 0.04,
+            0.25, min_soc=10.0, max_soc=90.0,
+        )
+        actions, _ = smooth_plan(
+            actions, slots, n, 0.85, 0.04, 0.220, 0.200, DEFAULT["cap"],
+            start, min_soc=10.0, max_soc=90.0, slot_h=0.25,
+        )
+        _f, _k, fi = force_pre_solar_discharge(
+            actions, slots, start, 0.220, 0.200, DEFAULT["cap"],
+            min_soc=10.0, max_soc=90.0,
+        )
+        remove_dp_discharge_enclaves(actions, slots, protect_indices=fi)
+        remove_unprofitable_predischarge(
+            actions, slots, efficiency=0.85, cycle_cost_eur=0.04,
+            protect_indices=fi,
+        )
+        charge_idx = [i for i, a in enumerate(actions) if a == "charge"]
+        bad = []
+        for i, a in enumerate(actions):
+            if a != "discharge" or i in fi:
+                continue
+            later_charges = [prices[j] for j in charge_idx if j > i]
+            if not later_charges:
+                continue
+            roundtrip = prices[i] * 0.85 - min(later_charges) - 0.04
+            if roundtrip <= 0:
+                bad.append(i)
+        assert not bad, (
+            f"Verlust-Roundtrip-Discharges nach Pipeline: {bad}\n"
+            f"actions={actions}"
+        )
+
+
+# ── compute_presolar_discharge_hours tests (v2.52.0) ────────────────
+
+
+class TestComputePresolarDischargeHours:
+    """Tests fuer die Reason-Markierung 'Platz fuer Solar schaffen'.
+
+    Bug (live v2.50.0): JEDER Discharge vor dem ersten Solar-Slot wurde
+    als 'Platz fuer Solar schaffen' markiert, auch wenn der gesamte
+    spaetere Solar-Surplus nur ~0.07 kWh betrug (bewoelkter Tag). Das
+    Label suggerierte eine Solar-Begruendung, wo keine war. Fix: nur
+    markieren, wenn der kumulierte spaetere Surplus wirklich relevant ist
+    — force_pre_solar-Slots bleiben immer markiert.
+    """
+
+    def test_labels_when_substantial_later_solar(self):
+        """Discharges vor reichlich Solar werden markiert."""
+        slots = _make_slots_detailed([
+            {"price": 0.20}, {"price": 0.20},          # discharge, vor Solar
+            {"price": 0.15, "solar_surplus_kwh": 0.8},  # dicker Surplus
+            {"price": 0.15, "solar_surplus_kwh": 0.8},
+        ])
+        actions = ["discharge", "discharge", "idle", "idle"]
+        result = compute_presolar_discharge_hours(actions, slots, forced_indices=set())
+        assert result == {0, 1}
+
+    def test_skips_label_when_trivial_later_solar(self):
+        """Live-Bug: bei nur ~0.07 kWh spaeterem Surplus KEIN Solar-Label."""
+        slots = _make_slots_detailed([
+            {"price": 0.17}, {"price": 0.17}, {"price": 0.16},  # Morgen-Discharges
+            {"price": 0.16, "solar_surplus_kwh": 0.07},          # trivialer Surplus
+            {"price": 0.15, "solar_surplus_kwh": 0.0},
+        ])
+        actions = ["discharge", "discharge", "discharge", "idle", "idle"]
+        result = compute_presolar_discharge_hours(actions, slots, forced_indices=set())
+        assert result == set(), (
+            f"Trivialer Solar-Surplus darf kein 'Platz fuer Solar'-Label "
+            f"ausloesen, got {result}"
+        )
+
+    def test_forced_indices_always_labeled(self):
+        """force_pre_solar-Slots werden immer markiert, auch ohne viel Solar."""
+        slots = _make_slots_detailed([
+            {"price": 0.17}, {"price": 0.17}, {"price": 0.16},
+            {"price": 0.16, "solar_surplus_kwh": 0.07},
+            {"price": 0.15},
+        ])
+        actions = ["discharge", "discharge", "discharge", "idle", "idle"]
+        result = compute_presolar_discharge_hours(actions, slots, forced_indices={2})
+        # Trotz trivialem Solar: der erzwungene Slot 2 bleibt markiert.
+        assert result == {2}
+
+    def test_only_discharge_slots_labeled(self):
+        """Idle/charge-Slots vor Solar werden nie markiert."""
+        slots = _make_slots_detailed([
+            {"price": 0.05}, {"price": 0.20}, {"price": 0.20},
+            {"price": 0.15, "solar_surplus_kwh": 0.8},
+        ])
+        actions = ["charge", "discharge", "idle", "idle"]
+        result = compute_presolar_discharge_hours(actions, slots, forced_indices=set())
+        assert result == {1}
+
+    def test_no_solar_at_all_only_forced(self):
+        """Ohne jeden Solar-Slot werden nur forced_indices markiert."""
+        slots = _make_slots_detailed([{"price": 0.20}] * 4)
+        actions = ["discharge", "discharge", "idle", "idle"]
+        result = compute_presolar_discharge_hours(actions, slots, forced_indices={1})
+        assert result == {1}

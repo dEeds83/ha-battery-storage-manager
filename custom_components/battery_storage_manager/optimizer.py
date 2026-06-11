@@ -993,7 +993,14 @@ def force_pre_solar_discharge(
     forced_indices: set[int] = set()
     excess_addressed = 0.0
     guard = 0
-    while excess_kwh - excess_addressed > 0.05 and guard < n:
+    # Terminate on the *re-simulated* overflow (the `new_overflow is None`
+    # break below) and on candidate exhaustion — not on the one-shot
+    # ``excess_kwh`` estimate, which credits each discharge delta 1:1 even
+    # when an intermediate charge re-saturates SOC and the discharge does
+    # not actually relieve clipping. The stale estimate could stop the loop
+    # while real overflow (and free candidates) remained. ``guard < n`` is a
+    # hard backstop against runaway iteration.
+    while guard < n:
         guard += 1
         # Re-simulate to get current SOC trajectory.
         proj = _simulate_soc(
@@ -1112,3 +1119,124 @@ def remove_dp_discharge_enclaves(
         actions[i] = "idle"
         demoted += 1
     return demoted
+
+
+def remove_unprofitable_predischarge(
+    actions: list[str],
+    hourly_data: list[dict],
+    efficiency: float,
+    cycle_cost_eur: float,
+    protect_indices: set[int],
+) -> int:
+    """Demote discharge slots whose energy is re-bought later at a loss.
+
+    The DP can discharge battery energy in a moderately-priced slot when the
+    evening peak cannot absorb all available energy (per-slot ``discharge_kwh``
+    is throttled to house-load by the zero-feed cap). ``smooth_plan`` Pass 6
+    then refills the battery from cheaper slots before the evening block. The
+    net effect is a *sell-high/buy-low* intraday round-trip that loses money
+    once efficiency and the full cycle cost are accounted for — exactly the
+    "netto -X ct" discharge slots users observe on low-solar days.
+
+    This pass runs last (after ``force_pre_solar_discharge`` and
+    ``remove_dp_discharge_enclaves``). For every discharge slot ``i`` that is
+    followed by at least one charge slot, it computes the round-trip margin of
+    selling at ``i`` and rebuying at the *cheapest* later charge slot::
+
+        margin = price[i] * efficiency - min(later_charge_prices) - cycle_cost_eur
+
+    If that margin is not strictly positive the discharge is a wasted cycle and
+    the slot is demoted to ``idle``. Slots in ``protect_indices`` (deliberately
+    promoted by ``force_pre_solar_discharge`` to avoid solar export) are kept,
+    and terminal discharges with no later charge are always kept — they sell
+    real energy and are never re-bought.
+
+    Args:
+        actions: Plan actions, modified in place.
+        hourly_data: Per-slot dicts; only ``"price"`` is read.
+        efficiency: Round-trip discharge efficiency (0-1).
+        cycle_cost_eur: Full-cycle degradation cost (EUR/kWh throughput).
+        protect_indices: Slot indices that must not be demoted.
+
+    Returns:
+        Number of slots demoted.
+    """
+    n = len(actions)
+    if n < 2:
+        return 0
+    # Cheapest charge price strictly after each index, via a suffix scan.
+    INF = float("inf")
+    cheapest_charge_after = [INF] * n
+    running = INF
+    for i in range(n - 1, -1, -1):
+        cheapest_charge_after[i] = running
+        if actions[i] == "charge":
+            price = hourly_data[i]["price"]
+            if price < running:
+                running = price
+
+    margin_floor = 0.0005  # require a real positive round-trip (>= 0.05 ct/kWh)
+    demoted = 0
+    for i in range(n):
+        if actions[i] != "discharge" or i in protect_indices:
+            continue
+        cheapest = cheapest_charge_after[i]
+        if cheapest == INF:
+            continue  # no later charge — energy is sold, not re-bought
+        margin = hourly_data[i]["price"] * efficiency - cheapest - cycle_cost_eur
+        if margin < margin_floor:
+            actions[i] = "idle"
+            demoted += 1
+    return demoted
+
+
+def compute_presolar_discharge_hours(
+    actions: list[str],
+    hourly_data: list[dict],
+    forced_indices: set[int],
+    *,
+    solar_slot_threshold: float = 0.05,
+    min_cumulative_surplus: float = 0.1,
+) -> set[int]:
+    """Return slot indices whose discharge reason is "make room for solar".
+
+    Used only for the human-readable plan reason. A discharge slot before
+    the first meaningful solar-surplus slot is labelled as room-making — but
+    *only* when the cumulative later solar surplus is large enough to plausibly
+    need that room. Previously every pre-solar discharge was labelled, so on a
+    near-overcast day (~0.07 kWh total surplus) ordinary arbitrage discharges
+    were mislabelled "Platz für Solar schaffen". Requiring a meaningful
+    cumulative surplus keeps the label honest.
+
+    Slots in ``forced_indices`` (deliberately promoted by
+    ``force_pre_solar_discharge``) are always included — they exist precisely
+    to avoid solar export, regardless of how the heuristic scores the day.
+
+    Args:
+        actions: Plan actions.
+        hourly_data: Per-slot dicts with ``"solar_surplus_kwh"``.
+        forced_indices: Indices promoted by ``force_pre_solar_discharge``.
+        solar_slot_threshold: A slot counts as "solar" above this surplus (kWh).
+        min_cumulative_surplus: Minimum total later surplus (kWh) before any
+            pre-solar discharge is labelled room-making.
+
+    Returns:
+        Set of slot indices to mark as presolar discharges.
+    """
+    n = len(actions)
+    first_solar_idx = next(
+        (i for i, h in enumerate(hourly_data)
+         if (h.get("solar_surplus_kwh", 0) or 0.0) > solar_slot_threshold),
+        n,
+    )
+    result: set[int] = set()
+    total_later_surplus = sum(
+        max(0.0, h.get("solar_surplus_kwh", 0) or 0.0)
+        for h in hourly_data[first_solar_idx:]
+    )
+    if total_later_surplus >= min_cumulative_surplus:
+        for i in range(first_solar_idx):
+            if actions[i] == "discharge":
+                result.add(i)
+    result.update(forced_indices)
+    return result
