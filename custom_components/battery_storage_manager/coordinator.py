@@ -2358,10 +2358,29 @@ class BatteryStorageCoordinator(
             _LOGGER.info("Strategy changed to: %s", strategy)
 
     def stop(self) -> None:
-        """Stop the coordinator and remove listeners."""
+        """Stop the coordinator and remove listeners.
+
+        Cancelt zusaetzlich den DataUpdateCoordinator-internen
+        _unsub_refresh Timer. Ohne das laeuft der 15s-Update-Tick auch
+        nach Integration-Disable weiter und schreibt Switches/WR-
+        Setpoints — User-Bug: "Switch wird trotz Disable geschaltet".
+        Switches bleiben in ihrem letzten Zustand stehen (kein
+        stop_all() — User will manuell weiterverwalten).
+        """
         for unsub in self._unsub_listeners:
-            unsub()
+            try:
+                unsub()
+            except Exception:
+                _LOGGER.debug("listener unsub failed", exc_info=True)
         self._unsub_listeners.clear()
+        # DataUpdateCoordinator-internen Refresh-Timer killen.
+        unsub_refresh = getattr(self, "_unsub_refresh", None)
+        if unsub_refresh is not None:
+            try:
+                unsub_refresh()
+            except Exception:
+                _LOGGER.debug("coordinator refresh unsub failed", exc_info=True)
+            self._unsub_refresh = None
 
     def _read_grid_power_fast(self) -> None:
         """Lightweight refresh of grid_power + EMA (used in 3s dimmer loop)."""
