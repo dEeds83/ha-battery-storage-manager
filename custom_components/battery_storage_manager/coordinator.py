@@ -345,6 +345,9 @@ class BatteryStorageCoordinator(
         self._allow_grid_switch_chargers = _t
         if self._manual_enable_grace:
             self._allow_solar_pv_gate = False
+            # Force-Solar-Off (manueller PV-Kill) explizit AUS erzwingen —
+            # User will nach Re-Enable nicht ploetzlich PV zwangs-aus haben.
+            self._force_solar_off = False
         self._use_solar_forecast = bool(
             self._solar_forecast_entity or self._solar_forecast_entities
         )
