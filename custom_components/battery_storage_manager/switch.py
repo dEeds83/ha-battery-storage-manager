@@ -74,6 +74,14 @@ class BatteryStorageBaseSwitch(CoordinatorEntity, RestoreEntity, SwitchEntity):
     async def async_added_to_hass(self) -> None:
         """Restore last known state on startup."""
         await super().async_added_to_hass()
+        # Bei manuellem Integration-Enable (HA running) Restore skippen —
+        # User will nicht dass Auto-Toggles sich selbst wieder einschalten.
+        if getattr(self.coordinator, "_manual_enable_grace", False):
+            _LOGGER.debug(
+                "Skip restore %s (manual-enable-grace aktiv)", self._attr_name,
+            )
+            self.async_write_ha_state()
+            return
         last_state = await self.async_get_last_state()
         if last_state and last_state.state not in ("unknown", "unavailable", None):
             restored_on = last_state.state == "on"

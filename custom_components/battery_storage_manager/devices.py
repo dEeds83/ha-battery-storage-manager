@@ -120,6 +120,11 @@ class DevicesMixin:
         if not self._solar_switches:
             return
 
+        # Manual-Enable-Grace: PV-Switches nicht anfassen bis User Auto
+        # explizit wieder einschaltet.
+        if getattr(self, "_manual_enable_grace", False):
+            return
+
         # Soll-Zustand bestimmen.
         if self._force_solar_off:
             desired_off = True

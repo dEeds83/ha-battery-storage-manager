@@ -297,6 +297,23 @@ class BatteryStorageCoordinator(
         # State
         self._strategy = STRATEGY_PRICE_OPTIMIZED
         self._operating_mode = MODE_IDLE
+        # Enable-Guard: bei manuellem Integration-Enable waehrend laufendem
+        # HA (nicht bei HA-Boot) starten wir alle Auto-Toggles in "aus"
+        # und blockieren Restore, damit die Integration nicht sofort
+        # PV/WR/Charger uebersteuert. User schaltet Automatik selbst wieder
+        # ein. Bei HA-Boot (hass.state != running beim setup) ist normales
+        # Restore-Verhalten aktiv.
+        try:
+            from homeassistant.core import CoreState
+            self._manual_enable_grace = (hass.state == CoreState.running)
+        except Exception:
+            self._manual_enable_grace = False
+        if self._manual_enable_grace:
+            self._strategy = STRATEGY_MANUAL
+            _LOGGER.info(
+                "Manuelles Integration-Enable erkannt (HA running) — "
+                "Auto-Toggles bleiben aus bis User sie einschaltet"
+            )
         self._current_price: float | None = None
         self._price_forecast: list[dict] = []
         self._battery_soc: float | None = None
@@ -315,15 +332,19 @@ class BatteryStorageCoordinator(
         self._inverter_actual_power: float | None = None  # actual power from sensor
         self._inverter_actual_power_ts: datetime | None = None  # last_changed (staleness)
 
-        # Runtime toggles
-        self._allow_grid_charging = True
-        self._allow_discharging = True
-        self._allow_solar_charging = True  # zero-export master switch
-        # Hybrid-Toggle: Switch-Type-Charger fuers Netzladen nutzen?
-        # True (Default): Dimmer + Switches laden ueber Netz (volle Power).
-        # False: nur Dimmer laedt aus dem Netz, Switches bleiben aus.
-        # Wirksam nur wenn beide Charger-Typen konfiguriert sind (Hybrid).
-        self._allow_grid_switch_chargers = True
+        # Runtime toggles. Bei manuellem Integration-Enable (HA schon
+        # running) starten alle Toggles aus + PV-Gate aus + Solar-Force-Off
+        # aus, damit nichts sofort umgeschaltet wird. RestoreEntity in
+        # switch.py wird die persistierten User-Werte NICHT anwenden
+        # (siehe _manual_enable_grace-Check).
+        _t = not self._manual_enable_grace
+        self._allow_grid_charging = _t
+        self._allow_discharging = _t
+        self._allow_solar_charging = _t
+        # Hybrid-Toggle: bei Grace ebenfalls aus.
+        self._allow_grid_switch_chargers = _t
+        if self._manual_enable_grace:
+            self._allow_solar_pv_gate = False
         self._use_solar_forecast = bool(
             self._solar_forecast_entity or self._solar_forecast_entities
         )
@@ -2201,11 +2222,14 @@ class BatteryStorageCoordinator(
     async def force_charge(self) -> None:
         """Force battery into charging mode."""
         self._strategy = STRATEGY_MANUAL
+        # Explizite User-Aktion beendet manual-enable-grace.
+        self._manual_enable_grace = False
         await self._start_charging()
 
     async def force_discharge(self) -> None:
         """Force battery into discharging mode."""
         self._strategy = STRATEGY_MANUAL
+        self._manual_enable_grace = False
         await self._start_discharging()
 
     async def stop_all(self) -> None:
@@ -2246,6 +2270,11 @@ class BatteryStorageCoordinator(
         Schreibvorgang überspringen, ohne dass die Hardware tatsächlich
         auf 0 gesetzt wird.
         """
+        # Bei manuellem Integration-Enable Dimmer NICHT ueberschreiben —
+        # User will nicht dass die Integration bei Re-Enable Werte umsetzt.
+        if getattr(self, "_manual_enable_grace", False):
+            _LOGGER.info("Skip reset_dimmer_on_start (manual-enable-grace)")
+            return
         for i, charger in enumerate(self._chargers):
             if charger.get("type") != CHARGER_TYPE_DIMMER:
                 continue
@@ -2356,6 +2385,11 @@ class BatteryStorageCoordinator(
         if strategy in (STRATEGY_PRICE_OPTIMIZED, STRATEGY_SELF_CONSUMPTION, STRATEGY_MANUAL):
             self._strategy = strategy
             _LOGGER.info("Strategy changed to: %s", strategy)
+            # User-Aktion beendet manual-enable-grace: ab jetzt normale
+            # Automation wieder aktiv.
+            if getattr(self, "_manual_enable_grace", False):
+                self._manual_enable_grace = False
+                _LOGGER.info("Manual-enable-grace beendet durch Strategy-Wechsel")
 
     def stop(self) -> None:
         """Stop the coordinator and remove listeners.
