@@ -396,15 +396,19 @@ class DevicesMixin:
         # darf den Self-Correct NICHT ausloesen (sonst wuerde ein veralteter
         # Low-Wert das Target faelschlich kappen und einen noetigen Discharge
         # drosseln).
+        # v2.52.4: Self-Correct nur bei grid <= 0 (Export/Zero). Bei aktivem
+        # Import muss PID den WR-Ausgangs-Offset kompensieren duerfen —
+        # sonst wird jeder PID-Hochlauf im naechsten Tick wieder auf
+        # actual+50 zurueckgezogen und Import bleibt bestehen.
         actual = self._inverter_actual_power
         actual_age = self._inverter_actual_power_age_s()
-        if should_self_correct_target(
+        if grid <= 10 and should_self_correct_target(
             self._inverter_target_power, actual, actual_age,
         ):
             _LOGGER.info(
-                "Zero-feed self-correct: target %.0fW > actual %.0fW (Delta>150W) "
+                "Zero-feed self-correct: target %.0fW > actual %.0fW (Delta>150W, grid=%.0f) "
                 "-> clamp target auf %.0fW",
-                self._inverter_target_power, actual, actual + 50,
+                self._inverter_target_power, actual, grid, actual + 50,
             )
             self._inverter_target_power = actual + 50
             self._pid_integral = 0.0
