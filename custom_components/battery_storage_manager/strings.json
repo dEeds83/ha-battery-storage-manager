@@ -8,8 +8,9 @@
           "tibber_price_entity": "Tibber price sensor (current price)",
           "tibber_prices_entity": "Tibber prices overview sensor (optional, leave empty to use price sensor)",
           "tibber_api_token": "Tibber API token (optional, GraphQL fallback for tomorrow hourly prices)",
-          "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor (current power drawn from grid)",
-          "tibber_pulse_production_entity": "Tibber Pulse production sensor (current power fed into grid)",
+          "tibber_pulse_consumption_entity": "Grid import sensor (power drawn from grid; leave empty when using the net grid power sensor)",
+          "tibber_pulse_production_entity": "Grid export sensor (power fed into grid; leave empty when using the net grid power sensor)",
+          "grid_power_entity": "Net grid power sensor (optional alternative to import+export; positive = import, negative = export)",
           "solar_forecast_entity": "Solar forecast sensor (optional, e.g. Forecast.Solar or Solcast)",
           "solar_forecast_entities": "Additional solar forecast sensors (optional, for multiple arrays/services)",
           "solar_power_entity": "Solar power sensor (optional, current production in W)",
@@ -65,6 +66,9 @@
           "hybrid": "Hybrid (dimmer + switches for grid charging only)"
         }
       }
+    },
+    "error": {
+      "no_grid_source": "Select either the net grid power sensor, or a grid import/export sensor."
     }
   },
   "options": {
@@ -76,8 +80,9 @@
           "tibber_price_entity": "Tibber price sensor (current price)",
           "tibber_prices_entity": "Tibber prices overview sensor (optional)",
           "tibber_api_token": "Tibber API token (optional, GraphQL fallback)",
-          "tibber_pulse_consumption_entity": "Tibber Pulse consumption sensor",
-          "tibber_pulse_production_entity": "Tibber Pulse production sensor",
+          "tibber_pulse_consumption_entity": "Grid import sensor (leave empty when using the net grid power sensor)",
+          "tibber_pulse_production_entity": "Grid export sensor (leave empty when using the net grid power sensor)",
+          "grid_power_entity": "Net grid power sensor (optional alternative; positive = import, negative = export)",
           "solar_forecast_entity": "Solar forecast sensor (optional)",
           "solar_forecast_entities": "Additional solar forecast sensors (optional)",
           "solar_power_entity": "Solar power sensor (optional, current production in W)",
@@ -133,6 +138,9 @@
           "hybrid": "Hybrid (dimmer + switches for grid charging only)"
         }
       }
+    },
+    "error": {
+      "no_grid_source": "Select either the net grid power sensor, or a grid import/export sensor."
     }
   }
 }

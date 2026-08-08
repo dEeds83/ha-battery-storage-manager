@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.52.4-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.53.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -43,6 +43,7 @@ Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekopp
 - **PV-Abschaltung bei negativen Preisen** – Konfigurierbare Multi-Select PV-Switches werden bei negativem Strompreis automatisch ausgeschaltet (kein Einspeise-Verlust, Netz-Ladung wird nicht durch Eigen-PV verdünnt) und bei Preis ≥ 0 ct/kWh wieder eingeschaltet. Solar-Forecast für Negativpreis-Slots wird im Speicherplan auf 0 gesetzt, damit DP-Optimizer den entgangenen PV-Beitrag korrekt berücksichtigt
 
 ### Weitere Features
+- **Flexible Netz-Messung (v2.53.0)** – Wahlweise getrennte Sensoren für Bezug und Einspeisung, **oder** ein einzelner saldierter Netz-Sensor (vorzeichenbehaftet: positiv = Bezug, negativ = Einspeisung). Passt zu Smart-Metern/Shelly-EM/DTSU666, die bereits einen Netto-Wert liefern. Der saldierte Sensor hat Vorrang, wenn gesetzt
 - **Solarprognose-Integration** – Forecast.Solar, Solcast, mehrere Anlagen summierbar
 - **Eigenverbrauchsoptimierung** – Batterieentladung zur Deckung des Hausverbrauchs
 - **Manueller Modus** – Volle manuelle Kontrolle über Laden und Entladen
@@ -85,8 +86,9 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 |-----------|-------------|---------|
 | Tibber Preis-Sensor | Aktueller Strompreis (z.B. `sensor.electricity_price`) | Ja |
 | Tibber Preisprognose | Sensor mit today/tomorrow Preisattributen | Nein |
-| Verbrauch (Pulse) | Aktueller Netzbezug in Watt | Ja |
-| Einspeisung (Pulse) | Aktuelle Netzeinspeisung in Watt | Ja |
+| Netzbezug-Sensor | Aktueller Netzbezug in Watt (leer lassen bei saldiertem Netz-Sensor) | Ja¹ |
+| Einspeisung-Sensor | Aktuelle Netzeinspeisung in Watt (leer lassen bei saldiertem Netz-Sensor) | Ja¹ |
+| Saldierter Netz-Sensor | **Alternative** zu Bezug+Einspeisung: ein Sensor mit vorzeichenbehafteter Netzleistung (positiv = Bezug, negativ = Einspeisung) | Ja¹ |
 | Solar-Forecast-Sensor | Einzelner Solarsensor (Forecast.Solar oder Solcast) | Nein |
 | Weitere Solar-Sensoren | Mehrfachauswahl für zusätzliche Solaranlagen | Nein |
 | Solar-Leistung Sensor | Aktuelle PV-Produktion in Watt (für exakte Verbrauchsberechnung) | Nein |
@@ -94,6 +96,8 @@ Die Einrichtung erfolgt über die Home Assistant UI in drei Schritten:
 | Außentemperatur-Sensor | Verbessert Verbrauchsprognose (Heizung/Kühlung) | Nein |
 | EPEX Predictor aktivieren | Erweitert Preisprognose über Tibber-Fenster hinaus mit EPEX-Spotmarkt-Vorhersagen | Nein |
 | EPEX Predictor Region | Gebotszone (DE, AT, BE, NL, SE1-4, DK1-2) | DE |
+
+> ¹ **Netz-Messung:** Entweder getrennte Sensoren für Bezug **und** Einspeisung, **oder** ein einzelner saldierter Netz-Sensor. Ist der saldierte Sensor gesetzt, hat er Vorrang und die beiden Einzel-Sensoren werden ignoriert. Vorzeichenkonvention des saldierten Sensors: **positiv = Bezug aus dem Netz, negativ = Einspeisung**. Mindestens eine der drei Quellen muss konfiguriert sein.
 
 ### Schritt 2: Geräte
 

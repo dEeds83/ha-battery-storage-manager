@@ -15,7 +15,7 @@ from .coordinator import BatteryStorageCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-CARD_VERSION = "2.52.4"
+CARD_VERSION = "2.53.0"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 FRONTEND_CARDS = [
     "battery-plan-card.js",
@@ -220,6 +220,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     pulse_entities = [
         e for e in (
+            coordinator._grid_power_entity,
             coordinator._pulse_consumption_entity,
             coordinator._pulse_production_entity,
         ) if e

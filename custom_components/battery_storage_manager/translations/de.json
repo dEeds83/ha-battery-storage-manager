@@ -8,8 +8,9 @@
           "tibber_price_entity": "Tibber Strompreis-Sensor (aktueller Preis)",
           "tibber_prices_entity": "Tibber Preisübersicht-Sensor (optional, leer lassen um Preis-Sensor zu nutzen)",
           "tibber_api_token": "Tibber API-Token (optional, GraphQL-Fallback für Morgen-Stundenpreise)",
-          "tibber_pulse_consumption_entity": "Tibber Pulse Verbrauch (aktuelle bezogene Leistung)",
-          "tibber_pulse_production_entity": "Tibber Pulse Einspeisung (aktuelle eingespeiste Leistung)",
+          "tibber_pulse_consumption_entity": "Netzbezug-Sensor (aktuelle bezogene Leistung; leer lassen, wenn der saldierte Netz-Sensor genutzt wird)",
+          "tibber_pulse_production_entity": "Einspeisung-Sensor (aktuelle eingespeiste Leistung; leer lassen, wenn der saldierte Netz-Sensor genutzt wird)",
+          "grid_power_entity": "Saldierter Netz-Sensor (optionale Alternative zu Bezug+Einspeisung; positiv = Bezug, negativ = Einspeisung)",
           "solar_forecast_entity": "Solar-Prognose-Sensor (optional, z.B. Forecast.Solar oder Solcast)",
           "solar_forecast_entities": "Weitere Solar-Prognose-Sensoren (optional, für mehrere Anlagen/Dienste)",
           "solar_power_entity": "Solar-Leistung Sensor (optional, aktuelle Produktion in W)",
@@ -65,6 +66,9 @@
           "hybrid": "Hybrid (Dimmer + Switches nur fürs Netz-Laden)"
         }
       }
+    },
+    "error": {
+      "no_grid_source": "Bitte entweder den saldierten Netz-Sensor oder einen Bezug-/Einspeisung-Sensor auswählen."
     }
   },
   "options": {
@@ -76,8 +80,9 @@
           "tibber_price_entity": "Tibber Strompreis-Sensor (aktueller Preis)",
           "tibber_prices_entity": "Tibber Preisübersicht-Sensor (optional)",
           "tibber_api_token": "Tibber API-Token (optional, GraphQL-Fallback)",
-          "tibber_pulse_consumption_entity": "Tibber Pulse Verbrauch",
-          "tibber_pulse_production_entity": "Tibber Pulse Einspeisung",
+          "tibber_pulse_consumption_entity": "Netzbezug-Sensor (leer lassen bei saldiertem Netz-Sensor)",
+          "tibber_pulse_production_entity": "Einspeisung-Sensor (leer lassen bei saldiertem Netz-Sensor)",
+          "grid_power_entity": "Saldierter Netz-Sensor (optionale Alternative; positiv = Bezug, negativ = Einspeisung)",
           "solar_forecast_entity": "Solar-Prognose-Sensor (optional)",
           "solar_forecast_entities": "Weitere Solar-Prognose-Sensoren (optional)",
           "solar_power_entity": "Solar-Leistung Sensor (optional, aktuelle Produktion in W)",
@@ -133,6 +138,9 @@
           "hybrid": "Hybrid (Dimmer + Switches nur fürs Netz-Laden)"
         }
       }
+    },
+    "error": {
+      "no_grid_source": "Bitte entweder den saldierten Netz-Sensor oder einen Bezug-/Einspeisung-Sensor auswählen."
     }
   }
 }

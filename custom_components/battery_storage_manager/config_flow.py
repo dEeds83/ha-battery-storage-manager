@@ -51,6 +51,7 @@ from .const import (
     CONF_TIBBER_PRICES_ENTITY,
     CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
     CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
+    CONF_GRID_POWER_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_BATTERY_EFFICIENCY,
@@ -73,10 +74,17 @@ STEP_TIBBER_SCHEMA = vol.Schema(
         vol.Optional(CONF_TIBBER_API_TOKEN, default=""): selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
         ),
-        vol.Required(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY): selector.EntitySelector(
+        vol.Optional(
+            CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, default=""
+        ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
         ),
-        vol.Required(CONF_TIBBER_PULSE_PRODUCTION_ENTITY): selector.EntitySelector(
+        vol.Optional(
+            CONF_TIBBER_PULSE_PRODUCTION_ENTITY, default=""
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_GRID_POWER_ENTITY, default=""): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
         ),
         vol.Optional(CONF_SOLAR_FORECAST_ENTITY, default=""): selector.EntitySelector(
@@ -344,6 +352,15 @@ def _extract_chargers_from_input(
     )
 
 
+def _missing_grid_source(user_input: dict) -> bool:
+    """True wenn weder Netto-Sensor noch ein Pulse-Sensor (Bezug/Einspeisung) gesetzt ist."""
+    return not (
+        user_input.get(CONF_GRID_POWER_ENTITY)
+        or user_input.get(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY)
+        or user_input.get(CONF_TIBBER_PULSE_PRODUCTION_ENTITY)
+    )
+
+
 class BatteryStorageManagerConfigFlow(
     config_entries.ConfigFlow, domain=DOMAIN
 ):
@@ -357,13 +374,18 @@ class BatteryStorageManagerConfigFlow(
 
     async def async_step_user(self, user_input=None):
         """Handle the first step: Tibber entities."""
+        errors: dict = {}
         if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_devices()
+            if _missing_grid_source(user_input):
+                errors["base"] = "no_grid_source"
+            else:
+                self._data.update(user_input)
+                return await self.async_step_devices()
 
         return self.async_show_form(
             step_id="user",
             data_schema=STEP_TIBBER_SCHEMA,
+            errors=errors,
             description_placeholders={
                 "title": "Tibber Konfiguration",
             },
@@ -428,12 +450,17 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         """Step 1: Tibber & Solar entities."""
+        errors: dict = {}
         if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_devices()
+            if _missing_grid_source(user_input):
+                errors["base"] = "no_grid_source"
+            else:
+                self._data.update(user_input)
+                return await self.async_step_devices()
 
         return self.async_show_form(
             step_id="init",
+            errors=errors,
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -454,15 +481,21 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                     ): selector.TextSelector(
                         selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                     ),
-                    vol.Required(
+                    vol.Optional(
                         CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
                         default=self._current(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
-                    vol.Required(
+                    vol.Optional(
                         CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
                         default=self._current(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, ""),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(
+                        CONF_GRID_POWER_ENTITY,
+                        default=self._current(CONF_GRID_POWER_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),

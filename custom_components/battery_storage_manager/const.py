@@ -6,6 +6,9 @@ DOMAIN = "battery_storage_manager"
 CONF_TIBBER_PRICE_ENTITY = "tibber_price_entity"
 CONF_TIBBER_PULSE_CONSUMPTION_ENTITY = "tibber_pulse_consumption_entity"
 CONF_TIBBER_PULSE_PRODUCTION_ENTITY = "tibber_pulse_production_entity"
+# Alternative zu consumption+production: einzelner saldierter Netz-Sensor
+# (positiv = Bezug aus dem Netz, negativ = Einspeisung). Hat Vorrang, wenn gesetzt.
+CONF_GRID_POWER_ENTITY = "grid_power_entity"
 CONF_CHARGERS = "chargers"  # list of {"switch": entity_id, "power": int}
 CONF_CHARGER_ENTITIES = "charger_entities"  # UI helper: multi-select entity list
 CONF_CHARGER_POWER_DEFAULT = "charger_power_default"  # UI helper: default power for new chargers
