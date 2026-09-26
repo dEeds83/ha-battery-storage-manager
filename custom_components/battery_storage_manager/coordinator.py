@@ -94,6 +94,7 @@ from .consumption import ConsumptionMixin
 from .devices import DevicesMixin
 from .epex import EpexMixin
 from .history import HistoryMixin
+from .helpers import combine_grid_power
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -146,11 +147,17 @@ class BatteryStorageCoordinator(
         self._tibber_gql_cache: list[dict] = []
         self._tibber_gql_cache_time: datetime | None = None
         self._tibber_fallback_warned: bool = False
-        self._pulse_consumption_entity = self._config.get(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, "")
-        self._pulse_production_entity = self._config.get(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, "")
+        self._pulse_consumption_entity = self._sanitize_grid_source(
+            self._config.get(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, "")
+        )
+        self._pulse_production_entity = self._sanitize_grid_source(
+            self._config.get(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, "")
+        )
         # Optionaler saldierter Netz-Sensor (positiv = Bezug, negativ = Einspeisung).
         # Hat Vorrang vor consumption/production, wenn gesetzt.
-        self._grid_power_entity = self._config.get(CONF_GRID_POWER_ENTITY, "")
+        self._grid_power_entity = self._sanitize_grid_source(
+            self._config.get(CONF_GRID_POWER_ENTITY, "")
+        )
 
         # Chargers: list of {"switch", "power", "power_entity", "type", "min_power", "active", ...}
         self._chargers: list[dict] = [
@@ -558,6 +565,37 @@ class BatteryStorageCoordinator(
         """True if the configured charger is a single dimmer."""
         return any(c.get("type") == CHARGER_TYPE_DIMMER for c in self._chargers)
 
+    def _sanitize_grid_source(self, entity_id: str) -> str:
+        """Eigene Entities als Netz-Quelle verwerfen.
+
+        Die eigene "Netzleistung" spiegelt nur _grid_power zurueck: als Quelle
+        gewaehlt bleibt der Wert dauerhaft None (Zirkelbezug), PID regelt nie.
+        """
+        if not entity_id:
+            return ""
+        entry = er.async_get(self.hass).async_get(entity_id)
+        if entry is not None and entry.platform == DOMAIN:
+            _LOGGER.warning(
+                "Netz-Sensor %s gehoert zu dieser Integration (Zirkelbezug) "
+                "-> ignoriert. Bitte in der Konfiguration einen echten "
+                "Zaehler-Sensor waehlen.",
+                entity_id,
+            )
+            return ""
+        return entity_id
+
+    def _compute_grid_power(self) -> float | None:
+        """Netzleistung (positiv = Bezug) aus Saldo-Sensor oder Bezug - Einspeisung.
+
+        Liefert der Saldo-Sensor nichts, wird auf Bezug/Einspeisung
+        zurueckgefallen, sofern konfiguriert.
+        """
+        return combine_grid_power(
+            self._read_float_entity(self._grid_power_entity),
+            self._read_float_entity(self._pulse_consumption_entity),
+            self._read_float_entity(self._pulse_production_entity),
+        )
+
     def _read_float_entity(
         self, entity_id: str, fallback: float | None = None
     ) -> float | None:
@@ -619,22 +657,8 @@ class BatteryStorageCoordinator(
         # Battery SOC
         self._battery_soc = self._read_float_entity(self._battery_soc_entity)
 
-        # Grid power: either a single netted sensor, or consumption - production.
         # positive = net import from grid, negative = net export to grid
-        if self._grid_power_entity:
-            self._grid_power = self._read_float_entity(self._grid_power_entity)
-        else:
-            consumption = self._read_float_entity(self._pulse_consumption_entity)
-            production = self._read_float_entity(self._pulse_production_entity)
-
-            if consumption is not None and production is not None:
-                self._grid_power = consumption - production
-            elif consumption is not None:
-                self._grid_power = consumption
-            elif production is not None:
-                self._grid_power = -production
-            else:
-                self._grid_power = None
+        self._grid_power = self._compute_grid_power()
 
         if self._grid_power is None:
             self._grid_power_stale_ticks += 1
@@ -2316,15 +2340,15 @@ class BatteryStorageCoordinator(
             self._tibber_api_token = new_token
             self._tibber_gql_cache = []
             self._tibber_gql_cache_time = None
-        self._pulse_consumption_entity = options.get(
+        self._pulse_consumption_entity = self._sanitize_grid_source(options.get(
             CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, self._pulse_consumption_entity
-        )
-        self._pulse_production_entity = options.get(
+        ))
+        self._pulse_production_entity = self._sanitize_grid_source(options.get(
             CONF_TIBBER_PULSE_PRODUCTION_ENTITY, self._pulse_production_entity
-        )
-        self._grid_power_entity = options.get(
+        ))
+        self._grid_power_entity = self._sanitize_grid_source(options.get(
             CONF_GRID_POWER_ENTITY, self._grid_power_entity
-        )
+        ))
         if CONF_CHARGERS in options:
             self._chargers = [
                 self._build_charger_entry(c) for c in options[CONF_CHARGERS]
@@ -2431,31 +2455,9 @@ class BatteryStorageCoordinator(
 
     def _read_grid_power_fast(self) -> None:
         """Lightweight refresh of grid_power + EMA (used in 3s dimmer loop)."""
-        if self._grid_power_entity:
-            net = self._read_float_entity(self._grid_power_entity)
-            if net is not None:
-                self._grid_power = net
-        else:
-            consumption = None
-            production = None
-            cons_state = self.hass.states.get(self._pulse_consumption_entity)
-            if cons_state and cons_state.state not in ("unknown", "unavailable"):
-                try:
-                    consumption = float(cons_state.state)
-                except (ValueError, TypeError):
-                    pass
-            prod_state = self.hass.states.get(self._pulse_production_entity)
-            if prod_state and prod_state.state not in ("unknown", "unavailable"):
-                try:
-                    production = float(prod_state.state)
-                except (ValueError, TypeError):
-                    pass
-            if consumption is not None and production is not None:
-                self._grid_power = consumption - production
-            elif consumption is not None:
-                self._grid_power = consumption
-            elif production is not None:
-                self._grid_power = -production
+        grid = self._compute_grid_power()
+        if grid is not None:
+            self._grid_power = grid
         if self._grid_power is not None:
             if self._grid_power_ema is None:
                 self._grid_power_ema = self._grid_power

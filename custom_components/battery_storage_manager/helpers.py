@@ -7,6 +7,27 @@ unit-tested in isolation.
 from __future__ import annotations
 
 
+def combine_grid_power(
+    net_w: float | None,
+    consumption_w: float | None,
+    production_w: float | None,
+) -> float | None:
+    """Net grid power (positive = import) from the available readings.
+
+    The netted sensor wins when it has a value; otherwise fall back to
+    consumption - production (either side alone is accepted).
+    """
+    if net_w is not None:
+        return net_w
+    if consumption_w is not None and production_w is not None:
+        return consumption_w - production_w
+    if consumption_w is not None:
+        return consumption_w
+    if production_w is not None:
+        return -production_w
+    return None
+
+
 def should_self_correct_target(
     target_w: float,
     actual_w: float | None,

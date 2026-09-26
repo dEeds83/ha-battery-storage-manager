@@ -49,3 +49,32 @@ class TestShouldSelfCorrectTarget:
         assert should_self_correct_target(
             800.0, 50.0, actual_age_s=120.0, max_age_s=120.0
         ) is True
+
+
+combine_grid_power = helpers.combine_grid_power
+
+
+class TestCombineGridPower:
+    """Netzleistung aus Saldo-Sensor bzw. Bezug/Einspeisung (v2.53.1)."""
+
+    def test_net_sensor_wins(self):
+        """Saldo-Sensor mit Wert hat Vorrang vor Bezug/Einspeisung."""
+        assert combine_grid_power(-120.0, 400.0, 0.0) == -120.0
+
+    def test_net_none_falls_back_to_pulse(self):
+        """Saldo-Sensor ohne Wert -> Fallback Bezug - Einspeisung (Regression v2.53.0)."""
+        assert combine_grid_power(None, 383.0, 0.0) == 383.0
+        assert combine_grid_power(None, 100.0, 250.0) == -150.0
+
+    def test_single_pulse_side(self):
+        """Nur eine Pulse-Seite verfuegbar."""
+        assert combine_grid_power(None, 300.0, None) == 300.0
+        assert combine_grid_power(None, None, 200.0) == -200.0
+
+    def test_nothing_available(self):
+        """Keine Quelle -> None (Safety-Rampe greift im Coordinator)."""
+        assert combine_grid_power(None, None, None) is None
+
+    def test_zero_net_is_valid(self):
+        """0 W vom Saldo-Sensor ist ein gueltiger Wert, kein Fallback."""
+        assert combine_grid_power(0.0, 500.0, 0.0) == 0.0

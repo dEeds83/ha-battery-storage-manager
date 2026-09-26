@@ -6,6 +6,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .const import (
@@ -352,6 +353,26 @@ def _extract_chargers_from_input(
     )
 
 
+# Optionale Einzel-Entity-Felder im Options-Step "init". Leert der User ein
+# Feld, laesst das Frontend den Key weg — mit default= wuerde voluptuous den
+# alten Wert wieder einsetzen. Daher suggested_value + explizites "".
+_OPTIONAL_INIT_ENTITY_KEYS = (
+    CONF_TIBBER_PRICES_ENTITY,
+    CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
+    CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
+    CONF_GRID_POWER_ENTITY,
+    CONF_SOLAR_FORECAST_ENTITY,
+    CONF_SOLAR_POWER_ENTITY,
+    CONF_SOLAR_ENERGY_TODAY_ENTITY,
+    CONF_OUTSIDE_TEMPERATURE_ENTITY,
+)
+
+
+def _optional_suggested(key: str, current):
+    """vol.Optional mit vorbelegtem, aber leerbarem Wert."""
+    return vol.Optional(key, description={"suggested_value": current or None})
+
+
 def _missing_grid_source(user_input: dict) -> bool:
     """True wenn weder Netto-Sensor noch ein Pulse-Sensor (Bezug/Einspeisung) gesetzt ist."""
     return not (
@@ -452,11 +473,28 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
         """Step 1: Tibber & Solar entities."""
         errors: dict = {}
         if user_input is not None:
+            for key in _OPTIONAL_INIT_ENTITY_KEYS:
+                user_input.setdefault(key, "")
             if _missing_grid_source(user_input):
                 errors["base"] = "no_grid_source"
             else:
                 self._data.update(user_input)
                 return await self.async_step_devices()
+
+        # Eigene Entities (z.B. "Netzleistung") nicht als Netz-Quelle anbieten —
+        # sie spiegeln nur den berechneten Wert zurueck (Zirkelbezug).
+        registry = er.async_get(self.hass)
+        own_entities = [
+            e.entity_id
+            for e in er.async_entries_for_config_entry(
+                registry, self._config_entry.entry_id
+            )
+        ]
+        grid_selector = selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain="sensor", exclude_entities=own_entities
+            )
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -469,9 +507,9 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
-                    vol.Optional(
+                    _optional_suggested(
                         CONF_TIBBER_PRICES_ENTITY,
-                        default=self._current(CONF_TIBBER_PRICES_ENTITY, ""),
+                        self._current(CONF_TIBBER_PRICES_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
@@ -481,27 +519,21 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                     ): selector.TextSelector(
                         selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                     ),
-                    vol.Optional(
+                    _optional_suggested(
                         CONF_TIBBER_PULSE_CONSUMPTION_ENTITY,
-                        default=self._current(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, ""),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="sensor")
-                    ),
-                    vol.Optional(
+                        self._current(CONF_TIBBER_PULSE_CONSUMPTION_ENTITY, ""),
+                    ): grid_selector,
+                    _optional_suggested(
                         CONF_TIBBER_PULSE_PRODUCTION_ENTITY,
-                        default=self._current(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, ""),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="sensor")
-                    ),
-                    vol.Optional(
+                        self._current(CONF_TIBBER_PULSE_PRODUCTION_ENTITY, ""),
+                    ): grid_selector,
+                    _optional_suggested(
                         CONF_GRID_POWER_ENTITY,
-                        default=self._current(CONF_GRID_POWER_ENTITY, ""),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="sensor")
-                    ),
-                    vol.Optional(
+                        self._current(CONF_GRID_POWER_ENTITY, ""),
+                    ): grid_selector,
+                    _optional_suggested(
                         CONF_SOLAR_FORECAST_ENTITY,
-                        default=self._current(CONF_SOLAR_FORECAST_ENTITY, ""),
+                        self._current(CONF_SOLAR_FORECAST_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
@@ -511,21 +543,21 @@ class BatteryStorageOptionsFlow(config_entries.OptionsFlow):
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor", multiple=True)
                     ),
-                    vol.Optional(
+                    _optional_suggested(
                         CONF_SOLAR_POWER_ENTITY,
-                        default=self._current(CONF_SOLAR_POWER_ENTITY, ""),
+                        self._current(CONF_SOLAR_POWER_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
-                    vol.Optional(
+                    _optional_suggested(
                         CONF_SOLAR_ENERGY_TODAY_ENTITY,
-                        default=self._current(CONF_SOLAR_ENERGY_TODAY_ENTITY, ""),
+                        self._current(CONF_SOLAR_ENERGY_TODAY_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
-                    vol.Optional(
+                    _optional_suggested(
                         CONF_OUTSIDE_TEMPERATURE_ENTITY,
-                        default=self._current(CONF_OUTSIDE_TEMPERATURE_ENTITY, ""),
+                        self._current(CONF_OUTSIDE_TEMPERATURE_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
                     ),
