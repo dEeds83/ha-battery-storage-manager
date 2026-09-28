@@ -78,3 +78,36 @@ class TestCombineGridPower:
     def test_zero_net_is_valid(self):
         """0 W vom Saldo-Sensor ist ein gueltiger Wert, kein Fallback."""
         assert combine_grid_power(0.0, 500.0, 0.0) == 0.0
+
+
+dimmer_step = helpers.dimmer_step
+
+
+class TestDimmerStep:
+    """Dimmer-Regelung mit Hysterese + asymmetrischem Settle (v2.54.0)."""
+
+    def test_band_no_change(self):
+        """Innerhalb -40..+15 W keine Aenderung (Hysterese)."""
+        assert dimmer_step(500.0, -30.0, None) is None
+        assert dimmer_step(500.0, 10.0, None) is None
+
+    def test_raise_waits_full_settle(self):
+        """Export: vor Ablauf der Settle-Zeit kein erneutes Hochregeln."""
+        assert dimmer_step(500.0, -300.0, 4.0) is None
+        assert dimmer_step(500.0, -300.0, 12.0) == 500.0 + 145.0
+
+    def test_raise_slew_limited(self):
+        """Grosser Export: max +150 W pro Schritt."""
+        assert dimmer_step(0.0, -2000.0, None) == 150.0
+
+    def test_lower_fast(self):
+        """Bezug: schon nach 1/3 Settle, Gain 0.8, bis -400 W."""
+        assert dimmer_step(800.0, 200.0, 4.0) == 800.0 - 168.0
+        assert dimmer_step(800.0, 1000.0, 4.0) == 400.0
+
+    def test_lower_waits_third_settle(self):
+        """Bezug direkt nach Write (< 1/3 Settle) -> warten."""
+        assert dimmer_step(800.0, 200.0, 2.0) is None
+
+    def test_never_negative(self):
+        assert dimmer_step(100.0, 1000.0, None) == 0.0

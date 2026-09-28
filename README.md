@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.53.3-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.54.0-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -387,7 +387,7 @@ Single Continuous Load — Dimmer absorbiert exakt den Überschuss:
 
 | Bedingung | Aktion |
 |---|---|
-| Solar > Haus-Verbrauch | Dimmer-Sollwert = Export, einstufige Regelung mit gain 0.8 (kein PID nötig) |
+| Solar > Haus-Verbrauch | Dimmer regelt mit Hysterese (−40…+15 W ohne Änderung, Ziel −10 W): hoch erst nach 10 s Settle (Gain 0.5, max +150 W/Schritt), runter schon nach ⅓ Settle (Gain 0.8, bis −400 W/Schritt) — kein Überschwingen durch Zähler-Delay (v2.54.0) |
 | Plan = Charge | Dimmer auf Maximalleistung |
 | Plan = Discharge, WR aktiv | Dimmer auf 0, WR liefert via PID |
 | Plan = Discharge, WR auf 0 trotz Export | Dimmer absorbiert Rest (kein Export-Verlust) |
@@ -421,7 +421,7 @@ Statt einfacher additiver Anpassung nutzt der Wechselrichter einen PID-Regler (n
 - **Target-Self-Correct (v2.50.2)**: Übernimmt der WR den Setpoint nicht (z. B. Soyosource ignoriert temporär), bleibt das interne Target hoch und der PID startet jede Reduktion vom Max-Wert — wirkt wie „hängengeblieben". Liegt die gemessene Ist-Leistung nach Ablauf der Settle-Zeit deutlich (>150 W) unter dem Target, wird das Target auf Ist + 50 W geklemmt und das PID-Integral zurückgesetzt. Setzt einen konfigurierten Ist-Leistungs-Sensor voraus.
 - **Staleness-Watchdog (v2.52.0)**: Der Self-Correct (und die Charger-Abschalt-Heuristik) vertrauen dem Ist-Leistungs-Sensor nur, wenn er frisch ist (`last_changed` ≤ 120 s) — ein eingefrorener/alter Low-Wert kann das Target nicht mehr fälschlich kappen und einen nötigen Discharge drosseln.
 
-Im **Dimmer-Modus** kommt kein PID zum Einsatz — der Dimmer ist eine kontinuierliche Last und konvergiert in 1-2 Ticks per einstufiger Regelung mit EMA-geglättetem Grid-Signal.
+Im **Dimmer-Modus** kommt kein PID zum Einsatz — der Dimmer ist eine kontinuierliche Last und wird einstufig mit Hysterese-Band und asymmetrischer Settle-Zeit geregelt. Er nutzt den **ungeglätteten** Netzwert, da die EMA (für den WR ausgelegt) Bezug nur träge durchreicht und so Überschwingen begünstigt.
 
 ### Lernende Verbrauchsprognose
 

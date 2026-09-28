@@ -7,6 +7,41 @@ unit-tested in isolation.
 from __future__ import annotations
 
 
+DIMMER_BAND_LOW_W = -40.0   # darunter: Export -> hochregeln
+DIMMER_BAND_HIGH_W = 15.0   # darueber: Bezug -> runterregeln
+DIMMER_SETPOINT_W = -10.0   # leichter Export ist billiger als Bezug
+DIMMER_SETTLE_S = 10.0      # Zaehler-Delay: nach Write so lange nicht hochregeln
+
+
+def dimmer_step(
+    current_w: float,
+    grid_w: float,
+    since_write_s: float | None,
+    settle_s: float = DIMMER_SETTLE_S,
+) -> float | None:
+    """Next dimmer setpoint with hysteresis and asymmetric settle.
+
+    Hochregeln (Export) wartet die volle Settle-Zeit ab, damit der
+    Stromzaehler den letzten Schritt schon zeigt — sonst wird mehrfach auf
+    denselben Export hochgeregelt und danach hart abgebremst. Runterregeln
+    (Bezug kostet Geld) nach einem Drittel der Settle-Zeit, mit mehr Gain.
+
+    Returns None wenn keine Aenderung (Hysterese-Band oder Settle laeuft).
+    """
+    if DIMMER_BAND_LOW_W <= grid_w <= DIMMER_BAND_HIGH_W:
+        return None
+    raising = grid_w < DIMMER_BAND_LOW_W
+    wait = settle_s if raising else settle_s / 3
+    if since_write_s is not None and since_write_s < wait:
+        return None
+    error = DIMMER_SETPOINT_W - grid_w
+    if raising:
+        delta = min(error * 0.5, 150.0)
+    else:
+        delta = max(error * 0.8, -400.0)
+    return max(0.0, current_w + delta)
+
+
 def combine_grid_power(
     net_w: float | None,
     consumption_w: float | None,

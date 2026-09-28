@@ -14,7 +14,7 @@ from .const import (
     MODE_IDLE,
     MODE_SOLAR_CHARGING,
 )
-from .helpers import should_self_correct_target
+from .helpers import dimmer_step, should_self_correct_target
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -573,6 +573,7 @@ class DevicesMixin:
         )
         c["target_power"] = float(target)
         c["active"] = want_on
+        self._dimmer_last_write_ts = dt_util.utcnow().timestamp()
 
     async def _set_charger(self, idx: int, target_w: float, on: bool) -> None:
         """Dispatch a charger update by type.
@@ -620,10 +621,7 @@ class DevicesMixin:
         )
         if idx < 0:
             return
-        grid = (
-            self._grid_power_ema if self._grid_power_ema is not None
-            else self._grid_power
-        )
+        grid = self._dimmer_grid()
         if grid is None:
             return
         c = self._chargers[idx]
@@ -633,26 +631,20 @@ class DevicesMixin:
             return
         await self._set_dimmer_power(idx, new_target)
 
-    @staticmethod
-    def _dimmer_zero_feed_step(current: float, grid: float) -> float | None:
-        """Compute next dimmer setpoint to converge on grid in 0..25 W.
+    def _dimmer_grid(self) -> float | None:
+        """Ungeglaetteter Netzwert fuer die Dimmer-Regelung.
 
-        Konservativ ausgelegt um Oszillation zu vermeiden:
-        - Deadband 0..25 W → keine Änderung (Toleranzfenster).
-        - Setpoint 12 W (Mitte). Gain 0.5 (vorher 0.8 → Überschwingen).
-        - Slew-Rate-Limit: max ±200 W pro Schritt.
-        Returns None wenn keine Änderung nötig.
+        Die EMA ist fuer den WR ausgelegt (Export schnell, Bezug traege) —
+        fuer den Dimmer genau falsch herum: Bezug nach Ueberschwingen kaeme
+        zu spaet an. Rauschen faengt das Hysterese-Band in dimmer_step ab.
         """
-        if 0 <= grid <= 25:
-            return None
-        setpoint = 12
-        delta = (setpoint - grid) * 0.5
-        # Slew-Rate
-        if delta > 200:
-            delta = 200
-        elif delta < -200:
-            delta = -200
-        return current + delta
+        return self._grid_power if self._grid_power is not None else self._grid_power_ema
+
+    def _dimmer_zero_feed_step(self, current: float, grid: float) -> float | None:
+        """Naechster Dimmer-Sollwert (Hysterese + Settle, siehe helpers.dimmer_step)."""
+        ts = getattr(self, "_dimmer_last_write_ts", None)
+        since = dt_util.utcnow().timestamp() - ts if ts is not None else None
+        return dimmer_step(current, grid, since)
 
     async def _start_solar_charging(self, surplus_w: float) -> None:
         """Activate chargers proportionally to available solar surplus."""
@@ -791,10 +783,7 @@ class DevicesMixin:
             if self._operating_mode == MODE_DISCHARGING:
                 if idx < 0:
                     return False
-                grid = (
-                    self._grid_power_ema if self._grid_power_ema is not None
-                    else self._grid_power
-                )
+                grid = self._dimmer_grid()
                 if grid is None:
                     return False
 
