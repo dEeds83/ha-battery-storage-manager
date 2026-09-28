@@ -1,7 +1,7 @@
 # Battery Storage Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/version-2.53.1-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
+[![Version](https://img.shields.io/badge/version-2.53.2-blue.svg)](https://github.com/dEeds83/ha-battery-storage-manager)
 
 Eine Home Assistant Custom Integration zur intelligenten Steuerung von AC-gekoppelten Batteriespeichern basierend auf dynamischen Strompreisen (Tibber), Solarprognosen und lernender Verbrauchsoptimierung.
 
@@ -391,6 +391,7 @@ Single Continuous Load — Dimmer absorbiert exakt den Überschuss:
 | Plan = Charge | Dimmer auf Maximalleistung |
 | Plan = Discharge, WR aktiv | Dimmer auf 0, WR liefert via PID |
 | Plan = Discharge, WR auf 0 trotz Export | Dimmer absorbiert Rest (kein Export-Verlust) |
+| Plan = Discharge, Export bei WR > 0 | nur WR regelt runter (Überschwingen/Lastabfall), Dimmer bleibt aus — kein Aufschaukeln (v2.53.2) |
 
 WR ist im Solar-Charging-Modus **garantiert aus** — Dimmer regelt direkt, kein Round-Trip. Optionaler Enable-Switch bleibt eingeschaltet und Sollwert geht auf 0 (kein ständiges Toggling).
 

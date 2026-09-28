@@ -799,14 +799,15 @@ class DevicesMixin:
                     return False
 
                 current = self._chargers[idx].get("target_power") or 0.0
+                wr_target = self._inverter_target_power or 0
 
-                # Dimmer hat Vorrang: pro Tick zero-feed-step ausfuehren,
-                # unabhaengig vom WR-Status. Bei Bezug regelt der Dimmer
-                # zuerst runter; WR springt nur an wenn Dimmer komplett aus
-                # ist und Bezug bestehen bleibt. Deadband 0..25W +
-                # Slew ±200W/Tick verhindern Schwingen.
+                # Export bei laufendem WR = WR-Ueberschwingen/Lastabfall, kein
+                # Solarueberschuss: nur der WR-PID regelt runter. Dimmer darf
+                # erst hochregeln wenn WR schon auf 0 steht, sonst schaukeln
+                # sich Dimmer-hoch -> WR-0 -> Bezug -> Dimmer-runter auf.
+                # Runterregeln des Dimmers bei Bezug bleibt immer erlaubt.
                 nt = self._dimmer_zero_feed_step(current, grid)
-                if nt is not None:
+                if nt is not None and not (nt > current and wr_target > 0):
                     await self._set_dimmer_power(idx, nt)
                     current = self._chargers[idx].get("target_power") or 0.0
 
