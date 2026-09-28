@@ -806,8 +806,11 @@ class DevicesMixin:
                 # erst hochregeln wenn WR schon auf 0 steht, sonst schaukeln
                 # sich Dimmer-hoch -> WR-0 -> Bezug -> Dimmer-runter auf.
                 # Runterregeln des Dimmers bei Bezug bleibt immer erlaubt.
+                # Schwelle 50 W: PID schreibt Aenderungen < 10 W nicht, ein
+                # Rest-Target (z.B. 8-40 W) wuerde den Dimmer sonst dauerhaft
+                # blockieren und Solarueberschuss ginge ins Netz.
                 nt = self._dimmer_zero_feed_step(current, grid)
-                if nt is not None and not (nt > current and wr_target > 0):
+                if nt is not None and not (nt > current and wr_target > 50):
                     await self._set_dimmer_power(idx, nt)
                     current = self._chargers[idx].get("target_power") or 0.0
 
