@@ -948,3 +948,49 @@ class TestComputePresolarDischargeHours:
         actions = ["discharge", "discharge", "idle", "idle"]
         result = compute_presolar_discharge_hours(actions, slots, forced_indices={1})
         assert result == {1}
+
+
+# ── solar_max_soc (v2.54.1) ─────────────────────────────────────────
+
+
+class TestSolarAboveMaxSoc:
+    """Solar darf ueber max_soc laden; Plan darf nicht an max_soc kleben."""
+
+    def _idle_slots(self, n, surplus):
+        return [
+            {"price": 0.30, "grid_fraction": 1.0, "solar_surplus_kwh": surplus}
+            for _ in range(n)
+        ]
+
+    def test_simulate_soc_rises_above_max_soc(self):
+        data = self._idle_slots(4, 0.3)
+        proj = optimizer._simulate_soc(
+            ["idle"] * 4, data, 88.7, 1.0, 0.2, 5.0, 10, 85,
+            solar_max_soc=100,
+        )
+        assert proj[0] == pytest.approx(94.7)
+        assert proj[-1] == pytest.approx(100.0)
+
+    def test_simulate_soc_legacy_clamps_to_max_soc(self):
+        data = self._idle_slots(2, 0.3)
+        proj = optimizer._simulate_soc(
+            ["idle"] * 2, data, 88.7, 1.0, 0.2, 5.0, 10, 85,
+        )
+        assert proj == [85, 85]
+
+    def test_dp_start_above_max_soc_not_truncated(self):
+        """Startwert ueber max_soc bleibt erhalten -> mehr Discharge moeglich."""
+        data = [
+            {"price": 0.50, "grid_fraction": 1.0, "discharge_kwh": 0.2,
+             "solar_surplus_kwh": 0.0}
+            for _ in range(30)
+        ]
+        acts_new, _ = solve_dp(
+            data, 30, 90.0, 1.0, 0.2, 5.0, 0.85, 0.04, 0.25, 10, 85,
+            solar_max_soc=100,
+        )
+        acts_old, _ = solve_dp(
+            data, 30, 90.0, 1.0, 0.2, 5.0, 0.85, 0.04, 0.25, 10, 85,
+        )
+        assert acts_new.count("discharge") >= acts_old.count("discharge")
+        assert acts_new.count("discharge") > 0

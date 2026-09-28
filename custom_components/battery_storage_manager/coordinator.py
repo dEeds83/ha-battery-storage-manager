@@ -98,6 +98,10 @@ from .helpers import combine_grid_power
 
 _LOGGER = logging.getLogger(__name__)
 
+# Physische SOC-Obergrenze fuer Solar-Ueberschussladen. max_soc begrenzt nur
+# das Netzladen; der opportunistische Solar-Pfad laedt bis voll.
+SOLAR_MAX_SOC = 100.0
+
 
 class BatteryStorageCoordinator(
     SolarMixin,
@@ -1721,6 +1725,7 @@ class BatteryStorageCoordinator(
                 max_soc=dp_max_soc,
                 epex_terminal_value_per_kwh=self._epex_terminal_value_per_kwh,
                 battery_efficiency=self._battery_efficiency,
+                solar_max_soc=SOLAR_MAX_SOC,
             )
             scenario_actions.append(actions)
             scenario_profits.append(profit)
@@ -1780,6 +1785,7 @@ class BatteryStorageCoordinator(
             charge_kwh_slot, discharge_kwh_slot, cap,
             min_soc=self._min_soc,
             max_soc=self._max_soc,  # echtes Limit, nicht dp_max_soc
+            solar_max_soc=SOLAR_MAX_SOC,
         )
         self._pre_solar_forced_slots = forced_count
         if forced_count > 0:
@@ -1893,7 +1899,7 @@ class BatteryStorageCoordinator(
             if action != "charge":
                 solar_in = min(
                     max(0.0, h.get("solar_surplus_kwh", 0) or 0.0),
-                    max(0.0, self._max_soc - estimated_soc) / 100 * cap,
+                    max(0.0, SOLAR_MAX_SOC - estimated_soc) / 100 * cap,
                 )
                 estimated_soc += solar_in / cap * 100
 
@@ -1904,7 +1910,9 @@ class BatteryStorageCoordinator(
                 if has_future_discharge and estimated_soc > self._min_soc + 5:
                     action = "hold"
 
-            estimated_soc = max(self._min_soc, min(self._max_soc, estimated_soc))
+            # Solar darf ueber max_soc laden (Limit gilt nur fuers Netzladen),
+            # daher physisches Cap — sonst klebt der Plan am max_soc fest.
+            estimated_soc = max(self._min_soc, min(SOLAR_MAX_SOC, estimated_soc))
 
             # Build reason text with clear explanation
             reason = self._build_plan_reason(

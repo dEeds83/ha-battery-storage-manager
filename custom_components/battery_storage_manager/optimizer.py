@@ -34,6 +34,7 @@ def solve_dp(
     max_soc: float,
     epex_terminal_value_per_kwh: float = 0.0,
     battery_efficiency: float = 0.9,
+    solar_max_soc: float | None = None,
 ) -> tuple[list[str], float]:
     """Run the core dynamic-programming optimisation for battery scheduling.
 
@@ -66,6 +67,10 @@ def solve_dp(
         epex_terminal_value_per_kwh: EPEX-based terminal value (EUR/kWh) for
             energy remaining in the battery at the end of the horizon.
         battery_efficiency: One-way battery efficiency (default 0.9).
+        solar_max_soc: Physical SOC ceiling for opportunistic solar
+            absorption (grid charging stays capped at ``max_soc``). Solar
+            surplus may fill the battery above ``max_soc``, so the state
+            space extends up to this value. ``None`` = same as ``max_soc``.
 
     Returns:
         A tuple ``(actions, profit)`` where *actions* is a list of ``n``
@@ -80,9 +85,10 @@ def solve_dp(
     soc_step = max(0.3, min(1.0, min_delta_pct * 0.2))
     soc_step = round(soc_step, 2) or 0.5
 
+    smax = max_soc if solar_max_soc is None else max(max_soc, solar_max_soc)
     soc_levels: list[float] = []
     s = float(min_soc)
-    while s <= max_soc + 0.01:
+    while s <= smax + 0.01:
         soc_levels.append(round(s, 1))
         s += soc_step
     num_soc = len(soc_levels)
@@ -130,7 +136,7 @@ def solve_dp(
             best_act = "idle"
 
             # Idle-Transition: Solar-Surplus geht in Akku (capped an max_soc).
-            solar_to_batt = min(slot_solar_kwh, (max_soc - soc) / 100 * cap)
+            solar_to_batt = min(slot_solar_kwh, max(0.0, (smax - soc) / 100 * cap))
             new_soc_idle = soc + solar_to_batt / cap * 100
             new_si_idle = soc_to_idx(new_soc_idle)
             val = dp[t + 1][new_si_idle]
@@ -168,7 +174,7 @@ def solve_dp(
                 delivered = delta * efficiency
                 soc_after_dis = soc - delta / cap * 100
                 solar_to_batt_d = min(
-                    slot_solar_kwh, (max_soc - soc_after_dis) / 100 * cap,
+                    slot_solar_kwh, max(0.0, (smax - soc_after_dis) / 100 * cap),
                 )
                 net_export_kwh = delta - solar_to_batt_d
                 # v2.51.0: Slot-eigener Revenue muss positiv ueber einer
@@ -206,10 +212,10 @@ def solve_dp(
         elif act == "discharge":
             delta = min(slot_dis_kwh, (soc - min_soc) / 100 * cap)
             soc_after = soc - delta / cap * 100
-            solar_in = min(slot_solar_kwh, (max_soc - soc_after) / 100 * cap)
+            solar_in = min(slot_solar_kwh, max(0.0, (smax - soc_after) / 100 * cap))
             new_soc = soc_after + solar_in / cap * 100
         else:
-            solar_in = min(slot_solar_kwh, (max_soc - soc) / 100 * cap)
+            solar_in = min(slot_solar_kwh, max(0.0, (smax - soc) / 100 * cap))
             new_soc = soc + solar_in / cap * 100
         current_si = soc_to_idx(new_soc)
 
@@ -878,6 +884,7 @@ def _simulate_soc(
     cap: float,
     min_soc: float,
     max_soc: float,
+    solar_max_soc: float | None = None,
 ) -> list[float]:
     """Simulate per-slot SOC after each action (incl. opportunistic solar).
 
@@ -885,6 +892,7 @@ def _simulate_soc(
     building so that pre-solar discharge decisions match what will
     actually happen at runtime.
     """
+    smax = max_soc if solar_max_soc is None else max(max_soc, solar_max_soc)
     proj: list[float] = []
     soc = current_soc
     for i, h in enumerate(hourly_data):
@@ -898,9 +906,9 @@ def _simulate_soc(
             soc -= delta / cap * 100
         if act != "charge":
             surplus = max(0.0, h.get("solar_surplus_kwh", 0) or 0.0)
-            solar_in = min(surplus, max(0.0, (max_soc - soc) / 100 * cap))
+            solar_in = min(surplus, max(0.0, (smax - soc) / 100 * cap))
             soc += solar_in / cap * 100
-        soc = max(min_soc, min(max_soc, soc))
+        soc = max(min_soc, min(smax, soc))
         proj.append(soc)
     return proj
 
@@ -914,6 +922,7 @@ def force_pre_solar_discharge(
     cap: float,
     min_soc: float,
     max_soc: float,
+    solar_max_soc: float | None = None,
 ) -> tuple[int, float, set[int]]:
     """Convert idle/hold slots before solar overflow into discharge.
 
@@ -940,6 +949,8 @@ def force_pre_solar_discharge(
         min_soc: Minimum allowed SOC in percent.
         max_soc: Maximum allowed SOC in percent (real limit, not
             DP-headroom-reduced).
+        solar_max_soc: Physical ceiling for solar absorption (overflow
+            only happens there). ``None`` = same as ``max_soc``.
 
     Returns:
         Tuple ``(forced_count, excess_addressed_kwh, forced_indices)``.
@@ -950,11 +961,13 @@ def force_pre_solar_discharge(
     n = len(hourly_data)
     if n == 0:
         return 0, 0.0, set()
+    smax = max_soc if solar_max_soc is None else max(max_soc, solar_max_soc)
 
     # Simulate baseline SOC trajectory.
     proj = _simulate_soc(
         actions, hourly_data, current_soc,
         charge_kwh_slot, discharge_kwh_slot, cap, min_soc, max_soc,
+        solar_max_soc,
     )
 
     # Find the cumulative solar surplus that exceeds available headroom.
@@ -973,7 +986,7 @@ def force_pre_solar_discharge(
             soc_walk -= delta / cap * 100
         if act != "charge":
             surplus = max(0.0, h.get("solar_surplus_kwh", 0) or 0.0)
-            free_kwh = max(0.0, (max_soc - soc_walk) / 100 * cap)
+            free_kwh = max(0.0, (smax - soc_walk) / 100 * cap)
             absorbed = min(surplus, free_kwh)
             clipped = surplus - absorbed
             if clipped > 0.001:
@@ -981,7 +994,7 @@ def force_pre_solar_discharge(
                     overflow_start_idx = i
                 excess_kwh += clipped
             soc_walk += absorbed / cap * 100
-        soc_walk = max(min_soc, min(max_soc, soc_walk))
+        soc_walk = max(min_soc, min(smax, soc_walk))
 
     if overflow_start_idx is None or excess_kwh < 0.05:
         return 0, 0.0, set()
@@ -1006,6 +1019,7 @@ def force_pre_solar_discharge(
         proj = _simulate_soc(
             actions, hourly_data, current_soc,
             charge_kwh_slot, discharge_kwh_slot, cap, min_soc, max_soc,
+            solar_max_soc,
         )
 
         # Build candidate list: idle/hold before the (re-evaluated) first
@@ -1025,11 +1039,11 @@ def force_pre_solar_discharge(
                 soc_walk -= delta / cap * 100
             if act != "charge":
                 surplus = max(0.0, h.get("solar_surplus_kwh", 0) or 0.0)
-                free_kwh = max(0.0, (max_soc - soc_walk) / 100 * cap)
+                free_kwh = max(0.0, (smax - soc_walk) / 100 * cap)
                 if surplus > free_kwh + 0.001 and new_overflow is None:
                     new_overflow = i
                 soc_walk += min(surplus, free_kwh) / cap * 100
-            soc_walk = max(min_soc, min(max_soc, soc_walk))
+            soc_walk = max(min_soc, min(smax, soc_walk))
 
         if new_overflow is None:
             break
